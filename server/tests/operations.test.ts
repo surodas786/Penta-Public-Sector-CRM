@@ -4,6 +4,8 @@
  * level; and the absence of secrets or business notes in error output.
  */
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { eq, sql } from 'drizzle-orm';
@@ -11,7 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { auditEvents, opportunities } from '../db/schema.js';
 import { loadServerConfig, resolveTestDatabaseUrl, sameDatabase } from '../env.js';
-import { assertSeedTargetIsSafe } from '../db/seed.js';
+import { assertSeedTargetIsSafe, seedDatabase } from '../db/seed.js';
 import { runMigrations } from '../db/migrate.js';
 import {
   CSRF_HEADER,
@@ -24,8 +26,43 @@ import {
   resetFixtures,
   runAsMigrator,
   signIn,
+  startSession,
   type TestContext,
 } from './helpers/harness.js';
+
+/**
+ * The seed password from .env.example, read two ways.
+ *
+ * `literal` is what a developer reads and types. `parsed` is what Node's
+ * env-file parser actually hands the application. They differ when a value
+ * contains an unquoted '#', and that difference is invisible unless something
+ * compares them — which is precisely how a truncated password shipped.
+ */
+function readDocumentedSeedPassword(): { literal: string; parsed: string | undefined } {
+  const file = readFileSync(path.resolve('.env.example'), 'utf8');
+
+  let literal = '';
+  for (const raw of file.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line.startsWith('SEED_DEFAULT_PASSWORD=')) continue;
+    let value = line.slice('SEED_DEFAULT_PASSWORD='.length).trim();
+    const quoted =
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2);
+    if (quoted) value = value.slice(1, -1);
+    literal = value;
+  }
+
+  const saved = process.env.SEED_DEFAULT_PASSWORD;
+  delete process.env.SEED_DEFAULT_PASSWORD;
+  try {
+    process.loadEnvFile(path.resolve('.env.example'));
+    return { literal, parsed: process.env.SEED_DEFAULT_PASSWORD };
+  } finally {
+    if (saved === undefined) delete process.env.SEED_DEFAULT_PASSWORD;
+    else process.env.SEED_DEFAULT_PASSWORD = saved;
+  }
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -227,6 +264,49 @@ describe('operational guards', () => {
           { cwd: process.cwd(), env: { ...savedEnv, NODE_ENV: 'production', VITE_DEMO_MODE: 'true' } },
         ),
       ).rejects.toThrow();
+    }, 60_000);
+
+    it('documents a seed password that survives parsing and actually authenticates', async () => {
+      // The check that was missing. Previously the harness seeded and asserted
+      // with the same hard-coded constant, so both sides agreed while the value
+      // a developer reads from .env.example was silently truncated by Node's
+      // env-file parser at an unquoted '#'.
+      const isolated = { ...process.env };
+      const { literal, parsed } = readDocumentedSeedPassword();
+
+      expect(literal, '.env.example must define SEED_DEFAULT_PASSWORD').toBeTruthy();
+
+      // The value must survive parsing: otherwise the file shows one password
+      // and the application receives another.
+      expect(
+        parsed,
+        `.env.example shows ${JSON.stringify(literal)} but Node parses ` +
+          `${JSON.stringify(parsed)} — quote the value`,
+      ).toBe(literal);
+
+      try {
+        // Seed with what the application actually receives...
+        process.env.SEED_DEFAULT_PASSWORD = parsed;
+        await seedDatabase(process.env.TEST_MIGRATION_DATABASE_URL!);
+
+        // ...then sign in with what a developer reads and types.
+        const client = await startSession(ctx.app);
+        const response = await client.agent
+          .post('/api/auth/login')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, client.csrfToken)
+          .send({ email: emails.admin, password: literal });
+
+        expect(
+          response.status,
+          `the password documented in .env.example (${JSON.stringify(literal)}) must sign in`,
+        ).toBe(200);
+      } finally {
+        for (const key of Object.keys(process.env)) delete process.env[key];
+        Object.assign(process.env, isolated);
+        // Restore the fixtures for whatever runs next.
+        await resetFixtures();
+      }
     }, 60_000);
 
     it('registers no demo, seed, reset or user-switch endpoint', async () => {

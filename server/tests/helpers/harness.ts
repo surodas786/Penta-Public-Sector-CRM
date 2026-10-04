@@ -19,7 +19,16 @@ import { loadServerConfig, resolveTestDatabaseUrl } from '../../env.js';
 import { CSRF_HEADER, IDEMPOTENCY_HEADER } from '../../../shared/api.js';
 
 export const TEST_ORIGIN = 'http://localhost:5173';
-export const TEST_PASSWORD = 'Synthetic#Dev1';
+
+/**
+ * Taken from configuration, not hard-coded.
+ *
+ * A literal here is how a truncated password went unnoticed: the harness
+ * seeded and asserted with the same constant, so both sides agreed while the
+ * value a developer would actually type was different. Reading the configured
+ * value means the suite exercises what the environment really provides.
+ */
+export const TEST_PASSWORD = process.env.SEED_DEFAULT_PASSWORD?.trim() || 'Synthetic-Dev-2026';
 
 /** Stable UUIDs for the synthetic fixtures, by their demo identifier. */
 export const ids = {

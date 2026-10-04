@@ -11,7 +11,7 @@
     "dev:server": "tsx watch --env-file-if-exists=.env server/index.ts",
     "dev:demo": "vite --mode demo",
     "build": "npm run build:web && npm run build:server",
-    "build:web": "npm run check:demo-exclusion && vite build && tsx scripts/check-demo-exclusion.ts --bundle",
+    "build:web": "npm run check:env && npm run check:demo-exclusion && vite build && tsx scripts/check-demo-exclusion.ts --bundle",
     "build:demo": "vite build --mode demo --outDir dist-demo",
     "build:server": "tsc -p tsconfig.server.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
@@ -29,7 +29,8 @@
     "db:seed:test": "tsx --env-file-if-exists=.env server/db/seed.ts --test",
     "db:reset": "tsx --env-file-if-exists=.env server/db/reset.ts",
     "preview": "vite preview",
-    "evidence": "playwright test e2e/evidence.spec.ts"
+    "evidence": "playwright test e2e/evidence.spec.ts",
+    "check:env": "tsx scripts/check-env-example.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "2.2.1",

@@ -8,7 +8,7 @@
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-const PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'Synthetic#Dev1';
+const PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'Synthetic-Dev-2026';
 const OUTPUT = path.resolve('docs', 'evidence');
 
 const VIEWPORTS = [

@@ -96,9 +96,10 @@ All run on 04 October 2026 against PostgreSQL 18 in Docker.
 | `npm run db:up` | PostgreSQL 18 healthy on 55432; two roles and two databases created |
 | `npm run db:migrate` / `:test` | Applied; re-running is a verified no-op |
 | `npm run db:seed` / `:test` | 2 sections, 10 users, 11 organizations, 23 opportunities, 17 open follow-ups |
+| `npm run check:env` | **Pass** — 16 variables parse exactly as written |
 | `npm run typecheck` | **Pass** (web, server and e2e projects) |
 | `npm run lint` | **Pass** — 0 errors, 5 warnings |
-| `npm test` | **167 passed, 0 failed**, 6 files, ~40s |
+| `npm test` | **168 passed, 0 failed**, 6 files, ~40s |
 | `npm run test:smoke` | **2 passed**, ~21s |
 | `npm run build` | **Pass** — demo-exclusion check passes before and after the bundle is produced |
 | `npm run evidence` | 14 screenshots written to `docs/evidence/` |
@@ -112,8 +113,8 @@ All run on 04 October 2026 against PostgreSQL 18 in Docker.
 | `create.test.ts` | 38 | 12, 16–20, 22 |
 | `edit.test.ts` | 25 | 13, 21 |
 | `childScope.test.ts` | 11 | 23 |
-| `operations.test.ts` | 25 | 24, 25 |
-| **Total** | **167** | all 25 |
+| `operations.test.ts` | 26 | 24, 25 |
+| **Total** | **168** | all 25 |
 
 The five lint warnings are `react-refresh/only-export-components` in approved
 demo files (`Badges.tsx`, `FormFields.tsx`, `CrmContext.tsx`) that export both
@@ -170,6 +171,29 @@ Recorded because each was a genuine fault, not a test adjustment.
    application is bundled, and `check-demo-exclusion.ts --bundle` scans the
    built assets. Verified in both directions: the guard passes on the real
    bundle and fails when a demo chunk is introduced.
+
+### Found after the milestone commit
+
+7. **The documented development password did not work.** `.env.example` set
+   `SEED_DEFAULT_PASSWORD=Synthetic#Dev1`, but Node's `--env-file` parser treats
+   an unquoted `#` as the start of an inline comment, so the seed script
+   received `Synthetic` and both databases were seeded with that. Every
+   document and hand-off message stated the full value.
+
+   *Why 167 tests missed it.* The seeding side and the asserting side always
+   read the same truncated value, so each run was internally consistent: the
+   integration harness set the password in JavaScript, bypassing the parser;
+   the Playwright config and spec both read it through `loadEnvFile`. Nothing
+   compared **what the documentation says** with **what actually
+   authenticates**.
+
+   *Fixed by* quoting the value and removing special characters from the
+   default (`"Synthetic-Dev-2026"`); a new `npm run check:env` that fails when
+   any `.env.example` value does not survive Node's parser; a new integration
+   test that seeds with the parsed value and signs in with the literal one; and
+   deriving `TEST_PASSWORD` from configuration instead of a hard-coded
+   constant. Both the guard and the test were verified to fail against the
+   original defect and pass after the fix.
 
 ---
 

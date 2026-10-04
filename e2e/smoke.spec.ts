@@ -7,7 +7,7 @@
 import { expect, test } from '@playwright/test';
 
 const SALESPERSON_EMAIL = 'rafiq.hasan@example.com';
-const PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'Synthetic#Dev1';
+const PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'Synthetic-Dev-2026';
 
 /** Unique per run so repeated smoke runs cannot collide. */
 const projectName = `Smoke Test Opportunity ${Date.now()}`;
