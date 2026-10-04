@@ -1,4 +1,3 @@
-import React from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLinkIcon, FileTextIcon, PlusIcon, UserIcon } from 'lucide-react';
 import type { ChangeEntry, Contact, FollowUp, Opportunity, Organization, Tender, User } from '../../types/crm';

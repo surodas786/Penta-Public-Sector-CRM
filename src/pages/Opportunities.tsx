@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { DownloadIcon, KanbanSquareIcon, PlusIcon, SearchIcon, TableIcon, XIcon } from 'lucide-react';

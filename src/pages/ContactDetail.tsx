@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeftIcon, MailIcon, PencilIcon, PhoneIcon } from 'lucide-react';
 import { useCrm } from '../contexts/CrmContext';

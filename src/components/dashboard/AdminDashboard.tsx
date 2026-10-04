@@ -1,4 +1,3 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldIcon } from 'lucide-react';
 import { useCrm } from '../../contexts/CrmContext';

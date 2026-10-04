@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PlusIcon, SearchIcon } from 'lucide-react';
 import { useScope } from '../hooks/useScope';

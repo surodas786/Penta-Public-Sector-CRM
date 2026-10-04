@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { Opportunity, Organization, Stage, User } from '../../types/crm';
 import { ALL_STAGES } from '../../data/options';
 import { formatBDTShort, formatDate } from '../../utils/format';

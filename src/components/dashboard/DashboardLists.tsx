@@ -1,4 +1,3 @@
-import React from 'react';
 import type { Activity, Tender } from '../../types/crm';
 import { formatDate, formatDateTime } from '../../utils/format';
 import { dueState } from '../../utils/metrics';

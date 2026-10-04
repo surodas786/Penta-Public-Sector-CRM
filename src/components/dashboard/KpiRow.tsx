@@ -1,4 +1,3 @@
-import React from 'react';
 import { formatBDTShort, formatBDT } from '../../utils/format';
 
 interface KpiRowProps {

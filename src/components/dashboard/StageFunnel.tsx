@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion } from 'framer-motion';
 import type { Stage } from '../../types/crm';
 import { formatBDTShort } from '../../utils/format';

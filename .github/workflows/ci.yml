@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Synthetic values only. These are fixtures for a throwaway database that lives
+# for the length of the job; no production credential belongs here.
+env:
+  NODE_ENV: test
+  PENTA_MIGRATOR_PASSWORD: ci_only_migrator
+  PENTA_APP_PASSWORD: ci_only_app
+  SESSION_SECRET: ci_only_session_secret_at_least_32_characters_long
+  CSRF_SECRET: ci_only_csrf_secret_at_least_32_characters_long_too
+  SEED_DEFAULT_PASSWORD: Synthetic#Dev1
+  APP_ORIGIN: http://127.0.0.1:5173
+  PORT: '4800'
+  # The application always connects as the restricted runtime role, and
+  # migrations always as the schema owner — exactly as locally, so the
+  # append-only audit and no-DDL guarantees are genuinely exercised in CI.
+  DATABASE_URL: postgres://penta_app:ci_only_app@127.0.0.1:5432/penta_crm_dev
+  TEST_DATABASE_URL: postgres://penta_app:ci_only_app@127.0.0.1:5432/penta_crm_test
+  MIGRATION_DATABASE_URL: postgres://penta_migrator:ci_only_migrator@127.0.0.1:5432/penta_crm_dev
+  TEST_MIGRATION_DATABASE_URL: postgres://penta_migrator:ci_only_migrator@127.0.0.1:5432/penta_crm_test
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci_superuser
+          POSTGRES_PASSWORD: ci_only_superuser
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_superuser"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Clean install from the committed lockfile.
+      - run: npm ci
+
+      - name: Create roles and databases
+        # The same script the local docker-compose stack runs on first start,
+        # so CI and development share one definition of the role split.
+        run: |
+          psql -v ON_ERROR_STOP=1 \
+            "postgres://ci_superuser:ci_only_superuser@127.0.0.1:5432/postgres" \
+            -f docker/initdb/01-roles-and-databases.sql
+
+      - name: Apply migrations
+        run: |
+          npm run db:migrate
+          npm run db:migrate:test
+
+      - run: npm run typecheck
+      - run: npm run lint
+
+      - name: Integration tests
+        run: npm test
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test
+        run: npm run test:smoke
+
+      - name: Production build and demo-exclusion checks
+        run: npm run build
+
+      - name: Upload failure artefacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

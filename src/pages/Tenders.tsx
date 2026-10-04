@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarDaysIcon, PlusIcon, TableIcon } from 'lucide-react';
 import type { Tender } from '../types/crm';
