@@ -19,6 +19,7 @@ import {
   paginationQuerySchema,
   patchOpportunitySchema,
   reopenOpportunitySchema,
+  transferOpportunitySchema,
   uuidField,
 } from '../../shared/validation.js';
 import { requireAuth, requireSalesAccess } from '../auth/sessionGuard.js';
@@ -42,6 +43,7 @@ import {
   patchOpportunity,
 } from '../services/opportunities.js';
 import { changeStage, changeStatus, reopenOpportunity } from '../services/transitions.js';
+import { transferOpportunity } from '../services/transfers.js';
 
 interface TransitionArgs {
   actor: Actor;
@@ -281,6 +283,17 @@ export function createOpportunitiesRouter(options: {
     transition('opportunity.reopen', (body) => {
       const command = parseOrThrow(reopenOpportunitySchema, body);
       return (args) => reopenOpportunity({ db, command, ...args });
+    }),
+  );
+
+  // FR-070: the only way an owner or section changes. The basic-edit PATCH
+  // still refuses those fields with 403.
+  router.post(
+    '/:id/transfer',
+    csrfGuard,
+    transition('opportunity.transfer', (body) => {
+      const command = parseOrThrow(transferOpportunitySchema, body);
+      return (args) => transferOpportunity({ db, command, ...args });
     }),
   );
 

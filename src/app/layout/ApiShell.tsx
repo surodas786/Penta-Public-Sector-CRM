@@ -95,9 +95,8 @@ export function ApiShell() {
       to: '/team',
       label: 'Team Management',
       icon: UsersIcon,
-      available: false,
-      show: user.role === 'management',
-      reason: 'Team structure and workload views arrive with the administration milestone.',
+      available: true,
+      show: user.capabilities.teamView,
     },
     { to: '/administration', label: 'Administration', icon: ShieldCheckIcon, available: true, show: admin },
   ].filter((item) => item.show);

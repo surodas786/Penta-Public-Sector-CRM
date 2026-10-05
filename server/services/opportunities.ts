@@ -24,6 +24,7 @@ import {
   FOLLOW_UP_STATE_LABELS,
   LOSS_REASON_LABELS,
   PRIORITY_LABELS,
+  ROLE_LABELS,
   SOLUTION_CATEGORY_LABELS,
   STAGE_LABELS,
   STATUS_LABELS,
@@ -725,7 +726,7 @@ export async function listOpportunityHistory(options: {
 const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context']);
 
 const ID_FIELDS = {
-  user: ['ownerId', 'assignedUserId'],
+  user: ['ownerId', 'assignedUserId', 'managerId', 'leadUserId'],
   organization: ['organizationId'],
   section: ['sectionId'],
 } as const;
@@ -787,7 +788,29 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   solutionCategory: SOLUTION_CATEGORY_LABELS,
   lossReason: LOSS_REASON_LABELS,
   state: FOLLOW_UP_STATE_LABELS,
+  role: ROLE_LABELS,
 };
+
+/**
+ * Before/after values made readable: ids become names, enum values become
+ * labels. Used by both the commercial and the administrative history views.
+ */
+export async function presentChanges(
+  db: Database,
+  entries: { before: unknown; after: unknown }[],
+): Promise<HistoryEntryDto['changes'][]> {
+  const names = await resolveHistoryNames(
+    db,
+    entries.flatMap((entry) => [entry.before, entry.after]),
+  );
+  return entries.map((entry) =>
+    toHistoryChanges(
+      (entry.before ?? {}) as Record<string, unknown>,
+      (entry.after ?? {}) as Record<string, unknown>,
+      names,
+    ),
+  );
+}
 
 function toHistoryChanges(
   before: Record<string, unknown>,
@@ -814,7 +837,8 @@ function displayValue(field: string, value: unknown, names: HistoryNames): strin
   if (typeof value === 'string') {
     return VALUE_LABELS[field]?.[value] ?? names.get(value) ?? value;
   }
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return String(value);
   return JSON.stringify(value);
 }
 

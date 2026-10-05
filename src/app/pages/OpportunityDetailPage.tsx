@@ -19,6 +19,7 @@ import {
   PencilIcon,
   PlayIcon,
   RotateCcwIcon,
+  UserCogIcon,
   XIcon,
 } from 'lucide-react';
 
@@ -56,6 +57,7 @@ import {
   RescheduleFollowUpDialog,
 } from '../components/FollowUpDialogs.js';
 import { OpportunityEditDialog } from '../components/OpportunityEditDialog.js';
+import { TransferDialog } from '../components/TransferDialog.js';
 import { TransitionDialog } from '../components/TransitionDialog.js';
 import {
   needsTransitionDialog,
@@ -85,6 +87,8 @@ const ACTION_LABELS: Record<string, string> = {
   'follow_up.completed': 'Follow-up completed',
   'follow_up.rescheduled': 'Follow-up rescheduled',
   'follow_up.cancelled': 'Follow-up cancelled',
+  'follow_up.reassigned': 'Follow-up reassigned',
+  'opportunity.transferred': 'Ownership transferred',
 };
 
 type TaskAction = { kind: 'complete' | 'reschedule' | 'cancel'; task: FollowUpDto };
@@ -99,6 +103,7 @@ export function OpportunityDetailPage() {
   const [transition, setTransition] = useState<TransitionRequest | null>(null);
   const [taskAction, setTaskAction] = useState<TaskAction | null>(null);
   const [moving, setMoving] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
   const today = dhakaToday();
 
   const tab = ((params.get('tab') as TabId) || 'overview') as TabId;
@@ -303,9 +308,14 @@ export function OpportunityDetailPage() {
               </span>
             ))}
 
+          {user?.capabilities.transferOpportunities && (
+            <Button variant="navy" icon={<UserCogIcon className="h-4 w-4" />} onClick={() => setTransferOpen(true)}>
+              {isManagement ? 'Reassign / Transfer' : 'Reassign'}
+            </Button>
+          )}
           <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11.5px] font-medium text-slate-500">
             <LockIcon className="h-3.5 w-3.5" />
-            Activities and transfers arrive in later milestones
+            Activities arrive in a later milestone
           </span>
           <span className="ml-auto text-[11px] text-slate-400">Opportunities cannot be deleted.</span>
         </div>
@@ -370,6 +380,19 @@ export function OpportunityDetailPage() {
         onClose={() => setTransition(null)}
         onDone={afterChange}
         onReload={afterChange}
+      />
+      <TransferDialog
+        subject={transferOpen ? opportunity : null}
+        isManagement={isManagement}
+        onClose={() => setTransferOpen(false)}
+        onDone={() => {
+          setTransferOpen(false);
+          reloadAll();
+        }}
+        onReload={() => {
+          setTransferOpen(false);
+          reloadAll();
+        }}
       />
       <AddFollowUpDialog
         opportunityId={opportunity.id}

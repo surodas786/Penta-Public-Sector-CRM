@@ -9,7 +9,7 @@ import { Router, type Request, type RequestHandler, type Response } from 'expres
 import { eq } from 'drizzle-orm';
 
 import type { CurrentUserDto } from '../../shared/api.js';
-import { loginSchema } from '../../shared/validation.js';
+import { loginSchema, setPasswordSchema } from '../../shared/validation.js';
 import { GENERIC_LOGIN_FAILURE, type ConfiguredPassport } from '../auth/passport.js';
 import { destroySession, requireAuth, stampSessionLifetimes } from '../auth/sessionGuard.js';
 import type { Database } from '../db/client.js';
@@ -17,12 +17,20 @@ import { users } from '../db/schema.js';
 import { ApiError, unauthenticated } from '../http/errors.js';
 import { parseOrThrow } from '../http/validate.js';
 import type { Actor } from '../policy/actor.js';
-import { canAccessSalesRecords, canAdministerAccounts, canCreateOpportunity } from '../policy/scope.js';
+import {
+  canAccessSalesRecords,
+  canAdministerAccounts,
+  canCreateOpportunity,
+  canTransferOpportunity,
+  canViewTeam,
+} from '../policy/scope.js';
+import { redeemAccountLink } from '../services/accountTokens.js';
 
 export interface AuthRouterOptions {
   db: Database;
   passport: ConfiguredPassport;
   loginRateLimiter: RequestHandler;
+  recoveryRateLimiter: RequestHandler;
   csrfGuard: RequestHandler;
   generateCsrfToken: (req: Request, res: Response, options?: { overwrite?: boolean }) => string;
   idleMinutes: number;
@@ -43,6 +51,8 @@ export function toCurrentUserDto(actor: Actor): CurrentUserDto {
       salesRecords: canAccessSalesRecords(actor),
       createOpportunity: canCreateOpportunity(actor),
       accountAdministration: canAdministerAccounts(actor),
+      transferOpportunities: canTransferOpportunity(actor),
+      teamView: canViewTeam(actor),
     },
   };
 }
@@ -138,6 +148,23 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
         });
         await destroySession(req);
         res.clearCookie('penta.sid', { path: '/' });
+        res.status(204).end();
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * Redeems an invitation or reset link (SEC-030). Public by necessity, so it
+   * is CSRF-protected and rate limited, and every failure reads the same. The
+   * caller then signs in normally; no session is created here.
+   */
+  router.post('/set-password', options.recoveryRateLimiter, csrfGuard, (req, res, next) => {
+    void (async () => {
+      try {
+        const { token, password } = parseOrThrow(setPasswordSchema, req.body);
+        await redeemAccountLink({ db, token, password, requestId: req.requestId });
         res.status(204).end();
       } catch (error) {
         next(error);

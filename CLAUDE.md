@@ -1,7 +1,7 @@
 # Penta Public Sector Sales CRM — project instructions
 
 A sales CRM for public sector project opportunities in Bangladesh, built from an
-approved MagicPatterns prototype. Currently at the end of **Milestone 2**.
+approved MagicPatterns prototype. Currently at the end of **Milestone 3**.
 
 ## Read before changing anything
 
@@ -47,7 +47,7 @@ src/        React app
   app/      API mode (production path)
   demo/     the approved synthetic prototype, unchanged
   components/, pages/, utils/   approved UI, reused by both
-e2e/        Playwright smoke + M2 browser checks, screenshot evidence
+e2e/        Playwright smoke + milestone browser checks, screenshot evidence
 docs/       requirements, progress, ADRs, evidence
 ```
 
@@ -83,16 +83,20 @@ npm run build          # web (with demo-exclusion checks) + server
 
 ## Current state
 
-Milestones 1 and 2 are complete: persistence, authentication, server-side
+Milestones 1–3 are complete: persistence, authentication, server-side
 permissions, opportunity create / list / detail / basic edit, stage and status
 transitions (board and dropdown), Awarded/Lost outcomes, management-only
-reopening, and the follow-up lifecycle (create, complete, reschedule, cancel),
-all with optimistic concurrency, durable idempotency and audit.
+reopening, the follow-up lifecycle, ownership transfers, management's team
+view, account and section administration, and single-use invitation/reset
+links — all with optimistic concurrency, durable idempotency and audit.
 
-Every M2 writer locks the opportunity row before any follow-up row; keep that
-order in new services (see `docs/adr/0003-stage-status-and-follow-up-lifecycle.md`).
+Every writer locks the opportunity row before any follow-up row; account
+changes lock the active administrator rows first, in id order. Keep both
+orders in new services (ADRs 0003 and 0004).
 
-Transfers, account administration, contacts, activities, tenders, documents,
-dashboards, reports, search and notifications are **not** implemented. They
-are visibly unavailable in the UI rather than mocked. See `docs/progress.md`
-before starting Milestone 3.
+Never log request data: unexpected errors go through `describeForLog` in
+`server/http/errors.ts` (SEC-032).
+
+Contacts, activities, tenders, documents, dashboards, reports, search and
+notifications are **not** implemented. They are visibly unavailable in the UI
+rather than mocked. See `docs/progress.md` before starting Milestone 4.

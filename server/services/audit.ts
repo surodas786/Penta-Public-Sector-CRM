@@ -70,6 +70,14 @@ export const OPPORTUNITY_FIELD_LABELS: Record<string, string> = {
   assignedUserId: 'Assigned to',
   state: 'State',
   completionNote: 'Completion note',
+  // Account and section administration (FR-062, SEC-012).
+  fullName: 'Name',
+  email: 'Email',
+  role: 'Role',
+  managerId: 'Reports to',
+  active: 'Active',
+  leadUserId: 'Section lead',
+  expiresAt: 'Link expires',
 };
 
 /**

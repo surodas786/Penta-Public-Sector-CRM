@@ -46,6 +46,7 @@ export const solutionCategoryEnum = pgEnum('solution_category', SOLUTION_CATEGOR
 export const organizationTypeEnum = pgEnum('organization_type', ORGANIZATION_TYPES);
 export const followUpStateEnum = pgEnum('follow_up_state', FOLLOW_UP_STATES);
 export const idempotencyStateEnum = pgEnum('idempotency_state', ['in_progress', 'completed']);
+export const accountTokenPurposeEnum = pgEnum('account_token_purpose', ['invitation', 'password_reset']);
 
 // ---------------------------------------------------------------------------
 // Sections and users
@@ -73,7 +74,11 @@ export const users = pgTable(
     fullName: text('full_name').notNull(),
     /** Stored already normalised to lower case; uniqueness is case-insensitive. */
     email: text('email').notNull(),
-    passwordHash: text('password_hash').notNull(),
+    /**
+     * Null until an invited account sets its password (migration 0003). A null
+     * hash never authenticates: sign-in spends the same work and fails.
+     */
+    passwordHash: text('password_hash'),
     role: userRoleEnum('role').notNull(),
     sectionId: uuid('section_id').references(() => sections.id, { onDelete: 'restrict' }),
     managerId: uuid('manager_id').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
@@ -343,6 +348,38 @@ export const idempotencyRecords = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Invitation and password-reset tokens (SEC-030, migration 0003)
+// ---------------------------------------------------------------------------
+
+/**
+ * Single-use, expiring tokens. Only a SHA-256 hash is stored; the token itself
+ * is shown once to the administrator who issued it and never again. A token
+ * is spent by setting `used_at`, and issuing a new one for the same purpose
+ * spends any earlier ones.
+ */
+export const accountTokens = pgTable(
+  'account_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    purpose: accountTokenPurposeEnum('purpose').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('account_tokens_hash_unique').on(table.tokenHash),
+    index('account_tokens_user_idx').on(table.userId, table.purpose),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Session store (connect-pg-simple)
 // ---------------------------------------------------------------------------
 
@@ -366,3 +403,4 @@ export type OrganizationRow = typeof organizations.$inferSelect;
 export type OpportunityRow = typeof opportunities.$inferSelect;
 export type FollowUpRow = typeof followUps.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
+export type AccountTokenRow = typeof accountTokens.$inferSelect;

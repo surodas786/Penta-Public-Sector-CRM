@@ -19,11 +19,13 @@ import { configurePassport } from './auth/passport.js';
 import { createCsrfProtection, createOriginGuard } from './http/csrf.js';
 import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
 import { requestContext } from './http/requestContext.js';
+import { createAdminRouter } from './routes/admin.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createFollowUpsRouter } from './routes/followUps.js';
 import { createLookupsRouter } from './routes/lookups.js';
 import { createOpportunitiesRouter } from './routes/opportunities.js';
 import { createOrganizationsRouter } from './routes/organizations.js';
+import { createTeamRouter } from './routes/team.js';
 
 export const SESSION_COOKIE_NAME = 'penta.sid';
 
@@ -122,6 +124,18 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
     },
   });
 
+  // A separate counter for redeeming invitation and reset links (SEC-031), so
+  // setting a password does not spend the person's sign-in attempts.
+  const recoveryRateLimiter: RequestHandler = rateLimit({
+    windowMs: loginRateLimit?.windowMs ?? 15 * 60_000,
+    limit: loginRateLimit?.limit ?? 10,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new ApiError(429, 'rate_limited', 'Too many attempts. Wait a few minutes before trying again.'));
+    },
+  });
+
   app.get('/api/health', (_req, res) => {
     // No secrets, no configuration, no counts (NFR-003).
     res.json({ status: 'ok' });
@@ -133,6 +147,7 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
       db: database.db,
       passport: passportInstance,
       loginRateLimiter,
+      recoveryRateLimiter,
       csrfGuard,
       generateCsrfToken,
       idleMinutes: config.sessionIdleMinutes,
@@ -144,6 +159,8 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
   app.use('/api/follow-ups', createFollowUpsRouter({ db: database.db, csrfGuard }));
   app.use('/api/organizations', createOrganizationsRouter({ db: database.db }));
   app.use('/api/lookups', createLookupsRouter({ db: database.db }));
+  app.use('/api/team', createTeamRouter({ db: database.db }));
+  app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin }));
 
   // NOTE: no demo, seed or reset endpoint is registered in any environment.
   // Demo data lives in the separate synthetic frontend build (plan 4.4).

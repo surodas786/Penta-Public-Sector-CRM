@@ -63,6 +63,8 @@ export interface CurrentUserDto {
     salesRecords: boolean;
     createOpportunity: boolean;
     accountAdministration: boolean;
+    transferOpportunities: boolean;
+    teamView: boolean;
   };
 }
 
@@ -225,3 +227,88 @@ export const IDEMPOTENCY_HEADER = 'idempotency-key';
 
 /** Header carrying the double-submit CSRF token. */
 export const CSRF_HEADER = 'x-csrf-token';
+
+// ---------------------------------------------------------------------------
+// Milestone 3: administration, invitations and the management team view
+// ---------------------------------------------------------------------------
+
+/**
+ * An account as the System Administrator sees it (FR-071). Carries no
+ * commercial data: no owned-opportunity counts or values, which belong to
+ * management's team view. No password hash, token or session field.
+ */
+export interface AdminUserDto {
+  id: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  sectionId: string | null;
+  sectionName: string | null;
+  managerId: string | null;
+  managerName: string | null;
+  active: boolean;
+  /** True until an invited account sets its password. */
+  invitationPending: boolean;
+  version: number;
+}
+
+export interface AdminSectionDto {
+  id: string;
+  name: string;
+  active: boolean;
+  leadId: string | null;
+  leadName: string | null;
+  activeMembers: number;
+  version: number;
+}
+
+/**
+ * A single-use link, shown once to the administrator who issued it and never
+ * stored in readable form. Delivered to the person out of band: release one
+ * sends no email (requirements §1.3).
+ */
+export interface AccountLinkDto {
+  purpose: 'invitation' | 'password_reset';
+  url: string;
+  expiresAt: string;
+}
+
+export interface CreateUserResultDto {
+  user: AdminUserDto;
+  /** Null when the request was a replay: the link is never shown twice. */
+  link: AccountLinkDto | null;
+}
+
+export interface AdminAuditEntryDto {
+  id: string;
+  action: string;
+  actorName: string;
+  subject: string | null;
+  occurredAt: string;
+  reason: string | null;
+  changes: HistoryChangeDto[];
+}
+
+/** Management's read-only structure and workload view (FR-071). No emails, no account fields. */
+export interface TeamDto {
+  management: { id: string; fullName: string }[];
+  sections: {
+    id: string;
+    name: string;
+    lead: { id: string; fullName: string } | null;
+    members: { id: string; fullName: string; active: boolean; reportsToLead: boolean }[];
+  }[];
+  workload: {
+    userId: string;
+    fullName: string;
+    role: UserRole;
+    sectionName: string;
+    /** Active pipeline population: status Active, stage neither Awarded nor Lost. */
+    activeOpportunities: number;
+    /** Decimal string; estimated value of the same population. */
+    estimatedPipeline: string;
+    openTasks: number;
+    overdueTasks: number;
+  }[];
+  today: string;
+}

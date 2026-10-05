@@ -75,6 +75,9 @@ export function OpportunitiesPage() {
   const status = read('status');
   const priority = read('priority');
   const solutionCategory = read('solutionCategory');
+  // Set by the Team Management workload drill-down. The server applies it
+  // inside scope, so it can only narrow what the account already sees.
+  const ownerId = read('ownerId');
   const sort = (read('sort', 'createdAt') as SortKey) ?? 'createdAt';
   const dir = read('dir', 'desc') === 'asc' ? 'asc' : 'desc';
 
@@ -89,8 +92,8 @@ export function OpportunitiesPage() {
   };
 
   const query = useMemo(
-    () => ({ page, pageSize: PAGE_SIZE, q, stage, status, priority, solutionCategory, sort, dir }),
-    [page, q, stage, status, priority, solutionCategory, sort, dir],
+    () => ({ page, pageSize: PAGE_SIZE, q, stage, status, priority, solutionCategory, ownerId, sort, dir }),
+    [page, q, stage, status, priority, solutionCategory, ownerId, sort, dir],
   );
 
   const fetcher = useCallback(
@@ -103,7 +106,10 @@ export function OpportunitiesPage() {
     [query, view],
   );
 
-  const boardQuery = useMemo(() => ({ q, priority, solutionCategory }), [q, priority, solutionCategory]);
+  const boardQuery = useMemo(
+    () => ({ q, priority, solutionCategory, ownerId }),
+    [q, priority, solutionCategory, ownerId],
+  );
   const board = useApiResource(
     useCallback(
       (signal: AbortSignal) => (view === 'pipeline' ? fetchBoard(boardQuery, signal) : Promise.resolve(null)),
@@ -160,7 +166,7 @@ export function OpportunitiesPage() {
     }
   };
 
-  const activeFilterCount = [q, stage, status, priority, solutionCategory].filter(Boolean).length;
+  const activeFilterCount = [q, stage, status, priority, solutionCategory, ownerId].filter(Boolean).length;
   const pageCount = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   const scopeNote =

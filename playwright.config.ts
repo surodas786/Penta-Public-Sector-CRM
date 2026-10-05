@@ -39,9 +39,9 @@ export default defineConfig({
   // include it; without that, the spec was ignored and the documented script
   // found no tests.
   testIgnore:
-    process.env.CAPTURE_EVIDENCE === 'true' || process.argv.some((arg) => arg.includes('evidence.spec'))
+    process.env.CAPTURE_EVIDENCE === 'true' || process.argv.some((arg) => /evidence(-\w+)?\.spec/.test(arg))
       ? []
-      : ['**/evidence.spec.ts'],
+      : ['**/evidence*.spec.ts'],
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

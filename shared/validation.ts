@@ -13,6 +13,7 @@ import {
   OPPORTUNITY_STATUSES,
   PRIORITIES,
   SOLUTION_CATEGORIES,
+  USER_ROLES,
   isTerminalStage,
   type OpportunityStage,
 } from './enums.js';
@@ -89,6 +90,133 @@ export const loginSchema = z
   .strict();
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+/**
+ * New passwords (SEC-030). Length is the control that matters; composition
+ * rules are not imposed. 12 is a proposed default for Penta to confirm, and it
+ * does not apply if Penta's identity provider replaces local sign-in.
+ */
+export const PASSWORD_MIN_LENGTH = 12;
+
+export const setPasswordSchema = z
+  .object({
+    token: z.string().trim().min(20, 'This link is incomplete. Open the full link you were sent.').max(200),
+    password: z
+      .string()
+      .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters.`)
+      .max(256, 'Use at most 256 characters.'),
+  })
+  .strict();
+
+export type SetPasswordInput = z.infer<typeof setPasswordSchema>;
+
+// ---------------------------------------------------------------------------
+// Ownership transfer (FR-070, BR-050)
+// ---------------------------------------------------------------------------
+
+export const transferOpportunitySchema = z
+  .object({
+    version: z.number().int().positive('Reload the record and try again.'),
+    newOwnerId: uuidField,
+    reason: z
+      .string()
+      .trim()
+      .min(3, 'Explain why the opportunity is being transferred.')
+      .max(2000, 'Use at most 2000 characters.'),
+  })
+  .strict();
+
+export type TransferOpportunityInput = z.input<typeof transferOpportunitySchema>;
+
+// ---------------------------------------------------------------------------
+// Account and section administration (FR-071, BR-051, BR-052)
+// ---------------------------------------------------------------------------
+
+const personName = z.string().trim().min(2, 'Enter the full name.').max(200, 'Use at most 200 characters.');
+const optionalId = z.union([uuidField, z.null()]).optional();
+const adminReason = z.string().trim().max(2000, 'Use at most 2000 characters.').optional();
+
+/**
+ * Section and reporting line are validated against the database by the
+ * server; for a salesperson the reporting line is derived from the section's
+ * active lead and any supplied value is only checked against it.
+ */
+export const createUserSchema = z
+  .object({
+    fullName: personName,
+    email: emailField,
+    role: z.enum(USER_ROLES),
+    sectionId: optionalId,
+    managerId: optionalId,
+  })
+  .strict();
+
+export type CreateUserInput = z.input<typeof createUserSchema>;
+
+export const updateUserSchema = z
+  .object({
+    version: z.number().int().positive('Reload the account and try again.'),
+    fullName: personName.optional(),
+    email: emailField.optional(),
+    role: z.enum(USER_ROLES).optional(),
+    sectionId: optionalId,
+    managerId: optionalId,
+  })
+  .strict();
+
+export type UpdateUserInput = z.input<typeof updateUserSchema>;
+
+export const accountStateSchema = z
+  .object({
+    version: z.number().int().positive('Reload the account and try again.'),
+    reason: adminReason,
+  })
+  .strict();
+
+export const sectionNameSchema = z
+  .object({
+    name: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  })
+  .strict();
+
+export const renameSectionSchema = sectionNameSchema
+  .extend({ version: z.number().int().positive('Reload the section and try again.') })
+  .strict();
+
+export const replaceLeadSchema = z
+  .object({
+    version: z.number().int().positive('Reload the section and try again.'),
+    newLeadId: uuidField,
+    reason: z.string().trim().min(3, 'Explain the change of lead.').max(2000, 'Use at most 2000 characters.'),
+  })
+  .strict();
+
+export const sectionStateSchema = z
+  .object({
+    version: z.number().int().positive('Reload the section and try again.'),
+    reason: adminReason,
+  })
+  .strict();
+
+export const listUsersQuerySchema = z
+  .object({
+    page: z
+      .string()
+      .regex(/^\d{1,6}$/, 'Page must be a whole number.')
+      .transform(Number)
+      .refine((value) => value >= 1, 'Page must be 1 or greater.')
+      .optional()
+      .default(1),
+    pageSize: z
+      .string()
+      .regex(/^\d{1,3}$/, 'Page size must be a whole number.')
+      .transform(Number)
+      .refine((value) => value >= 1 && value <= 100, 'Page size must be between 1 and 100.')
+      .optional()
+      .default(50),
+    q: z.string().trim().max(200).optional(),
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Opportunity creation (FR-020, BR-001, BR-014)

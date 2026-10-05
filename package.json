@@ -29,7 +29,7 @@
     "db:seed:test": "tsx --env-file-if-exists=.env server/db/seed.ts --test",
     "db:reset": "tsx --env-file-if-exists=.env server/db/reset.ts",
     "preview": "vite preview",
-    "evidence": "playwright test e2e/evidence.spec.ts",
+    "evidence": "playwright test e2e/evidence.spec.ts && playwright test e2e/evidence-m3.spec.ts",
     "check:env": "tsx scripts/check-env-example.ts"
   },
   "dependencies": {
