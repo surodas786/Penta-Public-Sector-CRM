@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CalendarClockIcon, CheckIcon, PencilIcon } from 'lucide-react';
 import type { FollowUp, Opportunity, User } from '../../types/crm';

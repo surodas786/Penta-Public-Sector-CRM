@@ -1,4 +1,3 @@
-import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   BarChart3Icon,
@@ -70,7 +69,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           </ul>
         </nav>
         <div className="border-t border-white/10 px-5 py-3 text-[10.5px] leading-relaxed text-[#7489A8]">
-          Role-based access is enforced in this prototype UI. Production systems must also enforce access control server-side.
+          Synthetic demo build. Nothing here is a security boundary — these role filters run in the browser over fictional data. The production application enforces access on the server.
         </div>
       </aside>
     </>);

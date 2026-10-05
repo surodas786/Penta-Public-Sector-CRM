@@ -31,7 +31,9 @@ export function formatDate(value?: string | null): string {
 }
 
 export function formatTime(iso: string): string {
-  return `${dhakaParts(iso).time} BST`;
+  // §20: "BST" is ambiguous (British Summer Time / Bangladesh Standard Time).
+  // The specification requires "Bangladesh time" or "UTC+6" instead.
+  return `${dhakaParts(iso).time} UTC+6`;
 }
 
 export function formatDateTime(iso?: string | null): string {

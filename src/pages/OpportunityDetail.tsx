@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ArrowLeftIcon, CalendarPlusIcon, MessageSquarePlusIcon, PencilIcon, UserCogIcon } from 'lucide-react';

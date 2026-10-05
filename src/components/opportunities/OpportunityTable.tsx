@@ -1,4 +1,3 @@
-import React from 'react';
 import type { Opportunity, Organization, User } from '../../types/crm';
 import { sectionName } from '../../data/options';
 import { formatBDTShort, formatDate } from '../../utils/format';

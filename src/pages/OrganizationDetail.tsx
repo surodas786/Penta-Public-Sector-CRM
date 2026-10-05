@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeftIcon, PencilIcon, PlusIcon } from 'lucide-react';
 import { useScope } from '../hooks/useScope';

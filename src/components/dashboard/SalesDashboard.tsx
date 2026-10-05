@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { SectionId, Stage } from '../../types/crm';
 import { useScope } from '../../hooks/useScope';

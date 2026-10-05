@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarDaysIcon, ListIcon, MessageSquarePlusIcon, PlusIcon, SearchIcon } from 'lucide-react';
 import type { ActivityType } from '../types/crm';

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { DownloadIcon } from 'lucide-react';
 import { useScope } from '../hooks/useScope';

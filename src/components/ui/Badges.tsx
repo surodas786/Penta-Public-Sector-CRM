@@ -1,4 +1,3 @@
-import React from 'react';
 import type { BidStatus, Priority, Stage, Tender } from '../../types/crm';
 import { dueState, tenderIndicator, type TenderIndicatorKind } from '../../utils/metrics';
 

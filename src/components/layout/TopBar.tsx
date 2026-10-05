@@ -1,4 +1,3 @@
-import React from 'react';
 import { CalendarIcon, MenuIcon } from 'lucide-react';
 import { useCrm } from '../../contexts/CrmContext';
 import { ROLE_LABELS, sectionName } from '../../data/options';
@@ -20,7 +19,7 @@ export function TopBar({ onMenu }: {onMenu: () => void;}) {
       <div className="flex-1" />
       <div className="hidden items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11.5px] font-medium text-slate-600 xl:flex">
         <CalendarIcon className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
-        Demo date: {DEMO_DATE_LABEL} (BST)
+        Demo date: {DEMO_DATE_LABEL} (UTC+6)
       </div>
       <span className="hidden whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 md:inline-block">
         Synthetic demo data

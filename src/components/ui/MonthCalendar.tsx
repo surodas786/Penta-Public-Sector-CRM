@@ -1,4 +1,3 @@
-import React from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react';
 import { DEMO_TODAY } from '../../utils/demoClock';
 import { monthLabel } from '../../utils/format';

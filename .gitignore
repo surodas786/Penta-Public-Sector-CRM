@@ -6,11 +6,24 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
 node_modules
 dist
+dist-demo
+dist-server
 dist-ssr
 *.local
+
+# Environment — never commit real configuration or secrets
+.env
+.env.*
+!.env.example
+!.env.demo
+
+# Test artefacts
+test-results
+playwright-report
+blob-report
+.playwright
 
 # Editor directories and files
 .vscode/*

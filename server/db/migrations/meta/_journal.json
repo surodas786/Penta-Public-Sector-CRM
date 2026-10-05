@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791118405996,
+      "tag": "0000_modern_spacker_dave",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791118421581,
+      "tag": "0001_privileges_and_reference_sequence",
+      "breakpoints": true
+    }
+  ]
+}

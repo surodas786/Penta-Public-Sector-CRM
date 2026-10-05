@@ -1,4 +1,3 @@
-import React from 'react';
 import type { SectionId } from '../../types/crm';
 import { formatBDTShort } from '../../utils/format';
 

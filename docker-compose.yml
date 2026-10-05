@@ -1,0 +1,33 @@
+# Local development/test database for the Penta CRM.
+# Synthetic data only. This file is NOT a production deployment artifact.
+#
+# Host port 55432 is used deliberately: port 5432 on this machine may already be
+# taken by an unrelated tunnel or server, and this stack must never collide with it.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: penta-crm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: penta_superuser
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-penta_local_superuser}
+      POSTGRES_DB: postgres
+      # Consumed by the init script below.
+      PENTA_MIGRATOR_PASSWORD: ${PENTA_MIGRATOR_PASSWORD:-penta_local_migrator}
+      PENTA_APP_PASSWORD: ${PENTA_APP_PASSWORD:-penta_local_app}
+    ports:
+      - '55432:5432'
+    volumes:
+      # Postgres 18+ images expect a single mount at /var/lib/postgresql and
+      # place the cluster in a major-version subdirectory beneath it.
+      - penta-crm-pgdata:/var/lib/postgresql
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U penta_superuser -d postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  penta-crm-pgdata:
