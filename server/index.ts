@@ -4,9 +4,16 @@
  *   npm run dev:server     tsx watch, reads .env
  *   node dist-server/server/index.js   after `npm run build:server`
  */
-import { createApp } from './app.js';
+import { randomUUID } from 'node:crypto';
+
+import { createApp, createDocumentServices } from './app.js';
 import { createDatabase } from './db/client.js';
 import { loadServerConfig } from './env.js';
+import { describeForLog } from './http/errors.js';
+import { cleanupAbandonedUploads, scanPendingRevisions } from './services/documents.js';
+
+/** Abandoned-upload cleanup and pending-scan retry (SEC-010). */
+const DOCUMENT_MAINTENANCE_INTERVAL_MS = 15 * 60_000;
 
 async function main(): Promise<void> {
   const config = loadServerConfig();
@@ -17,6 +24,30 @@ async function main(): Promise<void> {
   probe.release();
 
   const app = createApp({ database, config });
+
+  if (config.documents.scanner === 'none') {
+    console.warn(
+      'DOCUMENT_SCANNER=none: uploaded documents are stored but stay unavailable until a scanner is configured.',
+    );
+  } else {
+    console.warn('DOCUMENT_SCANNER=test: development test scanner only. It does not detect malware.');
+  }
+  const documentServices = createDocumentServices(database, config);
+  const maintainDocuments = () => {
+    const requestId = `maintenance-${randomUUID()}`;
+    void (async () => {
+      const cleaned = await cleanupAbandonedUploads(documentServices);
+      const rescanned = await scanPendingRevisions(documentServices, requestId);
+      if (cleaned.expiredUploads + cleaned.orphanedFiles + rescanned > 0) {
+        console.log(
+          `[${requestId}] Documents: removed ${cleaned.expiredUploads} expired uploads and ` +
+            `${cleaned.orphanedFiles} orphaned files; retried ${rescanned} pending scans.`,
+        );
+      }
+    })().catch((error: unknown) => console.error(`[${requestId}] Document maintenance failed: ${describeForLog(error)}`));
+  };
+  setInterval(maintainDocuments, DOCUMENT_MAINTENANCE_INTERVAL_MS).unref();
+  maintainDocuments();
 
   const server = app.listen(config.port, config.host, () => {
     console.log(

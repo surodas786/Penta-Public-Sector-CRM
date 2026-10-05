@@ -19,6 +19,24 @@ export interface ServerConfig {
   sessionAbsoluteMinutes: number;
   /** HTTPS-only cookies. Forced on in production. */
   secureCookies: boolean;
+  documents: DocumentConfig;
+}
+
+/**
+ * SEC-010 document storage and scanning. Production infrastructure has not
+ * been chosen (see ADR 0006): the only storage is a private local directory,
+ * and the only scanner is a deterministic test scanner that is refused in
+ * production. With no scanner, files are stored but stay unavailable.
+ */
+export type DocumentScannerKind = 'none' | 'test';
+
+export interface DocumentConfig {
+  /** Private directory outside anything the web server serves. */
+  storageDir: string;
+  scanner: DocumentScannerKind;
+  maxUploadBytes: number;
+  /** An upload not finalized within this time is abandoned and removed. */
+  uploadTtlMinutes: number;
 }
 
 function required(name: string): string {
@@ -39,6 +57,18 @@ function positiveInt(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive whole number, received "${raw}".`);
   }
   return parsed;
+}
+
+function readScanner(isProduction: boolean): DocumentScannerKind {
+  const raw = (process.env.DOCUMENT_SCANNER ?? 'none').trim();
+  if (raw !== 'none' && raw !== 'test') {
+    throw new Error(`DOCUMENT_SCANNER must be none or test, received "${raw}".`);
+  }
+  // The test scanner recognises test fixtures only. It is not malware scanning.
+  if (raw === 'test' && isProduction) {
+    throw new Error('DOCUMENT_SCANNER=test is a development scanner and must not be used in production.');
+  }
+  return raw;
 }
 
 function readNodeEnv(): AppEnvironment {
@@ -98,6 +128,12 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
     sessionIdleMinutes: positiveInt('SESSION_IDLE_MINUTES', 30),
     sessionAbsoluteMinutes: positiveInt('SESSION_ABSOLUTE_MINUTES', 720),
     secureCookies: isProduction || process.env.FORCE_SECURE_COOKIES === 'true',
+    documents: {
+      storageDir: (process.env.DOCUMENT_STORAGE_DIR ?? './var/documents').trim(),
+      scanner: readScanner(isProduction),
+      maxUploadBytes: positiveInt('DOCUMENT_MAX_UPLOAD_MB', 25) * 1024 * 1024,
+      uploadTtlMinutes: positiveInt('DOCUMENT_UPLOAD_TTL_MINUTES', 60),
+    },
     ...overrides,
   };
 

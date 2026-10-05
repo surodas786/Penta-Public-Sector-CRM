@@ -1,11 +1,7 @@
 /**
  * Opportunity detail — the approved tabbed layout, loaded through scoped
- * endpoints (plan 7.5).
- *
- * Overview, Follow-ups and Change History are live, and so are stage, status
- * and follow-up actions (M2). Contacts, Tender and Documents keep their
- * approved position but are marked unavailable: their tables do not exist
- * yet, so an empty tab would imply "none recorded" rather than "not built".
+ * endpoints (plan 7.5). Every tab is live: Overview, Contacts, Activities
+ * (with follow-ups), Tender and Documents (M5), and Change History.
  */
 import { useCallback, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -43,8 +39,10 @@ import {
   fetchOpportunity,
   fetchOpportunityActivities,
   fetchOpportunityContacts,
+  fetchOpportunityDocuments,
   fetchOpportunityFollowUps,
   fetchOpportunityHistory,
+  fetchOpportunityTenders,
 } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/Feedback';
@@ -64,6 +62,8 @@ import { TransferDialog } from '../components/TransferDialog.js';
 import { ActivityDialog } from '../components/ActivityDialog.js';
 import { ActivityTimeline } from '../components/ActivityTimeline.js';
 import { ContactsTab } from '../components/OpportunityContactsTab.js';
+import { DocumentsTab } from '../components/OpportunityDocumentsTab.js';
+import { TenderTab } from '../components/OpportunityTenderTab.js';
 import { TransitionDialog } from '../components/TransitionDialog.js';
 import {
   needsTransitionDialog,
@@ -75,11 +75,6 @@ import { DueTag, PriorityBadge, RetainedStageNote, StageBadge } from '../ui/ApiB
 import { dhakaToday, formatCalendarDate, formatInstant } from '../ui/dates.js';
 
 type TabId = 'overview' | 'contacts' | 'activities' | 'tender' | 'documents' | 'history';
-
-const UNAVAILABLE_TABS: Partial<Record<TabId, string>> = {
-  tender: 'Tender cycles arrive with the tender and documents milestone.',
-  documents: 'Private document storage with authenticated download arrives with the same milestone.',
-};
 
 const ACTION_LABELS: Record<string, string> = {
   'opportunity.created': 'Opportunity created',
@@ -98,6 +93,17 @@ const ACTION_LABELS: Record<string, string> = {
   'contact.notes_updated': 'Relationship notes updated',
   'activity.logged': 'Activity logged',
   'activity.updated': 'Activity edited',
+  'tender.created': 'Tender added',
+  'tender.updated': 'Tender updated',
+  'tender.submitted': 'Bid marked Submitted',
+  'tender.superseded': 'Tender notice superseded',
+  'tender.designated_current': 'Tender made current',
+  'tender.cancelled': 'Tender notice cancelled',
+  'document.uploaded': 'Document uploaded',
+  'document.revised': 'Document revision uploaded',
+  'document.scanned': 'Document scanned',
+  'document.updated': 'Document category changed',
+  'document.archived': 'Document archived',
 };
 
 type TaskAction = { kind: 'complete' | 'reschedule' | 'cancel'; task: FollowUpDto };
@@ -146,6 +152,15 @@ export function OpportunityDetailPage() {
     useCallback((signal: AbortSignal) => fetchOpportunityActivities(id, { pageSize: 50 }, signal), [id]),
     [id],
   );
+  const tenders = useApiResource(
+    useCallback((signal: AbortSignal) => fetchOpportunityTenders(id, signal), [id]),
+    [id],
+  );
+  const [showArchived, setShowArchived] = useState(false);
+  const documents = useApiResource(
+    useCallback((signal: AbortSignal) => fetchOpportunityDocuments(id, showArchived, signal), [id, showArchived]),
+    [id, showArchived],
+  );
   const [activityDialog, setActivityDialog] = useState<{ open: boolean; activity: ActivityDto | null }>({
     open: false,
     activity: null,
@@ -157,6 +172,8 @@ export function OpportunityDetailPage() {
     history.reload();
     contacts.reload();
     activities.reload();
+    tenders.reload();
+    documents.reload();
   };
 
   if (detail.loading && !detail.data) {
@@ -357,8 +374,8 @@ export function OpportunityDetailPage() {
               { id: 'overview', label: 'Overview' },
               { id: 'contacts', label: 'Contacts', count: contacts.data?.items.length },
               { id: 'activities', label: 'Activities', count: activities.data?.total },
-              { id: 'tender', label: 'Tender' },
-              { id: 'documents', label: 'Documents' },
+              { id: 'tender', label: 'Tender', count: tenders.data?.items.length },
+              { id: 'documents', label: 'Documents', count: documents.data?.items.length },
               { id: 'history', label: 'Change History', count: history.data?.total },
             ]}
           />
@@ -411,12 +428,28 @@ export function OpportunityDetailPage() {
 
           {tab === 'history' && <HistoryTab resource={history} />}
 
-          {UNAVAILABLE_TABS[tab] && (
-            <EmptyState
-              icon={<LockIcon className="h-8 w-8" />}
-              title="Not available yet"
-              description={UNAVAILABLE_TABS[tab]}
-              compact
+          {tab === 'tender' && (
+            <TenderTab
+              resource={tenders}
+              closed={closed}
+              parent={{
+                id: opportunity.id,
+                name: opportunity.name,
+                organizationId: opportunity.organization.id,
+                organizationName: opportunity.organization.name,
+                ownerName: opportunity.ownerName,
+              }}
+              onChanged={reloadAll}
+            />
+          )}
+
+          {tab === 'documents' && (
+            <DocumentsTab
+              resource={documents}
+              opportunityId={opportunity.id}
+              showArchived={showArchived}
+              onShowArchived={setShowArchived}
+              onChanged={reloadAll}
             />
           )}
         </div>

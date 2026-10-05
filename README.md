@@ -3,13 +3,16 @@
 A CRM for tracking public sector project opportunities in Bangladesh: pipeline
 stages, follow-ups, tender cycles and section-based ownership.
 
-**Status: Milestone 4.** Persistent accounts and sessions, server-enforced
+**Status: Milestone 5.** Persistent accounts and sessions, server-enforced
 access control, opportunity creation and editing, persistent stage and status
 changes (Pipeline board and dropdown), Awarded/Lost outcomes with
 management-only reopening, the complete follow-up lifecycle, ownership
 transfers, management's team view, and account and section administration with
 single-use invitation and reset links, the shared organization directory,
-contacts with opportunity-specific relationship notes, and activities.
+contacts with opportunity-specific relationship notes, activities, tender
+cycles with the Tender Tracker, and private opportunity documents with
+revisions and scanning before download (development storage and a test
+scanner only — production infrastructure is undecided).
 Later features are deliberately unavailable rather than mocked — see
 [`docs/progress.md`](docs/progress.md).
 
@@ -65,6 +68,23 @@ npm run dev          # web    http://localhost:5173
 
 Open <http://localhost:5173> and sign in with a synthetic account (below).
 
+### Documents in development
+
+Uploaded files are stored privately on the server in `DOCUMENT_STORAGE_DIR`
+(default `./var/documents`, git-ignored) — never in the browser. A file can be
+downloaded only after a clean scan:
+
+| `DOCUMENT_SCANNER` | Effect |
+| --- | --- |
+| `none` (default if unset) | Files are stored but stay **pending** and cannot be downloaded |
+| `test` (as in `.env.example`) | Development **test** scanner: it flags the harmless EICAR test string and nothing else. It is not malware scanning, and the server refuses to start with it when `NODE_ENV=production` |
+
+`DOCUMENT_MAX_UPLOAD_MB` (default 25) and `DOCUMENT_UPLOAD_TTL_MINUTES`
+(default 60) are configurable. The API removes abandoned uploads every 15
+minutes; `npm run documents:maintain` does it once and retries pending scans.
+Production storage and scanning have **not** been chosen — see
+[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
+
 > **Windows note.** Hyper-V, WSL and Docker Desktop reserve blocks of TCP
 > ports, and binding one fails with `EACCES` even though it looks free. The
 > default `PORT=4800` sits outside the usual blocks; if it still fails, run
@@ -107,8 +127,8 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run typecheck` | TypeScript for the web, server and e2e projects |
 | `npm run lint` | ESLint across all source |
 | `npm test` | Backend integration suite against the test database — **the milestone gate** |
-| `npm run test:smoke` | Playwright browser checks, as three isolated runs (smoke + M2, M3, M4), each starting its own servers on freshly seeded test data |
-| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as three Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
+| `npm run test:smoke` | Playwright browser checks, as four isolated runs (smoke + M2, M3, M4, M5), each starting its own servers on freshly seeded test data |
+| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as four Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
 
@@ -125,6 +145,7 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run db:migrate` / `npm run db:migrate:test` | Apply migrations as the schema owner |
 | `npm run db:seed` / `npm run db:seed:test` | Load synthetic fixtures |
 | `npm run db:reset` | Truncate and reload the fixtures |
+| `npm run documents:maintain` | Remove abandoned uploads and orphaned files; retry pending scans |
 
 Creating databases and roles is an administrator action, done once by
 `npm run db:up`. The application itself always connects as the restricted
@@ -154,11 +175,13 @@ Access control is enforced in the database query, not in the browser. See
 [`docs/adr/0002-authentication-and-sessions.md`](docs/adr/0002-authentication-and-sessions.md) and
 [`docs/adr/0003-stage-status-and-follow-up-lifecycle.md`](docs/adr/0003-stage-status-and-follow-up-lifecycle.md) and
 [`docs/adr/0004-transfers-and-administration.md`](docs/adr/0004-transfers-and-administration.md) and
-[`docs/adr/0005-directory-contacts-and-activities.md`](docs/adr/0005-directory-contacts-and-activities.md).
+[`docs/adr/0005-directory-contacts-and-activities.md`](docs/adr/0005-directory-contacts-and-activities.md) and
+[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
 
 ## Not in this milestone
 
-Tenders, documents, dashboards, reports, CSV export, search and
-notifications. Each is visibly unavailable in the application with the reason
+Dashboards, reports, CSV export, search and notifications. Production
+document storage and malware scanning are undecided. Each unavailable feature
+is visibly unavailable in the application with the reason
 stated.
 [`docs/progress.md`](docs/progress.md) has the full list and the next task.

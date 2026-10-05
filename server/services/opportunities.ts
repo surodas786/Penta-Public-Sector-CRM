@@ -21,6 +21,9 @@ import type {
 } from '../../shared/api.js';
 import {
   ACTIVITY_TYPE_LABELS,
+  BID_STATUS_LABELS,
+  DOCUMENT_CATEGORY_LABELS,
+  NOTICE_STATE_LABELS,
   BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
   LOSS_REASON_LABELS,
@@ -734,11 +737,11 @@ export async function listOpportunityHistory(options: {
 // ---------------------------------------------------------------------------
 
 /** Keys kept in audit data for context, not shown as field changes. */
-const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context', 'about']);
+const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context', 'about', 'tenderId']);
 
 const ID_FIELDS = {
   user: ['ownerId', 'assignedUserId', 'managerId', 'leadUserId'],
-  organization: ['organizationId'],
+  organization: ['organizationId', 'procuringOrganizationId'],
   section: ['sectionId'],
   contact: ['contactId'],
 } as const;
@@ -811,6 +814,10 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   state: FOLLOW_UP_STATE_LABELS,
   role: ROLE_LABELS,
   type: ACTIVITY_TYPE_LABELS,
+  bidStatus: BID_STATUS_LABELS,
+  noticeState: NOTICE_STATE_LABELS,
+  category: DOCUMENT_CATEGORY_LABELS,
+  scanState: { pending: 'Pending', clean: 'Clean', infected: 'Rejected (infected)', failed: 'Scan failed' },
 };
 
 /**

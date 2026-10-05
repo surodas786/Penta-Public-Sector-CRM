@@ -44,6 +44,14 @@ export function formatInstant(iso: string | null | undefined): string {
   return `${formatCalendarDate(dhakaDate.format(parsed))}, ${dhakaTime.format(parsed)} ${BUSINESS_TIME_LABEL}`;
 }
 
+/** DD MMM YYYY, HH:mm without the zone label, for dense tables whose heading names the zone. */
+export function formatInstantCompact(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return `${formatCalendarDate(dhakaDate.format(parsed))}, ${dhakaTime.format(parsed)}`;
+}
+
 export { BUSINESS_TIME_LABEL };
 
 /** A UTC instant as the value of a datetime-local input, in Bangladesh time. */

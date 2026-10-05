@@ -1,10 +1,235 @@
 # Implementation progress
 
-**Current state (05 October 2026):** Milestone 4 complete on branch
-`m4-organizations-contacts-activities`, stacked on `m3-transfers-administration`
-(open as PR #2, CI green, not yet reviewed). Nothing is merged or deployed.
-Milestone 5 has not been started. Sections, newest first: Milestone 4 ·
-Milestone 3 · Milestone 2 · Milestone 1 handover review · Milestone 1.
+**Current state (05 October 2026):** Milestone 5 complete on branch
+`m5-tenders-documents`, stacked on `m4-organizations-contacts-activities`
+(committed locally, not pushed) and `m3-transfers-administration` (PR #2,
+CI green, not yet reviewed). Nothing is merged or deployed. **Production
+document storage and malware scanning are unresolved** (Milestone 5, §8).
+Milestone 6 has not been started. Sections, newest first: Milestone 5 ·
+Milestone 4 · Milestone 3 · Milestone 2 · Milestone 1 handover review ·
+Milestone 1.
+
+---
+
+## Milestone 5 — tender cycles and private documents
+
+**Branch:** `m5-tenders-documents`, created from `m4-organizations-contacts-activities` at `8f77d27`
+**Commit:** the Milestone 5 commit that contains this section
+**Date:** 05 October 2026
+**Status:** Complete for development and ready for review. Not merged, not
+pushed. **Production document storage and malware scanning are unresolved**
+(§8). Milestone 6 not started.
+
+### 1. Milestone 4 check before starting
+
+M4 (`8f77d27`) was checked against the repository and its recorded results:
+committed with a clean tree (the only change was this milestone's own start),
+migrations `0000`–`0004` applied to both databases, the M4 routes, tests and
+screens present as described. Every M4 test runs again in this milestone's
+gate (§5) and passes. M4 is committed locally but not pushed, so it has no CI
+run; PR #2 (M3) is still open. No blockers.
+
+**Storage and scanner configuration inspected:** none existed — no storage
+location, upload limit, scanner or related environment variable anywhere in
+the code, `.env.example`, Docker Compose or CI. The demo kept files in browser
+storage (≤ 1 MB). As instructed, a private local development storage and a
+scanner adapter were implemented, and the production decisions are recorded
+as unresolved.
+
+### 2. What was built
+
+| Requirement | Where | What it does |
+| --- | --- | --- |
+| FR-050, BR-080 | `server/services/tenders.ts`; migration `0005` | Multiple tender cycles per opportunity. **At most one current notice, enforced by a partial unique index**; a new notice supersedes the previous current one in the same transaction; earlier notices are kept with their bid history and are read-only; a superseded notice can be made current again; a notice can be cancelled with a reason, leaving no current tender |
+| §7.1 | same | Required title (3–200), reference (≤ 200), procuring entity (an organization from the directory, labelled when it differs from the opportunity's), publication date and submission deadline; optional procurement method (free text), http/https notice URL, clarification deadline, notes. **Responsible owner is derived** from the opportunity owner, never stored |
+| BR-040 | service + CHECK constraints | Deadline (as a Dhaka date) not before publication; clarification not after submission; Not Participating needs a reason; Submitted ⇔ submission time; a time after the deadline needs an explanatory note (a warning, recorded as fact) |
+| FR-051 | `POST /api/tenders/:id/submit` | Mark Submitted records the time and requires an **explicit yes/no** on moving the opportunity to Bid Submitted (no default). Yes: both changes in one transaction with two audit events. No: stage kept, mismatch indicator shown. Offered only for an Active opportunity at an earlier stage; **never Awarded**. Retries deduplicated by Idempotency-Key; a second submission is 409 |
+| FR-052, AT-11 | `listTenders`, `/api/tenders`; Tender Tracker | Deadline-sorted table (either direction) and month calendar; filters by owner, section (management), bid status, deadline date range (Dhaka dates) and notice state; server-computed indicator against the real clock: red past deadline, amber within 72 hours, neutral later, green Submitted, grey Not Participating / superseded / cancelled / closed opportunity; legend text on every screen; rows open the opportunity's Tender tab |
+| FR-060, SEC-010 | `server/services/documents.ts`, `server/documents/*`; `/api/opportunities/:id/document-uploads`, `/api/document-uploads/:id/finalize` | Private server storage under **generated keys**; raw-body upload streamed with the **25 MB default limit enforced while writing** (configurable); extension allow-list; **content must match the extension** (magic numbers, OOXML structure); executables refused under any name; **macro-enabled** extensions and renamed macro documents (VBA part or macroEnabled content type) refused; UTF-8 text only; filename sanitization (path parts, control, reserved, zero-width and bidi-override characters) |
+| SEC-010 | scanner adapter | Scan before availability. `pending`, `failed` and `infected` cannot be downloaded (409 `document_unavailable`). Scanner `none` keeps files pending; scanner `test` is a labelled development scanner refused in production; a throwing scanner gives `failed`, never clean; infected files move to quarantine |
+| SEC-011 | `GET /api/document-revisions/:id/download` | Scope through the parent opportunity re-checked on **every** upload, finalize, metadata read and download; streamed with attachment disposition (UTF-8 filename), stored MIME type, `nosniff`, `no-store`, sandbox CSP; images may preview inline; no public or permanent URL |
+| FR-061 | same | Revisions never overwrite; earlier revisions stay downloadable; metadata (category, size, SHA-256, uploader, time, scan verdict and scanner); category change with version check; **management-only archive with a reason**, still readable in scope; no DELETE on documents or revisions for the runtime role |
+| BR-091, idempotency | finalize | Idempotent by key **and** by the staged upload (one revision per upload, row lock + unique index): retries with the same or a new key, and two simultaneous finalizes, give one document |
+| Abandoned uploads | `cleanupAbandonedUploads`; `npm run documents:maintain` | Staged uploads expire after 60 minutes (configurable) and are removed with their files; stored files with no upload record are removed; runs every 15 minutes in the API server; the same job retries pending scans when a scanner is available |
+| FR-062 | audit | `tender.created`, `.updated`, `.submitted`, `.superseded`, `.designated_current`, `.cancelled`; `document.uploaded`, `.revised`, `.scanned` (system actor), `.updated`, `.archived` — all in the opportunity's Change History with readable labels; no file content in audit |
+
+**Interface.** The Tender Tracker (table and calendar) and the opportunity
+page's **Tender** and **Documents** tabs are live, built from the approved
+layouts and primitives. Nothing in `src/demo`, `src/components` or `src/pages`
+was changed. The demo's `MonthCalendar` is tied to the demo date, so API mode
+has its own copy with the same layout (`DeadlineCalendar`).
+
+**Interface deviations, for product sign-off.**
+
+| Change | Reason |
+| --- | --- |
+| Mark Submitted asks "Move the opportunity to Bid Submitted?" (required yes/no) and records date **and time**; the prototype moved the stage automatically | FR-051 |
+| Responsible owner is read-only, always the opportunity owner | §7.1, BR-050 |
+| Procuring entity is chosen from the organization directory, not typed | §7.1 |
+| Procurement method is free text with suggestions instead of a fixed list | §7.1: no procurement-law assumptions |
+| Clarification deadline is a date and time | §7.1 |
+| No separate tender detail page: tracker rows open the opportunity's Tender tab, which shows the current notice, earlier notices and every action | FR-052 links to opportunity details; one place for the cycle history |
+| Tender tab adds "Add re-tender / new notice", "Cancel notice", "Make current" and an earlier-notices table | FR-050 |
+| Documents table adds a Scan column, a Download link per revision, a revision dialog and "Show archived" | SEC-010, FR-061 |
+| Upload hint says files are stored on the server and names the scanner; the prototype's "stored in this browser (1 MB)" is gone | SEC-010/011 |
+| The demo's placeholder documents are not seeded | They were browser-stored text stand-ins; production files come only through the validated upload path |
+| Deadline filter offers today-based date ranges ("Within 3/7/30 days", "Before today") over the submission deadline; the prototype's "Missed" filter is the red indicator plus "Before today" | BR-060: one named date basis |
+| Table times omit the "Bangladesh time (UTC+6)" suffix; the column heading carries it | Readability; the zone is still stated |
+
+### 3. Implementation decisions
+
+In `docs/adr/0006-tenders-and-documents.md`. For review:
+
+- Submitted bids are not reversed by editing; a mistaken submission needs a
+  later correction workflow (not built).
+- Superseded and cancelled notices are read-only; a cancelled notice cannot
+  become current again (record a re-issued notice as a new tender).
+- Tenders take no changes on Awarded, Lost or Cancelled opportunities; On
+  Hold keeps its deadline alerts (BR-014).
+- A `failed` scan is final for that revision: upload it again as a new
+  revision. Only `pending` revisions are retried.
+- PDFs are downloaded, not previewed inline: browser PDF viewers do not run
+  under the sandbox CSP applied to every served file.
+- The browser-declared content type is ignored; the stored type comes from
+  the server's table.
+- Uploading a document or revision is open to every role that can edit the
+  opportunity; only management archives.
+
+### 4. Database and fixtures
+
+| Migration | Contents |
+| --- | --- |
+| `0005_tenders_and_documents.sql` | `tenders` (one-current partial unique index; CHECKs for title/reference length, http(s) URL, current ⇔ current notice, Submitted ⇔ time, Not Participating reason, Dhaka-date chronology, clarification ≤ submission, late note); `documents`, `document_revisions` (unique revision number per document, unique upload, verdict recorded), `document_uploads` (expiry); enums `bid_status`, `notice_state`, `document_category`, `scan_state`. Runtime role: SELECT/INSERT/UPDATE on tenders, documents and revisions (no DELETE/TRUNCATE, tested); SELECT/INSERT/UPDATE/DELETE on staged uploads |
+
+Additive; rollback in the header. The seed loads the demo's **8 tenders**
+(`server/db/seedTenders.ts`, documented conversion: organization records for
+procuring entities, submission dates become 16:00 Dhaka time, owner derived).
+No documents are seeded.
+
+### 5. Commands run and results
+
+| Command | Result |
+| --- | --- |
+| `npm run db:migrate` / `:test` | `0005` applied to both databases; a repeat run is a no-op (tested) |
+| `npm run db:seed` / `:test` | 2 sections, 10 users, 11 organizations, 23 opportunities, 17 open follow-ups, 22 contacts, 35 links, 34 activities, **8 tenders** |
+| `npm run typecheck` | **Pass** (web, server, e2e) |
+| `npm run lint` | **Pass** — 0 errors, the same 5 pre-existing warnings |
+| `npm run check:env` | **Pass** — 20 variables (4 new) |
+| `npm test` | **412 passed, 0 failed**, 16 files (321 after M4 + 46 tenders + 45 documents; two operational tests updated, §6) |
+| `npm run test:smoke` | **20 passed** in four isolated runs: 12 (smoke + M2), 2 (M3), 3 (M4), 3 (M5) |
+| `npm run build` | **Pass**, demo-exclusion before and after bundling. Main chunk 417 kB; the Tender Tracker and tender dialogs load on demand |
+| `npm run evidence` (M5 run) | 7 new screenshots, `30`–`36`: tracker, calendar, Mark Submitted with the explicit stage choice, Tender tab with the mismatch notice, re-tender form, Documents tab with clean and rejected scans, revision dialog. Now four Playwright runs |
+
+`npm run test:smoke` is now **four** isolated Playwright runs, each on freshly
+seeded fixtures, keeping every run under the login rate limit without
+loosening it. The browser runs use their own file directory
+(`./var/e2e-documents`) and the test scanner.
+
+| New test file | Tests | Covers |
+| --- | --- | --- |
+| `tenders.test.ts` | 46 | Tracker scoped per role (2 / 4 / 8 tenders) and administrator refused; tracker sort and Dhaka-date deadline filter; **forged tender ids identical to missing ones for read, edit, submit, cancel, designate, create and list**; **transfer moves tender visibility and responsibility**; indicator boundaries under a frozen clock (72h ± 1s, the deadline instant, past deadline); no alert for Not Participating / superseded / cancelled; **re-tender keeps one current notice, retry creates once**; **two simultaneous re-tenders leave one current**; **database refuses a second current notice**; designate current; history read-only; no DELETE; closed opportunity refused; stale version; nine field/chronology refusals and the Dhaka-date boundary; differing procuring entity labelled; archived entity refused; **seven CHECK constraints proved from the application role**; **explicit stage answer required; decline keeps stage with mismatch; accept moves atomically, never Awarded, once on retry; simultaneous retries apply once**; refusal leaves nothing changed when the stage is already past or On Hold; late submission needs a note; future and pre-publication times refused; only the current, participating notice can be submitted; no reversal by edit; Change History labels |
+| `documents.test.ts` | 45 | Seven accepted types round-trip byte-for-byte with safe headers; metadata, uploader and audit without file content; generated storage key and hostile filename; Bangla filename on download; image-only inline preview; **fourteen refusals** (executable by extension, renamed to .pdf, disguised by a right-to-left override, double extension, macro extension, renamed macro document, declared macros, disallowed type, no extension, content mismatches, non-UTF-8, empty) with nothing kept; **size limit enforced while streaming, exact limit accepted**; 25 MB default; CSRF required; **EICAR rejected and quarantined; scanner failure ⇒ failed; no scanner ⇒ pending and unavailable, scanned once a scanner exists; throwing scanner ⇒ failed; test scanner refused in production**; **finalize retries (same key, new key, simultaneous) give one document**; expired upload refused and cleaned up with its file; orphaned files removed, finalized kept; DELETE refused on documents and revisions; revision keeps the earlier file; management-only archive with reason, archived still downloadable, no revision of an archived document; category change with version check; **forged upload, finalize, metadata, revision-of-another-opportunity and download ids identical to missing ones**; administrator refused; **old download link revoked by a transfer, staged upload unusable after it, new owner served**; lead and management within scope, other section refused |
+| `e2e/m5.spec.ts` | 3 | Salesperson: tracker shows only own tenders with the legend; Mark Submitted refuses without a stage answer, "keep" leaves the stage and shows the mismatch; uploads a Bangla-named file, sees "Scanned (test scanner)", downloads it; EICAR file shows "Rejected by scan" and no download; `.exe` refused with the message; uploads a revision; cannot archive. Lead: re-tender supersedes the earlier notice; late submission needs an explanation and moves the stage only on "Yes". Management: archives with a reason; visible under Show archived; Change History shows the events |
+
+**Mutation checks** — each protection was removed and its tests re-run:
+allowing a `pending` file to download (1 test failed); dropping the scope
+predicate from the download query (4 failed); skipping the supersede step on
+a re-tender (8 failed, including the database refusal). All restored.
+
+### 6. Defects found and fixed
+
+1. **A test-file string was silently altered by a shell heredoc** (`\\`
+   became `\`), so the evidence spec's EICAR file did not contain the EICAR
+   string and was scanned clean. The scanner was correct; the spec now
+   defines the string once, like the browser spec. Found by reviewing the
+   screenshot, not by a failing test.
+2. **Two operational tests needed updating for M5**: the table-presence
+   check now expects the four M5 tables (only `notifications` remains
+   deferred), and the production-configuration test sets
+   `DOCUMENT_SCANNER=none`, because a development `.env` enables the test
+   scanner, which production correctly refuses.
+3. Test-only: a frozen clock moved days ahead ended the test session on its
+   idle limit, and a shared storage directory carried files between tests;
+   the specs now sign in at each instant and clear storage with the fixtures.
+4. Stale Vite dev servers from earlier in this session held ports 5173/5174;
+   they were stopped before the browser runs.
+
+### 7. Acceptance coverage
+
+| Test | Status |
+| --- | --- |
+| AT-10 | **Covered**: re-tendering preserves old notices with one current; invalid chronology fails; Submitted requires a time and updates the stage only atomically and on request; never Awarded; Not Participating, superseded and cancelled notices give no deadline warning |
+| AT-11 | Tender part **covered** with a frozen clock around the 72-hour boundary and the deadline instant. The seven-day dashboard window remains for M6 |
+| AT-13 | **Covered** with the test scanner: allowed files upload, scan and download; oversized, prohibited and unsafe files rejected or quarantined; a transferred or inaccessible document cannot be obtained by an old link; revision history keeps the earlier file. Real-scanner behaviour is not covered (none chosen) |
+| AT-07 | Tender and document portions added: documents and tenders follow scope after a transfer |
+| AT-02 | Documents and tenders channels added: no cross-section file, metadata or tender access |
+| AT-15 | Partial: simultaneous re-tenders, simultaneous submission retries and simultaneous finalizes added |
+
+### 8. Remaining issues and limitations
+
+**Unresolved production decisions — not claimed ready:**
+
+- **Document storage**: only a private local directory exists. Object
+  storage vs server disk, encryption at rest, backup/restore of files with
+  the database, retention, capacity and multi-instance access are undecided.
+  Local disk does not work behind more than one API instance.
+- **Malware scanning**: no production scanner. The `test` scanner is refused
+  in production; with `none`, production uploads would be stored but never
+  downloadable. Scanner product, signature updates, timeouts, retry policy
+  and the handling of `failed` files are undecided.
+- PDF active content and embedded OLE objects are not inspected (left to the
+  real scanner).
+
+**Other limitations:**
+
+- No correction workflow for a mistakenly recorded submission.
+- No tender search in global search (FR-091, M6) and no deadline
+  notifications (FR-090, M6).
+- The tracker calendar shows the loaded page (up to 50 tenders); the page
+  says so when more match.
+- Document categories can be changed but revisions cannot be renamed.
+- No per-opportunity storage quota.
+- From earlier milestones, unchanged: PATCH routes have no idempotency key;
+  idempotency and link-token cleanup are unscheduled; five pre-existing
+  fast-refresh lint warnings; identity provider and MFA undecided.
+
+### 9. Configuration and local startup
+
+New environment variables (all in `.env.example`; `npm run check:env`
+passes):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DOCUMENT_STORAGE_DIR` | `./var/documents` | Private file directory, git-ignored (`var/`) |
+| `DOCUMENT_SCANNER` | `none` if unset; `test` in `.env.example` | `none` keeps files unavailable; `test` is the development scanner, refused in production |
+| `DOCUMENT_MAX_UPLOAD_MB` | `25` | Per-file limit |
+| `DOCUMENT_UPLOAD_TTL_MINUTES` | `60` | Unfinalized uploads are removed after this |
+
+An existing `.env` needs `DOCUMENT_SCANNER=test` added to see downloads work
+locally; without it, uploads stay "Awaiting scan". The integration suite and
+the browser runs set their own storage directory and the test scanner.
+
+```bash
+npm run db:up
+npm run db:migrate && npm run db:migrate:test   # 0000–0005
+npm run db:seed  && npm run db:seed:test        # now with 8 tenders
+npm run dev:server                              # API  http://localhost:4800
+npm run dev                                     # web  http://localhost:5173
+npm run documents:maintain                      # optional: cleanup + pending scans
+```
+
+To see M5: as `rafiq.hasan@example.com`, open **Tender Tracker** (two
+tenders), Mark Submitted on DCR/PROC/2026/221 and choose either answer; open
+Municipal Service Portal → **Documents** and upload a PDF or text file. As
+`nadia.islam@example.com`, the tracker shows the section's four tenders. As
+`arif.rahman@example.com`, open a document and Archive it.
+
+### 10. Next task
+
+**Milestone 6 — dashboards, reports, search and notifications**
+(`Plan.md` §6), not to be started until this milestone is reviewed. Before
+documents are enabled anywhere beyond development, Penta must choose the
+production file storage and scanning service (§8).
 
 ---
 

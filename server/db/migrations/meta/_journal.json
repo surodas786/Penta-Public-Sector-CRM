@@ -36,6 +36,13 @@
       "when": 1791208399834,
       "tag": "0004_contacts_links_and_activities",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791211097628,
+      "tag": "0005_tenders_and_documents",
+      "breakpoints": true
     }
   ]
 }

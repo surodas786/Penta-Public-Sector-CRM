@@ -9,6 +9,8 @@ import { z } from 'zod';
 
 import {
   ACTIVITY_TYPES,
+  BID_STATUSES,
+  DOCUMENT_CATEGORIES,
   LOSS_REASONS,
   ORGANIZATION_TYPES,
   OPPORTUNITY_STAGES,
@@ -765,5 +767,159 @@ export const listActivitiesQuerySchema = z
     organizationId: uuidField.optional(),
     contactId: uuidField.optional(),
     authoredBy: z.literal('me').optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Tenders (FR-050, FR-051, FR-052, BR-040)
+// ---------------------------------------------------------------------------
+
+/** HTTP or HTTPS only (§7.1). */
+const noticeUrlField = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => {
+    if (value === undefined) return true;
+    if (value.length > 2000) return false;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'Enter a web address starting with http:// or https://.');
+
+const optionalInstant = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => value === undefined || instantField.safeParse(value).success, 'Enter the date and time.');
+
+/** Bid statuses a tender may be given directly. Submitted only through Mark Submitted. */
+export const EDITABLE_BID_STATUSES = BID_STATUSES.filter((status) => status !== 'submitted') as [
+  'reviewing',
+  'preparing',
+  'not_participating',
+];
+
+const tenderFields = {
+  procuringOrganizationId: uuidField,
+  title: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  reference: z.string().trim().min(1, 'Enter the tender reference.').max(200, 'Use at most 200 characters.'),
+  procurementMethod: optionalText(200),
+  noticeUrl: noticeUrlField,
+  publicationDate: calendarDateField,
+  clarificationDeadline: optionalInstant,
+  submissionDeadline: instantField,
+  bidStatus: z.enum(EDITABLE_BID_STATUSES),
+  participationReason: optionalText(2000),
+  notes: optionalText(10_000),
+};
+
+/**
+ * FR-050: a new notice becomes the current one; the previous current notice,
+ * if any, is marked Superseded in the same transaction and kept with its bid
+ * history.
+ */
+export const createTenderSchema = z.object(tenderFields).strict();
+
+export type CreateTenderInput = z.input<typeof createTenderSchema>;
+
+export const updateTenderSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    procuringOrganizationId: tenderFields.procuringOrganizationId.optional(),
+    title: tenderFields.title.optional(),
+    reference: tenderFields.reference.optional(),
+    procurementMethod: tenderFields.procurementMethod,
+    noticeUrl: tenderFields.noticeUrl,
+    publicationDate: tenderFields.publicationDate.optional(),
+    clarificationDeadline: tenderFields.clarificationDeadline,
+    submissionDeadline: tenderFields.submissionDeadline.optional(),
+    bidStatus: tenderFields.bidStatus.optional(),
+    participationReason: tenderFields.participationReason,
+    notes: tenderFields.notes,
+  })
+  .strict();
+
+export const submitTenderSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    submittedAt: instantField,
+    /** BR-040: required when the submission time is after the recorded deadline. */
+    lateSubmissionNote: optionalText(2000),
+    /**
+     * FR-051: the user's explicit answer to "move the opportunity to Bid
+     * Submitted?". Required, with no default, so the stage never changes
+     * without a decision.
+     */
+    moveOpportunityToBidSubmitted: z.boolean({ error: 'Choose whether to move the opportunity to Bid Submitted.' }),
+  })
+  .strict();
+
+export type SubmitTenderInput = z.input<typeof submitTenderSchema>;
+
+export const tenderNoticeSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+  })
+  .strict();
+
+export const cancelTenderSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    reason: z.string().trim().min(3, 'Give a reason.').max(2000, 'Use at most 2000 characters.'),
+  })
+  .strict();
+
+export const TENDER_NOTICE_FILTERS = ['active', 'all'] as const;
+
+export const listTendersQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+    bidStatus: z.enum(BID_STATUSES).optional(),
+    /** FR-052 / BR-060: the deadline filter is on the submission deadline, as Dhaka dates. */
+    deadlineFrom: calendarDateField.optional(),
+    deadlineTo: calendarDateField.optional(),
+    /** `active`: current notices only (the default). `all`: every cycle. */
+    notice: z.enum(TENDER_NOTICE_FILTERS).optional().default('active'),
+    dir: z.enum(['asc', 'desc']).optional().default('asc'),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Documents (FR-060, FR-061, SEC-010, SEC-011)
+// ---------------------------------------------------------------------------
+
+export const finalizeUploadSchema = z
+  .object({
+    /** Required for a new document; a revision keeps its document's category. */
+    category: z.enum(DOCUMENT_CATEGORIES).optional(),
+    /** FR-061: present when this upload is a new revision of an existing document. */
+    documentId: uuidField.optional(),
+    note: optionalText(2000),
+  })
+  .strict()
+  .refine((value) => value.documentId !== undefined || value.category !== undefined, {
+    message: 'Choose a category.',
+    path: ['category'],
+  });
+
+export type FinalizeUploadInput = z.input<typeof finalizeUploadSchema>;
+
+export const updateDocumentSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    category: z.enum(DOCUMENT_CATEGORIES),
+  })
+  .strict();
+
+export const listDocumentsQuerySchema = z
+  .object({
+    includeArchived: z.enum(['true', 'false']).optional(),
   })
   .strict();

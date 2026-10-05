@@ -14,6 +14,12 @@ import type {
   OrganizationDetailDto,
   OrganizationListItemDto,
   AdminAuditEntryDto,
+  DocumentDetailDto,
+  DocumentDto,
+  DocumentPolicyDto,
+  StagedUploadDto,
+  TenderDto,
+  TenderSubmissionResultDto,
   AdminSectionDto,
   AdminUserDto,
   AssigneeOptionDto,
@@ -31,6 +37,7 @@ import type {
   Paginated,
   TeamDto,
 } from '../../shared/api.js';
+import { FILE_NAME_HEADER } from '../../shared/api.js';
 import { apiRequest, setCsrfToken, toQuery } from './client.js';
 
 // --- Authentication ---------------------------------------------------------
@@ -411,4 +418,98 @@ export function createActivity(
 
 export function updateActivity(id: string, body: Record<string, unknown>): Promise<ActivityDto> {
   return apiRequest(`/api/activities/${id}`, { method: 'PATCH', body });
+}
+
+// --- Tenders (M5) -------------------------------------------------------------
+
+export interface TenderListParams {
+  q?: string;
+  ownerId?: string;
+  sectionId?: string;
+  bidStatus?: string;
+  deadlineFrom?: string;
+  deadlineTo?: string;
+  notice?: 'active' | 'all';
+  dir?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
+}
+
+export function fetchTenders(params: TenderListParams, signal?: AbortSignal): Promise<Paginated<TenderDto>> {
+  return apiRequest(`/api/tenders${toQuery({ ...params })}`, { signal });
+}
+
+export function fetchOpportunityTenders(opportunityId: string, signal?: AbortSignal): Promise<{ items: TenderDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/tenders`, { signal });
+}
+
+export function createTender(opportunityId: string, body: Record<string, unknown>, idempotencyKey: string): Promise<TenderDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/tenders`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateTender(id: string, body: Record<string, unknown>): Promise<TenderDto> {
+  return apiRequest(`/api/tenders/${id}`, { method: 'PATCH', body });
+}
+
+export function submitTender(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<TenderSubmissionResultDto> {
+  return apiRequest(`/api/tenders/${id}/submit`, { method: 'POST', body, idempotencyKey });
+}
+
+export function designateCurrentTender(id: string, version: number): Promise<TenderDto> {
+  return apiRequest(`/api/tenders/${id}/designate-current`, { method: 'POST', body: { version } });
+}
+
+export function cancelTenderNotice(id: string, body: { version: number; reason: string }): Promise<TenderDto> {
+  return apiRequest(`/api/tenders/${id}/cancel`, { method: 'POST', body });
+}
+
+// --- Documents (M5) -----------------------------------------------------------
+
+export function fetchDocumentPolicy(signal?: AbortSignal): Promise<DocumentPolicyDto> {
+  return apiRequest('/api/documents/policy', { signal });
+}
+
+export function fetchOpportunityDocuments(
+  opportunityId: string,
+  includeArchived: boolean,
+  signal?: AbortSignal,
+): Promise<{ items: DocumentDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/documents${toQuery({ includeArchived: includeArchived ? 'true' : undefined })}`, {
+    signal,
+  });
+}
+
+export function fetchDocument(id: string, signal?: AbortSignal): Promise<DocumentDetailDto> {
+  return apiRequest(`/api/documents/${id}`, { signal });
+}
+
+/** Step 1: the raw bytes, streamed to private server storage. Nothing is kept in the browser. */
+export function stageDocumentUpload(opportunityId: string, file: File): Promise<StagedUploadDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/document-uploads`, {
+    method: 'POST',
+    file,
+    headers: { [FILE_NAME_HEADER]: encodeURIComponent(file.name) },
+  });
+}
+
+/** Step 2: idempotent; a retry with the same key returns the same document. */
+export function finalizeDocumentUpload(
+  uploadId: string,
+  body: { category?: string; documentId?: string; note?: string },
+  idempotencyKey: string,
+): Promise<DocumentDetailDto> {
+  return apiRequest(`/api/document-uploads/${uploadId}/finalize`, { method: 'POST', body, idempotencyKey });
+}
+
+export function archiveDocument(id: string, body: { version: number; reason: string }): Promise<DocumentDetailDto> {
+  return apiRequest(`/api/documents/${id}/archive`, { method: 'POST', body });
+}
+
+/** An authorized, same-origin streaming URL. It works only while the session can see the record. */
+export function documentDownloadUrl(revisionId: string, inline = false): string {
+  return `/api/document-revisions/${revisionId}/download${inline ? '?disposition=inline' : ''}`;
 }

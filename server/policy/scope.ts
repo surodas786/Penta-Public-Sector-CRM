@@ -216,6 +216,33 @@ export function canEditActivity(actor: Actor, activity: { authorId: string }): b
   return activity.authorId === actor.id;
 }
 
+// ---------------------------------------------------------------------------
+// Tenders and documents (Milestone 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tender records follow the "Edit sales records" row: every role that can see
+ * the opportunity may maintain its tenders. Tender ownership is derived from
+ * the opportunity (BR-050), so there is no separate tender owner to check.
+ */
+export function canManageTenders(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/**
+ * FR-060, FR-061: a user may upload a document or a revision only while
+ * authorized to edit the parent opportunity. The opportunity is still located
+ * through `opportunityScope` on every upload, finalize, read and download.
+ */
+export function canUploadDocuments(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/** FR-061: removal is a management soft-archive with a reason. */
+export function canArchiveDocument(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && actor.role === 'management';
+}
+
 export function canAdministerAccounts(actor: Actor): boolean {
   return actor.active && actor.role === 'admin';
 }

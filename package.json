@@ -18,7 +18,7 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:smoke": "playwright test e2e/smoke.spec.ts e2e/m2.spec.ts && playwright test e2e/m3.spec.ts && playwright test e2e/m4.spec.ts",
+    "test:smoke": "playwright test e2e/smoke.spec.ts e2e/m2.spec.ts && playwright test e2e/m3.spec.ts && playwright test e2e/m4.spec.ts && playwright test e2e/m5.spec.ts",
     "check:demo-exclusion": "tsx scripts/check-demo-exclusion.ts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
@@ -28,8 +28,9 @@
     "db:seed": "tsx --env-file-if-exists=.env server/db/seed.ts",
     "db:seed:test": "tsx --env-file-if-exists=.env server/db/seed.ts --test",
     "db:reset": "tsx --env-file-if-exists=.env server/db/reset.ts",
+    "documents:maintain": "tsx --env-file-if-exists=.env server/db/documentMaintenance.ts",
     "preview": "vite preview",
-    "evidence": "playwright test e2e/evidence.spec.ts && playwright test e2e/evidence-m3.spec.ts && playwright test e2e/evidence-m4.spec.ts",
+    "evidence": "playwright test e2e/evidence.spec.ts && playwright test e2e/evidence-m3.spec.ts && playwright test e2e/evidence-m4.spec.ts && playwright test e2e/evidence-m5.spec.ts",
     "check:env": "tsx scripts/check-env-example.ts"
   },
   "dependencies": {

@@ -1,7 +1,7 @@
 # Penta Public Sector Sales CRM — project instructions
 
 A sales CRM for public sector project opportunities in Bangladesh, built from an
-approved MagicPatterns prototype. Currently at the end of **Milestone 4**.
+approved MagicPatterns prototype. Currently at the end of **Milestone 5**.
 
 ## Read before changing anything
 
@@ -83,13 +83,16 @@ npm run build          # web (with demo-exclusion checks) + server
 
 ## Current state
 
-Milestones 1–4 are complete: persistence, authentication, server-side
+Milestones 1–5 are complete: persistence, authentication, server-side
 permissions, opportunity create / list / detail / basic edit, stage and status
 transitions (board and dropdown), Awarded/Lost outcomes, management-only
 reopening, the follow-up lifecycle, ownership transfers, management's team
 view, account and section administration, single-use invitation/reset
 links, the organization directory, contacts with link-scoped relationship
-notes, and activities — all with optimistic concurrency, durable idempotency and audit.
+notes, activities, tender cycles (one current notice per opportunity,
+explicit stage choice on submission) and private documents (staged upload,
+idempotent finalize, scan before download, revisions, management archive) —
+all with optimistic concurrency, durable idempotency and audit.
 
 Every writer locks the opportunity row before any follow-up row; account
 changes lock the active administrator rows first, in id order. Keep both
@@ -101,6 +104,10 @@ Never log request data: unexpected errors go through `describeForLog` in
 Contacts are visible only through links to accessible opportunities
 (`contactScope`); relationship notes live on the link, never the contact.
 
-Tenders, documents, dashboards, reports, search and notifications are **not**
-implemented. They are visibly unavailable in the UI
-rather than mocked. See `docs/progress.md` before starting Milestone 5.
+Document storage is a private local directory and the only scanner is a
+development TEST scanner (refused in production); production storage and
+scanning are **unresolved** (ADR 0006). Never present them as ready.
+
+Dashboards, reports, search and notifications are **not** implemented. They
+are visibly unavailable in the UI rather than mocked. See `docs/progress.md`
+before starting Milestone 6.

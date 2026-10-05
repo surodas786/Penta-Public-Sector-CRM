@@ -26,9 +26,11 @@ import {
   opportunityContacts,
   organizations,
   sections,
+  tenders,
   users,
 } from './schema.js';
 import { seedActivities, seedContactLinks, seedContacts } from './seedDirectory.js';
+import { seedTenders } from './seedTenders.js';
 import {
   legacyUuid,
   seedOpportunities,
@@ -85,6 +87,7 @@ export interface SeedSummary {
   contacts: number;
   contactLinks: number;
   activities: number;
+  tenders: number;
 }
 
 export interface SeedOptions {
@@ -121,6 +124,7 @@ export async function seedDatabase(
       // unexpected foreign key surfaces instead of being silently cleared.
       await tx.execute(sql`
         TRUNCATE TABLE
+          document_revisions, document_uploads, documents, tenders,
           activities, opportunity_contacts, contacts, account_tokens, audit_events,
           idempotency_records, follow_ups, opportunities,
           organizations, users, sections, session
@@ -285,6 +289,31 @@ export async function seedDatabase(
         })),
       );
 
+      // --- Milestone 5: tenders (documents are never seeded; see seedTenders.ts)
+      const creatorOf = (opportunityLegacyId: string) => legacyUuid(ownerOf.get(opportunityLegacyId) ?? 'u-arif');
+      await tx.insert(tenders).values(
+        seedTenders.map((tender) => ({
+          id: legacyUuid(tender.legacyId),
+          opportunityId: legacyUuid(tender.opportunityLegacyId),
+          procuringOrganizationId: legacyUuid(tender.procuringOrganizationLegacyId),
+          title: tender.title,
+          reference: tender.reference,
+          procurementMethod: tender.procurementMethod,
+          noticeUrl: tender.noticeUrl,
+          publicationDate: tender.publicationDate,
+          clarificationDeadline: tender.clarificationDeadline ? new Date(tender.clarificationDeadline) : null,
+          submissionDeadline: new Date(tender.submissionDeadline),
+          bidStatus: tender.bidStatus,
+          submittedAt: tender.submittedAt ? new Date(tender.submittedAt) : null,
+          isCurrent: true,
+          noticeState: 'current' as const,
+          notes: tender.notes,
+          createdBy: creatorOf(tender.opportunityLegacyId),
+          createdAt: new Date(`${tender.publicationDate}T11:00:00+06:00`),
+          updatedAt: new Date(`${tender.publicationDate}T11:00:00+06:00`),
+        })),
+      );
+
       // Keep new records clear of the fixture reference block.
       await tx.execute(sql`SELECT setval('opportunity_reference_seq', 1000, false)`);
 
@@ -298,6 +327,7 @@ export async function seedDatabase(
         contacts: seedContacts.length,
         contactLinks: seedContactLinks.length,
         activities: seedActivities.length,
+        tenders: seedTenders.length,
       };
     });
   } finally {
@@ -325,7 +355,7 @@ if (invokedDirectly) {
           `${summary.sections} sections, ${summary.users} users, ` +
           `${summary.organizations} organizations, ${summary.opportunities} opportunities, ` +
           `${summary.followUps} open follow-ups, ${summary.contacts} contacts, ` +
-          `${summary.contactLinks} contact links, ${summary.activities} activities.`,
+          `${summary.contactLinks} contact links, ${summary.activities} activities, ${summary.tenders} tenders.`,
       );
       console.log('All records are fictional. No real Penta or government data is present.');
     })

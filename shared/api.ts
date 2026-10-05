@@ -6,14 +6,19 @@
  */
 import type {
   ActivityType,
+  BidStatus,
   BoardLane,
+  DocumentCategory,
   FollowUpState,
   LossReason,
+  NoticeState,
   OpportunityStage,
   OpportunityStatus,
   OrganizationType,
   Priority,
+  ScanState,
   SolutionCategory,
+  TenderIndicator,
   UserRole,
 } from './enums.js';
 
@@ -35,6 +40,8 @@ export type ApiErrorCode =
   | 'idempotency_in_progress'
   | 'invalid_transition'
   | 'possible_duplicate'
+  | 'document_unavailable'
+  | 'payload_too_large'
   | 'validation_failed'
   | 'rate_limited'
   | 'invalid_csrf'
@@ -422,3 +429,113 @@ export interface ActivityDto {
   /** FR-041: salespeople amend their own; leads and management any in scope. */
   canEdit: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Milestone 5: tenders and documents
+// ---------------------------------------------------------------------------
+
+export interface TenderDto {
+  id: string;
+  opportunity: {
+    id: string;
+    reference: string;
+    name: string;
+    stage: OpportunityStage;
+    status: OpportunityStatus;
+    organizationId: string;
+  };
+  procuringOrganization: { id: string; name: string };
+  /** §7.1: shown with a clear label when it differs from the opportunity's organization. */
+  procuringDiffersFromOpportunity: boolean;
+  title: string;
+  reference: string;
+  procurementMethod: string | null;
+  noticeUrl: string | null;
+  publicationDate: string;
+  clarificationDeadline: string | null;
+  submissionDeadline: string;
+  bidStatus: BidStatus;
+  submittedAt: string | null;
+  participationReason: string | null;
+  lateSubmissionNote: string | null;
+  isCurrent: boolean;
+  noticeState: NoticeState;
+  notes: string | null;
+  /** §7.1: always the opportunity's current owner, never stored on the tender. */
+  responsibleOwner: { id: string; fullName: string };
+  section: { id: string; name: string };
+  /** FR-052, decided by the server against the real clock. */
+  indicator: TenderIndicator;
+  /** FR-051: bid recorded Submitted while the opportunity is still at an earlier stage. */
+  stageMismatch: boolean;
+  /** FR-051: whether Mark Submitted may offer to move the opportunity to Bid Submitted. */
+  canOfferBidSubmittedStage: boolean;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+  canEdit: boolean;
+}
+
+export interface TenderSubmissionResultDto {
+  tender: TenderDto;
+  /** True only when the user explicitly accepted the stage change (FR-051). */
+  stageChanged: boolean;
+}
+
+export interface DocumentRevisionDto {
+  id: string;
+  revisionNumber: number;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  note: string | null;
+  scanState: ScanState;
+  /** Which scanner decided. `test-scanner` is never production malware scanning. */
+  scanner: string | null;
+  scannedAt: string | null;
+  uploadedByName: string;
+  uploadedAt: string;
+  /** SEC-010: only a clean verdict makes a file downloadable. */
+  downloadable: boolean;
+  /** SEC-011: safe formats may be previewed inline. */
+  previewable: boolean;
+}
+
+export interface DocumentDto {
+  id: string;
+  opportunityId: string;
+  category: DocumentCategory;
+  latest: DocumentRevisionDto;
+  revisionCount: number;
+  createdAt: string;
+  archivedAt: string | null;
+  archivedByName: string | null;
+  archiveReason: string | null;
+  version: number;
+  canArchive: boolean;
+}
+
+export interface DocumentDetailDto extends DocumentDto {
+  revisions: DocumentRevisionDto[];
+}
+
+export interface StagedUploadDto {
+  uploadId: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  expiresAt: string;
+}
+
+/** Public facts about the document service, for the upload form. */
+export interface DocumentPolicyDto {
+  maxUploadBytes: number;
+  acceptedExtensions: string[];
+  /** `none` means files are stored but stay unavailable (no scanner configured). */
+  scanner: 'none' | 'test';
+}
+
+/** Header carrying the original filename of a raw upload, URI-encoded. */
+export const FILE_NAME_HEADER = 'x-file-name';

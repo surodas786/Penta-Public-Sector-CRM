@@ -120,7 +120,7 @@ describe('operational guards', () => {
       await expect(runMigrations(migrationUrl)).resolves.toBeUndefined();
     });
 
-    it('creates every M1 table and no feature table that belongs to a later milestone', async () => {
+    it('creates every table up to the current milestone and none from a later one', async () => {
       const result = await ctx.database.db.execute<{ table_name: string }>(sql`
         SELECT table_name FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -136,12 +136,17 @@ describe('operational guards', () => {
         'sections',
         'session',
         'users',
+        // Milestone 5
+        'tenders',
+        'documents',
+        'document_revisions',
+        'document_uploads',
       ]) {
         expect(tables).toContain(expected);
       }
 
       // Tables arrive with the feature that uses them (plan section 5).
-      for (const deferred of ['tenders', 'documents', 'notifications']) {
+      for (const deferred of ['notifications']) {
         expect(tables).not.toContain(deferred);
       }
     });
@@ -243,6 +248,8 @@ describe('operational guards', () => {
         SESSION_SECRET: 'b'.repeat(64),
         CSRF_SECRET: 'c'.repeat(64),
         DATABASE_URL: 'postgres://u:p@db:5432/penta_crm_prod',
+        // A development .env enables the test scanner, which production refuses.
+        DOCUMENT_SCANNER: 'none',
       });
       expect(loadServerConfig().secureCookies).toBe(true);
     });

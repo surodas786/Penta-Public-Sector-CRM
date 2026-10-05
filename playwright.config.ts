@@ -77,6 +77,10 @@ export default defineConfig({
         CSRF_SECRET: process.env.CSRF_SECRET ?? '',
         SEED_DEFAULT_PASSWORD: process.env.SEED_DEFAULT_PASSWORD ?? '',
         TEST_MIGRATION_DATABASE_URL: process.env.TEST_MIGRATION_DATABASE_URL ?? '',
+        // Browser checks use their own private file directory and the
+        // development TEST scanner, whatever a developer's .env says.
+        DOCUMENT_STORAGE_DIR: './var/e2e-documents',
+        DOCUMENT_SCANNER: 'test',
       },
     },
     {

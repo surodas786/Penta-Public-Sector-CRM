@@ -27,6 +27,7 @@ const OrganizationDetailPage = lazy(() =>
   import('./pages/OrganizationDetailPage.js').then((m) => ({ default: m.OrganizationDetailPage })),
 );
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage.js').then((m) => ({ default: m.ContactDetailPage })));
+const TenderTrackerPage = lazy(() => import('./pages/TenderTrackerPage.js').then((m) => ({ default: m.TenderTrackerPage })));
 const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })));
 
 function Lazy({ children }: { children: ReactNode }) {
@@ -122,15 +123,7 @@ function AppRoutes() {
           <Route path="organizations/:id" element={<Lazy><OrganizationDetailPage /></Lazy>} />
           <Route path="contacts/:id" element={<Lazy><ContactDetailPage /></Lazy>} />
           <Route path="activities" element={<Lazy><FollowUpsPage /></Lazy>} />
-          <Route
-            path="tenders"
-            element={
-              <UnavailableFeature
-                title="Tender Tracker"
-                reason="Tender cycles, current-notice rules and deadline tracking arrive with the tender and documents milestone."
-              />
-            }
-          />
+          <Route path="tenders" element={<Lazy><TenderTrackerPage /></Lazy>} />
           <Route
             path="reports"
             element={

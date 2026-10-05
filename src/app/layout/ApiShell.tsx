@@ -77,9 +77,8 @@ export function ApiShell() {
       to: '/tenders',
       label: 'Tender Tracker',
       icon: FileTextIcon,
-      available: false,
+      available: true,
       show: sales,
-      reason: 'Tender cycles and secure documents arrive in a later milestone.',
     },
     {
       to: '/reports',
