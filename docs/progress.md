@@ -1,11 +1,60 @@
 # Implementation progress
 
+## Milestone 1 handover review — 05 October 2026
+
+Performed before starting Milestone 2, on branch `m2-stages-status-follow-ups`
+created from `origin/main` at `94fae7f`.
+
+### Recorded status checked against the repository
+
+| Claim in this report | Finding |
+| --- | --- |
+| M1 complete, "ready for review" | **Reviewed and merged**: PR #1 merged into `main` as `94fae7f` on 05 Oct 2026. Its tree is identical to the M1 branch head `19b86ed`. The local `main` branch was still at `ceb5e74` (not fast-forwarded); it was left untouched |
+| CI passes | **Confirmed on GitHub**: run 37278089500 (PR) and 37278146987 (`main` push) both succeeded — clean install, migrations, typecheck, lint, env check, integration tests, browser smoke test, production build |
+| Working tree | Clean. No unrelated or uncommitted work to preserve |
+| 168 integration tests | **Rerun locally: 168 passed**, 6 files |
+| Typecheck, lint, env check | **Rerun: pass**; lint 0 errors, 5 warnings |
+| Browser smoke test | **Rerun: 2 passed** |
+| Production build with demo exclusion | **Rerun: pass** |
+
+### Issues found
+
+1. **`npm run evidence` did not work as documented.** The Playwright config
+   ignores `evidence.spec.ts` unless `CAPTURE_EVIDENCE=true`, and the script
+   never set it, so the README command reported "No tests found". The 14 M1
+   screenshots must have been captured with the variable set by hand. *Fixed:*
+   the config now includes the spec whenever it is named on the command line.
+2. **Idempotency claim completed outside the business transaction.** The
+   claim was marked complete after the create transaction committed. A crash
+   between the two would leave the record saved but its key stuck "in
+   progress", so every retry for 24 hours got a 409 instead of the original
+   result. *Fix in the Milestone 2 commit*, because the M2 services share the
+   same helper: the claim is now completed inside the business transaction.
+3. **Create replay returned "the first open follow-up", not the first
+   follow-up.** Harmless while follow-ups could not change state, but wrong as
+   soon as M2 lets the first one be completed. *Fix in the Milestone 2 commit*:
+   replay finds it by creation order.
+4. **Manual step 2 was not fully evidenced.** It asks for persistence across an
+   application *server restart*; the recorded evidence was a browser reload.
+   *Now verified* (see the Milestone 2 section): a record created and moved
+   through the API on the development stack read back identically after the
+   API process was stopped and restarted.
+5. **Report inaccuracies, corrected below.** One of the five lint warnings is
+   in M1's own `src/app/AuthContext.tsx` (it exports the `useAuth` hook beside
+   the provider), not in an approved demo file. The CI paragraph says 167 tests
+   where the suite has 168 (the 168th was added by the password fix).
+
+No M1 blocker remained that prevented Milestone 2. None of the issues above
+weakened access control.
+
+---
+
 ## Milestone 1 — persistence, authentication, server-side permissions, opportunity workflow
 
-**Branch:** `m1-persistence-auth-permissions`
+**Branch:** `m1-persistence-auth-permissions` (merged into `main` as `94fae7f`)
 **Baseline tag:** `demo-baseline` (the approved MagicPatterns export, commit `ceb5e74`)
 **Date:** 04 October 2026
-**Status:** Complete and ready for review. Milestone 2 has not been started.
+**Status:** Complete, reviewed and merged.
 
 ---
 
@@ -102,7 +151,7 @@ All run on 04 October 2026 against PostgreSQL 18 in Docker.
 | `npm test` | **168 passed, 0 failed**, 6 files, ~40s |
 | `npm run test:smoke` | **2 passed**, ~21s |
 | `npm run build` | **Pass** — demo-exclusion check passes before and after the bundle is produced |
-| `npm run evidence` | 14 screenshots written to `docs/evidence/` |
+| `npm run evidence` | 14 screenshots written to `docs/evidence/` *(the script as committed found no tests; see the handover review above)* |
 
 ### Integration suite composition
 
@@ -116,16 +165,18 @@ All run on 04 October 2026 against PostgreSQL 18 in Docker.
 | `operations.test.ts` | 26 | 24, 25 |
 | **Total** | **168** | all 25 |
 
-The five lint warnings are `react-refresh/only-export-components` in approved
-demo files (`Badges.tsx`, `FormFields.tsx`, `CrmContext.tsx`) that export both
-a component and a constant. They are pre-existing, affect fast refresh only,
-and were left alone rather than restructuring approved files.
+The five lint warnings are `react-refresh/only-export-components`: four in
+approved demo files (`Badges.tsx`, `FormFields.tsx`, `CrmContext.tsx` twice)
+and one in M1's `src/app/AuthContext.tsx`, which exports the `useAuth` hook
+beside its provider. *(Corrected 05 Oct 2026; the original text attributed all
+five to demo files.)* They affect fast refresh only.
 
 ### CI-equivalent run
 
 Verified locally with `.env` removed and configuration supplied purely through
 environment variables, as GitHub Actions will do: migrations applied and all
-167 tests passed. The workflow in `.github/workflows/ci.yml` creates the same
+167 tests passed. *(That run predates the password-fix test; the suite now has
+168, and GitHub CI has since passed with all of them.)* The workflow in `.github/workflows/ci.yml` creates the same
 two database roles from `docker/initdb/01-roles-and-databases.sql`, so the
 append-only audit and no-DDL assertions are exercised in CI, not skipped.
 
