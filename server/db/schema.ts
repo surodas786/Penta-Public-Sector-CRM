@@ -25,6 +25,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import {
+  ACTIVITY_TYPES,
   FOLLOW_UP_STATES,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
@@ -46,6 +47,7 @@ export const solutionCategoryEnum = pgEnum('solution_category', SOLUTION_CATEGOR
 export const organizationTypeEnum = pgEnum('organization_type', ORGANIZATION_TYPES);
 export const followUpStateEnum = pgEnum('follow_up_state', FOLLOW_UP_STATES);
 export const idempotencyStateEnum = pgEnum('idempotency_state', ['in_progress', 'completed']);
+export const activityTypeEnum = pgEnum('activity_type', ACTIVITY_TYPES);
 export const accountTokenPurposeEnum = pgEnum('account_token_purpose', ['invitation', 'password_reset']);
 
 // ---------------------------------------------------------------------------
@@ -348,6 +350,116 @@ export const idempotencyRecords = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Contacts, opportunity links and activities (Milestone 4, migration 0004)
+// ---------------------------------------------------------------------------
+
+/**
+ * A person at a government organization (FR-032). Deliberately no notes
+ * field: anything about the relationship belongs on the opportunity link,
+ * so a contact shared across teams never carries one team's commentary to
+ * another (BR-020, SEC-004). Visibility comes only from links.
+ */
+export const contacts = pgTable(
+  'contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    fullName: text('full_name').notNull(),
+    designation: text('designation').notNull(),
+    department: text('department'),
+    /** Optional; stored lower-cased. */
+    email: text('email'),
+    /** A string, never a number: leading zeros and +880 must survive. */
+    phone: text('phone'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    archivedBy: uuid('archived_by').references(() => users.id, { onDelete: 'restrict' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    index('contacts_organization_idx').on(table.organizationId),
+    index('contacts_name_idx').on(table.fullName),
+    check('contacts_email_lowercase', sql`${table.email} IS NULL OR ${table.email} = lower(${table.email})`),
+    check('contacts_archive_consistent', sql`(${table.archivedAt} IS NULL) = (${table.archivedBy} IS NULL)`),
+  ],
+);
+
+/**
+ * The link between a contact and an opportunity, carrying the relationship
+ * notes for that opportunity only (BR-020). A removed link is kept, marked
+ * removed, so history and notes survive; at most one live link per pair.
+ */
+export const opportunityContacts = pgTable(
+  'opportunity_contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'restrict' }),
+    relationshipNotes: text('relationship_notes'),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+    removedBy: uuid('removed_by').references(() => users.id, { onDelete: 'restrict' }),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    // BR-080: unique opportunity-contact pairs, among live links.
+    uniqueIndex('opportunity_contacts_live_pair_unique')
+      .on(table.opportunityId, table.contactId)
+      .where(sql`${table.removedAt} IS NULL`),
+    index('opportunity_contacts_contact_idx').on(table.contactId),
+    check('opportunity_contacts_removal_consistent', sql`(${table.removedAt} IS NULL) = (${table.removedBy} IS NULL)`),
+  ],
+);
+
+/**
+ * Something that happened (FR-040). Never deleted (FR-041): the runtime role
+ * has no DELETE on this table (migration 0004). Edits bump the version and
+ * leave before/after values in the audit trail.
+ */
+export const activities = pgTable(
+  'activities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    type: activityTypeEnum('type').notNull(),
+    subject: text('subject').notNull(),
+    notes: text('notes'),
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'restrict' }),
+    /** The original author, kept after transfers. Grants no access (FR-041). */
+    authorId: uuid('author_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    editedAt: timestamp('edited_at', { withTimezone: true }),
+    editedBy: uuid('edited_by').references(() => users.id, { onDelete: 'restrict' }),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    index('activities_opportunity_time_idx').on(table.opportunityId, table.occurredAt),
+    index('activities_contact_idx').on(table.contactId),
+    index('activities_author_idx').on(table.authorId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Invitation and password-reset tokens (SEC-030, migration 0003)
 // ---------------------------------------------------------------------------
 
@@ -404,3 +516,5 @@ export type OpportunityRow = typeof opportunities.$inferSelect;
 export type FollowUpRow = typeof followUps.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
 export type AccountTokenRow = typeof accountTokens.$inferSelect;
+export type ContactRow = typeof contacts.$inferSelect;
+export type ActivityRow = typeof activities.$inferSelect;

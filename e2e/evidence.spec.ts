@@ -138,7 +138,7 @@ test('capture Milestone 2 screens', async ({ page }) => {
 
   await page.goto('/opportunities');
   await lane('Requirements Discussion').getByRole('button').first().click();
-  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+  await main.getByRole('tab', { name: /Activities/ }).click();
   await main.getByRole('button', { name: 'Complete' }).first().click();
   await expect(page.getByRole('dialog').getByText('Next follow-up (required)')).toBeVisible();
   await page.screenshot({ path: path.join(OUTPUT, '11-complete-last-follow-up-desktop-1440.png'), fullPage: true });

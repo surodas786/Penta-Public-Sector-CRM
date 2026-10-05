@@ -8,7 +8,9 @@
 import { z } from 'zod';
 
 import {
+  ACTIVITY_TYPES,
   LOSS_REASONS,
+  ORGANIZATION_TYPES,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
   PRIORITIES,
@@ -543,5 +545,225 @@ export const paginationQuerySchema = z
   .object({
     page: pageNumber.optional().default(1),
     pageSize: pageSizeNumber.optional().default(25),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Organization directory (FR-030, FR-031, FR-033)
+// ---------------------------------------------------------------------------
+
+/** FR-030: HTTP or HTTPS only. */
+const websiteField = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => {
+    if (value === undefined) return true;
+    if (value.length > 500) return false;
+    try {
+      const url = new URL(value);
+      return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.includes('.');
+    } catch {
+      return false;
+    }
+  }, 'Enter a full web address starting with http:// or https://');
+
+const organizationFields = {
+  name: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  type: z.enum(ORGANIZATION_TYPES),
+  parentId: z.union([uuidField, z.null()]).optional(),
+  location: optionalText(200),
+  website: websiteField,
+  basicNotes: optionalText(2000),
+};
+
+export const createOrganizationSchema = z
+  .object({
+    ...organizationFields,
+    /** Set after the user has seen the duplicate-name warning (FR-033). */
+    acknowledgeDuplicates: z.boolean().optional(),
+  })
+  .strict();
+
+export type CreateOrganizationInput = z.input<typeof createOrganizationSchema>;
+
+export const updateOrganizationSchema = z
+  .object({
+    version: z.number().int().positive('Reload the organization and try again.'),
+    name: organizationFields.name.optional(),
+    type: organizationFields.type.optional(),
+    parentId: organizationFields.parentId,
+    location: organizationFields.location,
+    website: organizationFields.website,
+    basicNotes: organizationFields.basicNotes,
+    acknowledgeDuplicates: z.boolean().optional(),
+  })
+  .strict();
+
+export const archiveSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    reason: z.string().trim().min(3, 'Give a reason.').max(2000, 'Use at most 2000 characters.'),
+  })
+  .strict();
+
+const listPage = {
+  page: z
+    .string()
+    .regex(/^\d{1,6}$/, 'Page must be a whole number.')
+    .transform(Number)
+    .refine((value) => value >= 1, 'Page must be 1 or greater.')
+    .optional()
+    .default(1),
+  pageSize: z
+    .string()
+    .regex(/^\d{1,3}$/, 'Page size must be a whole number.')
+    .transform(Number)
+    .refine((value) => value >= 1 && value <= 100, 'Page size must be between 1 and 100.')
+    .optional()
+    .default(25),
+};
+
+export const listDirectoryQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    type: z.enum(ORGANIZATION_TYPES).optional(),
+    includeArchived: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Contacts and links (FR-032, BR-020, BR-021, SEC-004)
+// ---------------------------------------------------------------------------
+
+/** A string, never a number; at most 50 characters and at least one digit (FR-032). */
+const phoneField = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine(
+    (value) => value === undefined || (value.length <= 50 && /\d/.test(value) && /^[\d\s+().\-/x]+$/i.test(value)),
+    'Use digits, spaces and + ( ) - / only, up to 50 characters.',
+  );
+
+const optionalEmail = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => value === undefined || emailField.safeParse(value).success, 'Enter a valid email address.')
+  .transform((value) => value?.toLowerCase());
+
+const contactIdentity = {
+  organizationId: uuidField,
+  fullName: z.string().trim().min(2, 'Enter the full name.').max(200, 'Use at most 200 characters.'),
+  designation: z.string().trim().min(2, 'Enter the designation.').max(200, 'Use at most 200 characters.'),
+  department: optionalText(200),
+  email: optionalEmail,
+  phone: phoneField,
+};
+
+const relationshipNotesField = optionalText(4000);
+
+/** BR-020: a contact is created together with its first link. */
+export const createContactSchema = z
+  .object({
+    ...contactIdentity,
+    opportunityId: uuidField,
+    relationshipNotes: relationshipNotesField,
+  })
+  .strict();
+
+export type CreateContactInput = z.input<typeof createContactSchema>;
+
+export const updateContactSchema = z
+  .object({
+    version: z.number().int().positive('Reload the contact and try again.'),
+    organizationId: uuidField.optional(),
+    fullName: contactIdentity.fullName.optional(),
+    designation: contactIdentity.designation.optional(),
+    department: contactIdentity.department,
+    email: contactIdentity.email,
+    phone: contactIdentity.phone,
+  })
+  .strict();
+
+export const linkContactSchema = z
+  .object({
+    contactId: uuidField,
+    relationshipNotes: relationshipNotesField,
+  })
+  .strict();
+
+export const updateLinkSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    relationshipNotes: z.union([z.string().max(4000, 'Use at most 4000 characters.'), z.null()]),
+  })
+  .strict();
+
+export const removeLinkSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    reason: optionalText(2000),
+  })
+  .strict();
+
+export const listContactsQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    organizationId: uuidField.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Activities (FR-040, FR-041)
+// ---------------------------------------------------------------------------
+
+/** An instant with an explicit offset, e.g. 2026-10-05T14:30:00+06:00. */
+export const instantField = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/, 'Enter the date and time.')
+  .refine((value) => !Number.isNaN(Date.parse(value)), 'That date and time does not exist.');
+
+const activityFields = {
+  type: z.enum(ACTIVITY_TYPES),
+  occurredAt: instantField,
+  subject: z.string().trim().min(1, 'Enter a subject.').max(200, 'Use at most 200 characters.'),
+  notes: optionalText(10_000),
+  contactId: z.union([uuidField, z.null()]).optional(),
+};
+
+export const createActivitySchema = z
+  .object({
+    ...activityFields,
+    /** The approved form's optional next action, created in the same transaction. */
+    nextFollowUp: followUpDraftSchema.optional(),
+  })
+  .strict();
+
+export type CreateActivityInput = z.input<typeof createActivitySchema>;
+
+export const updateActivitySchema = z
+  .object({
+    version: z.number().int().positive('Reload the activity and try again.'),
+    type: activityFields.type.optional(),
+    occurredAt: activityFields.occurredAt.optional(),
+    subject: activityFields.subject.optional(),
+    notes: activityFields.notes,
+    contactId: activityFields.contactId,
+  })
+  .strict();
+
+export const listActivitiesQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    type: z.enum(ACTIVITY_TYPES).optional(),
+    organizationId: uuidField.optional(),
+    contactId: uuidField.optional(),
+    authoredBy: z.literal('me').optional(),
   })
   .strict();

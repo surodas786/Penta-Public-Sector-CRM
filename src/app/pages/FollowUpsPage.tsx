@@ -1,15 +1,14 @@
 /**
- * Activities & Follow-ups — the approved screen, with its Follow-ups tab live
- * (FR-042, FR-043).
+ * Activities & Follow-ups — the approved screen (FR-040–FR-043).
  *
- * Lists, buckets and counts all come from one scoped server query; the server
- * decides what is overdue against today's Dhaka date, so this page never
- * trusts the browser clock for it. The Activity Log tab and the calendar view
- * arrive with activities (M4) and are marked unavailable rather than faked.
+ * Follow-up lists, buckets and counts come from one scoped server query; the
+ * server decides what is overdue against today's Dhaka date, so this page
+ * never trusts the browser clock for it. The Activity Log tab lists scoped
+ * activities. The calendar view is not built yet and says so.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CalendarClockIcon, CheckIcon, LockIcon, SearchIcon, XIcon } from 'lucide-react';
+import { CalendarClockIcon, CheckIcon, SearchIcon, XIcon } from 'lucide-react';
 
 import type { FollowUpListItemDto } from '../../../shared/api.js';
 import { boardLaneLabel } from '../../../shared/enums.js';
@@ -17,6 +16,7 @@ import { fetchFollowUps } from '../../api/endpoints.js';
 import { EmptyState } from '../../components/ui/Feedback';
 import { FilterSelect, inputCls } from '../../components/ui/FormFields';
 import { PageContainer, PageHeader, Pagination, Tabs } from '../../components/ui/Layout';
+import { ActivityLogTab } from '../components/ActivityLogTab.js';
 import { ErrorPanel, LoadingPanel } from '../components/Feedback.js';
 import {
   CancelFollowUpDialog,
@@ -94,11 +94,7 @@ export function FollowUpsPage() {
         </div>
 
         {tab === 'log' ? (
-          <EmptyState
-            icon={<LockIcon className="h-8 w-8" />}
-            title="Not available yet"
-            description="Logging meetings, calls, emails and visits arrives with the organizations, contacts and activities milestone."
-          />
+          <ActivityLogTab />
         ) : (
           <>
             <div className="flex flex-wrap items-end gap-2 border-b border-slate-200 px-4 py-3">
@@ -193,7 +189,7 @@ export function FollowUpsPage() {
       </div>
 
       <p className="text-[11.5px] text-slate-500">
-        Follow-ups are added from an opportunity’s page. The calendar view arrives with activities.
+        Follow-ups are added from an opportunity’s page. The calendar view is not available yet.
       </p>
 
       {/* The list cannot know whether a task is its opportunity's last open

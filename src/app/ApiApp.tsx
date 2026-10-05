@@ -11,15 +11,22 @@ import { AccessDeniedPanel } from './components/Feedback.js';
 import { ApiShell } from './layout/ApiShell.js';
 import { UnavailableFeature } from './components/Feedback.js';
 
-import { FollowUpsPage } from './pages/FollowUpsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
-import { OpportunityDetailPage } from './pages/OpportunityDetailPage.js';
 
 // Screens most accounts never open load on demand, keeping them out of the
 // bundle every salesperson downloads.
 const AdministrationPage = lazy(() => import('./pages/AdministrationPage.js').then((m) => ({ default: m.AdministrationPage })));
 const SetPasswordPage = lazy(() => import('./pages/SetPasswordPage.js').then((m) => ({ default: m.SetPasswordPage })));
+const OpportunityDetailPage = lazy(() =>
+  import('./pages/OpportunityDetailPage.js').then((m) => ({ default: m.OpportunityDetailPage })),
+);
+const FollowUpsPage = lazy(() => import('./pages/FollowUpsPage.js').then((m) => ({ default: m.FollowUpsPage })));
+const OrganizationsPage = lazy(() => import('./pages/OrganizationsPage.js').then((m) => ({ default: m.OrganizationsPage })));
+const OrganizationDetailPage = lazy(() =>
+  import('./pages/OrganizationDetailPage.js').then((m) => ({ default: m.OrganizationDetailPage })),
+);
+const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage.js').then((m) => ({ default: m.ContactDetailPage })));
 const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })));
 
 function Lazy({ children }: { children: ReactNode }) {
@@ -82,7 +89,7 @@ function AppRoutes() {
               instead of a view that can never load. */}
           <Route element={<RequireSalesAccess />}>
             <Route path="opportunities" element={<OpportunitiesPage />} />
-            <Route path="opportunities/:id" element={<OpportunityDetailPage />} />
+            <Route path="opportunities/:id" element={<Lazy><OpportunityDetailPage /></Lazy>} />
           </Route>
 
           <Route element={<RequireAdministration />}>
@@ -111,16 +118,10 @@ function AppRoutes() {
               />
             }
           />
-          <Route
-            path="organizations"
-            element={
-              <UnavailableFeature
-                title="Organizations & Contacts"
-                reason="Contacts, opportunity links and link-scoped relationship notes arrive with the organizations and contacts milestone."
-              />
-            }
-          />
-          <Route path="activities" element={<FollowUpsPage />} />
+          <Route path="organizations" element={<Lazy><OrganizationsPage /></Lazy>} />
+          <Route path="organizations/:id" element={<Lazy><OrganizationDetailPage /></Lazy>} />
+          <Route path="contacts/:id" element={<Lazy><ContactDetailPage /></Lazy>} />
+          <Route path="activities" element={<Lazy><FollowUpsPage /></Lazy>} />
           <Route
             path="tenders"
             element={

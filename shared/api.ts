@@ -5,6 +5,7 @@
  * session data and any private account field (plan 7.3).
  */
 import type {
+  ActivityType,
   BoardLane,
   FollowUpState,
   LossReason,
@@ -33,6 +34,7 @@ export type ApiErrorCode =
   | 'idempotency_key_reuse'
   | 'idempotency_in_progress'
   | 'invalid_transition'
+  | 'possible_duplicate'
   | 'validation_failed'
   | 'rate_limited'
   | 'invalid_csrf'
@@ -311,4 +313,112 @@ export interface TeamDto {
     overdueTasks: number;
   }[];
   today: string;
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 4: directory, contacts and activities
+// ---------------------------------------------------------------------------
+
+/**
+ * A directory entry (FR-030, FR-031). Basic organization information only: no
+ * private contact details and no project commentary. The opportunity count
+ * covers records the caller may access, and is labelled that way.
+ */
+export interface OrganizationListItemDto {
+  id: string;
+  name: string;
+  type: OrganizationType;
+  parentId: string | null;
+  parentName: string | null;
+  location: string | null;
+  website: string | null;
+  archived: boolean;
+  accessibleOpportunities: number;
+}
+
+export interface OrganizationDetailDto extends OrganizationListItemDto {
+  basicNotes: string | null;
+  children: { id: string; name: string; archived: boolean }[];
+  version: number;
+  /** FR-033: management archives; anyone in sales may edit basic details. */
+  canArchive: boolean;
+}
+
+/** A visible contact. Private details are returned only for contacts the caller may see. */
+export interface ContactListItemDto {
+  id: string;
+  fullName: string;
+  designation: string;
+  department: string | null;
+  email: string | null;
+  phone: string | null;
+  organizationId: string;
+  organizationName: string;
+  archived: boolean;
+  /** Links the caller can see — never the total. */
+  accessibleLinks: number;
+}
+
+/** One link the caller can see, with that opportunity's relationship notes (BR-020). */
+export interface ContactLinkDto {
+  linkId: string;
+  opportunity: {
+    id: string;
+    reference: string;
+    name: string;
+    stage: OpportunityStage;
+    status: OpportunityStatus;
+    ownerName: string;
+    sectionName: string;
+  };
+  relationshipNotes: string | null;
+  createdByName: string;
+  createdAt: string;
+  version: number;
+}
+
+export interface ContactDetailDto extends ContactListItemDto {
+  version: number;
+  links: ContactLinkDto[];
+  /**
+   * BR-021: shared identity fields may be edited only by someone who can see
+   * every opportunity the contact is linked to (management always can).
+   */
+  canEditIdentity: boolean;
+  canArchive: boolean;
+}
+
+/** A contact as it appears on one opportunity's Contacts tab. */
+export interface OpportunityContactDto {
+  linkId: string;
+  relationshipNotes: string | null;
+  version: number;
+  contact: {
+    id: string;
+    fullName: string;
+    designation: string;
+    department: string | null;
+    email: string | null;
+    phone: string | null;
+    organizationName: string;
+    archived: boolean;
+  };
+}
+
+export interface ActivityDto {
+  id: string;
+  opportunity: { id: string; reference: string; name: string };
+  type: ActivityType;
+  occurredAt: string;
+  subject: string;
+  notes: string | null;
+  contact: { id: string; fullName: string } | null;
+  authorId: string;
+  authorName: string;
+  createdAt: string;
+  editedAt: string | null;
+  editedByName: string | null;
+  version: number;
+  /** FR-041: salespeople amend their own; leads and management any in scope. */
+  canEdit: boolean;
 }

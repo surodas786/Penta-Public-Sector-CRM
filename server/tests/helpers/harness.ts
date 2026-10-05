@@ -60,6 +60,24 @@ export const ids = {
   oppImran: legacyUuid('p11'),
   oppSadia: legacyUuid('p12'),
   oppCancelledIS: legacyUuid('p19'),
+  /** Rafiq, Bid Submitted; shares Farzana Yasmin with Tasnia's p2. */
+  oppRafiqTraining: legacyUuid('p8'),
+  /** Imran, Lost; shares Golam Mostafa with Rafiq's p1. */
+  oppImranLost: legacyUuid('p17'),
+  /** Sadia, Bid Preparation; shares Rezaul Karim with Nadia's p7. */
+  oppSadiaDataCenter: legacyUuid('p12'),
+  // Contacts (M4)
+  /** Links: p1 (Rafiq, GA, carries the demo note) and p17 (Imran, IS). */
+  contactGolam: legacyUuid('c13'),
+  /** Links: p1 only. */
+  contactLaila: legacyUuid('c14'),
+  /** Links: p2 (Tasnia, carries the note) and p8 (Rafiq). Same section, different owners. */
+  contactFarzana: legacyUuid('c6'),
+  /** Links: p7 (Nadia, GA, carries the note), p12 and p20 (Sadia, IS). */
+  contactRezaul: legacyUuid('c17'),
+  // Activities (M4)
+  /** p1, Office Visit, authored by Rafiq, with Golam Mostafa. */
+  activityRafiqVisit: legacyUuid('a1'),
   // Organizations
   orgSylvanHills: legacyUuid('o7'),
   orgCivicRecords: legacyUuid('o2'),

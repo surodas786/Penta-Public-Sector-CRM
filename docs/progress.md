@@ -1,24 +1,184 @@
 # Implementation progress
 
-**Current state (05 October 2026):** Milestone 3 complete on branch
-`m3-transfers-administration`, which is stacked on `m2-stages-status-follow-ups`
-(M2 reviewed, not yet merged). The branch is open for review as **PR #2**
-into `main`, carrying the M1 handover review, M2, the M2 review and M3.
-GitHub CI run 37318264686 passed every step on a clean runner: install,
-migrations, typecheck, lint, env check, integration tests, browser tests and
-the production build with demo-exclusion. That run is also M2's first CI run,
-since M2 had no pull request of its own. Nothing is merged or deployed.
-Milestone 4 has not been started. Sections, newest first: Milestone 3 · Milestone 2 ·
-Milestone 1 handover review · Milestone 1.
+**Current state (05 October 2026):** Milestone 4 complete on branch
+`m4-organizations-contacts-activities`, stacked on `m3-transfers-administration`
+(open as PR #2, CI green, not yet reviewed). Nothing is merged or deployed.
+Milestone 5 has not been started. Sections, newest first: Milestone 4 ·
+Milestone 3 · Milestone 2 · Milestone 1 handover review · Milestone 1.
+
+---
+
+## Milestone 4 — organizations, contacts, relationship notes and activities
+
+**Branch:** `m4-organizations-contacts-activities`, created from `m3-transfers-administration` at `ca21a7e`
+**Commit:** the Milestone 4 commit that contains this section
+**Date:** 05 October 2026
+**Status:** Complete and ready for review. Not merged. Milestone 5 not started.
+
+### 1. Milestone 3 check before starting
+
+M3 was verified against the repository and GitHub: PR #2 open with no review
+comments, CI run 37318264686 green on every step, clean working tree, all four
+migrations applied. No blockers.
+
+### 2. What was built
+
+| Requirement | Where | What it does |
+| --- | --- | --- |
+| FR-030, FR-033 | `server/services/directory.ts`; `/api/organizations` | Shared directory: search (Unicode, including Bangla), type filter, pagination; create and edit basic details with version checks; parent organization with **self-parent and cycle prevention** (serialised by an advisory lock); management-only **archive**, refused while an open opportunity uses the organization |
+| FR-033 | same | **Duplicate-name warning**: names compared ignoring case, spacing and punctuation; 409 `possible_duplicate` naming the similar organizations; the user may confirm and save anyway |
+| FR-031 | same | "Your opportunities" counts through the caller's own scope; no private contact details or project commentary in the directory; the administrator gets 403 |
+| FR-032, BR-020 | `server/services/contacts.ts`; `/api/contacts`, `/api/opportunities/:id/contacts`, `/api/contact-links` | Contacts with full name, designation, organization, department, optional email and phone (a string); **created together with their first opportunity link**; link an existing visible contact; **relationship notes stored on the link**; unlink (kept, marked removed) but never the last link; management-only archive |
+| SEC-004 | `contactScope` in `server/policy/scope.ts` | A contact is visible only through a live link to an accessible opportunity; a contact view returns only accessible links and their notes, never the others or their count; invisible contacts are the same 404 as missing ones |
+| BR-021 | contacts service | Notes editable by anyone who sees that link; shared identity editable only by someone who sees **every** link (management always); otherwise 403 pointing to management |
+| FR-040 | `server/services/activities.ts`; `/api/opportunities/:id/activities`, `/api/activities` | Meeting, Phone Call, Email (a manual log), Office Visit, Internal Discussion, Other; time entered in Bangladesh time; optional contact, which must be linked to the same opportunity; the approved form's optional next action becomes a follow-up **in the same transaction** |
+| FR-041 | same | Chronological, newest first; salespeople amend only their own, leads and management any in scope; each edit versioned and audited before/after; **no deletion** — the runtime role has no DELETE on activities, contacts or links |
+| AT-03, FR-041 | scope through the opportunity | Historical authorship grants no access: an author whose record was transferred away gets 404 on its activities and cannot amend them; the author stays named for the new owner |
+| FR-062 | `server/services/audit.ts` | `contact.linked`, `.unlinked`, `.notes_updated`, `activity.logged`, `.updated` in the opportunity's commercial history; organization and contact identity changes in a new `directory` domain |
+| BR-091, BR-090 | routes | Idempotency keys on organization, contact, link and activity creation; version checks on every edit; link writes lock the opportunity row first, like every other opportunity writer |
+
+**Interface.** Organizations & Contacts, organization detail and contact
+detail are the approved screens, connected to the server. The opportunity
+page's Contacts tab is live (link, add, notes, unlink), and the approved
+**Activities** tab returns, holding the activity log and the M2 follow-ups;
+old `?tab=followups` links open it. Log Activity is on the opportunity header
+and on the Activity Log tab, which is now live. Nothing in `src/demo`,
+`src/components` or `src/pages` was changed.
+
+**Interface deviations, for product sign-off.**
+
+| Change | Reason |
+| --- | --- |
+| Contact detail shows relationship notes per linked opportunity, not one note per contact | BR-020 |
+| The demo's "Edit associated contacts" multi-select is replaced by Link a contact / Add a new contact / Unlink per row | Links carry their own notes and audit; one contact never exposes another team's links |
+| Contact identity Edit is replaced by a notice when the contact is shared outside the viewer's access | BR-021 |
+| Duplicate organization names warn and allow "Save anyway" instead of blocking | FR-033 says warning |
+| The Activities tab stacks the activity log above the follow-ups table instead of side by side | The M2 follow-up table needs the width |
+| The Activities & Follow-ups calendar view is still not available | Not built; stated on the page |
+
+### 3. Implementation decisions
+
+In `docs/adr/0005-directory-contacts-and-activities.md`. For review:
+future-dated activities are refused (5-minute allowance); an archived contact
+stays readable through its links but leaves lists and cannot be relinked, and
+there is no unarchive yet; anyone who can edit an opportunity may unlink a
+contact from it; an activity keeps showing its contact's name after that
+contact is unlinked.
+
+### 4. Database and fixtures
+
+| Migration | Contents |
+| --- | --- |
+| `0004_contacts_links_and_activities.sql` | `contacts` (no notes field), `opportunity_contacts` (notes, soft removal, one live link per pair), `activities` (versioned, edited-by), `activity_type` enum; the runtime role gets SELECT/INSERT/UPDATE only (verified) |
+
+Additive; rollback in the header. The seed now loads **22 contacts, 35 links
+and 34 activities** converted from the demo (`server/db/seedDirectory.ts`,
+generated once and committed so the seed never imports demo code). The seed
+refuses an activity whose contact is not linked to its opportunity. Each demo
+contact note is placed on that contact's first link only — a documented
+synthetic mapping, because copying it to every link would show one team's note
+to another.
+
+### 5. Commands run and results
+
+| Command | Result |
+| --- | --- |
+| `npm run db:migrate` / `:test` | `0004` applied; repeat run is a no-op |
+| `npm run db:seed` / `:test` | 2 sections, 10 users, 11 organizations, 23 opportunities, 17 open follow-ups, 22 contacts, 35 links, 34 activities |
+| `npm run typecheck` | **Pass** (web, server, e2e) |
+| `npm run lint` | **Pass** — 0 errors, the same 5 pre-existing warnings |
+| `npm run check:env` | **Pass** |
+| `npm test` | **321 passed, 0 failed**, 14 files (279 after M3 + 18 contacts + 9 directory + 15 activities) |
+| `npm run test:smoke` | **17 passed** in three isolated runs: 12 (smoke + M2), 2 (M3), 3 (M4) |
+| `npm run build` | **Pass**, demo-exclusion before and after bundling. Main chunk 412 kB: the opportunity detail, Activities & Follow-ups and directory screens now load on demand, after the new screens had pushed it to 590 kB |
+| `npm run evidence` | 37 screenshots (8 new for M4: `22`–`29`); now three Playwright runs |
+
+**`npm run test:smoke` is now three isolated Playwright runs** (smoke + M2,
+M3, M4), each on freshly seeded fixtures. That keeps every run under the login
+rate limit without loosening it, and stops one milestone's spec from changing
+another's fixtures.
+
+| New test file | Tests | Covers |
+| --- | --- | --- |
+| `contacts.test.ts` | 18 | Contact list scoped to own records; a contact shared within a section shows each salesperson only their own link and note; shared across sections shows each lead only their section's links; management sees all; invisible = missing 404; administrator refused; Bangla create, round-trip and search; retry creates once; no contact on someone else's record; link visible / invisible / duplicate; field validation; BR-021 identity vs notes; editing an invisible link is 404; last link protected; **concurrent removal of the last two links**; management-only archive; **AT-08: transfers move contact visibility and notes with the record**; audit domains |
+| `directory.test.ts` | 9 | Same directory for every role with **scoped counts** (1/1/1/2); no private details; administrator refused; **Bangla storage and search**; duplicate warning and confirmation; self-parent and cycle refused; **concurrent cross-parenting**; validation, versions and directory audit; management-only archive refused while used; archived organization takes no new opportunity |
+| `activities.test.ts` | 15 | Chronological list with authors; Bangla activity with linked contact, created once on retry, found by Bangla search; unlinked contact, future time, missing subject, unknown type and offset-less time refused; next action created atomically, and refused with no activity saved on a closed record; inaccessible = missing; administrator refused; author amends, edit audited, stale version refused; salesperson amends only own, lead any, author kept; **runtime role cannot DELETE**; **historical author loses access after transfer**; Activity Log scoped and filtered |
+| `e2e/m4.spec.ts` | 3 | Salesperson: scoped directory counts, organization page shows only own records, shared contact shows only own link with the "ask management" notice, edit own notes, add a Bangla contact from the opportunity, log a Bangla activity with a next action; lead sees every section link and can edit identity; another section sees a shared contact only through its own record |
+
+**Mutation checks** — each protection was removed and its test re-run:
+link scoping on the contact view (test failed: 2–3 links returned instead of
+1); the contact-row lock on link removal (both removals succeeded, leaving no
+link); the organization-hierarchy lock (a deadlock 500 instead of a clean
+422). All restored.
+
+### 6. Defects found and fixed
+
+1. **An opportunity could be created against an organization in the instant
+   it was being archived.** M1 creation read the organization without a lock.
+   Creation now share-locks it inside its transaction, so the archive's check
+   and a creation are serialised.
+2. **The main bundle grew to 590 kB** with the new screens; the detail,
+   follow-up and directory screens are now loaded on demand (412 kB).
+3. Test-only: two browser dialogs briefly coexist while one animates out, and
+   names repeated across panels made locators ambiguous; the specs now scope
+   by dialog heading and panel.
+
+### 7. Acceptance coverage
+
+| Test | Status |
+| --- | --- |
+| AT-08 | **Covered** now that contacts exist: a cross-section transfer revokes the old team at once, and a contact linked to another project shows the new owner only their permitted link and notes |
+| AT-02 | Contacts channel added: a lead cannot obtain another section's contact links or notes. CSV, documents and notifications remain |
+| AT-03 | Historical authorship of activities grants no access after transfer |
+| AT-15 | Partial: last-link and parent-cycle races added |
+
+### 8. Remaining issues and limitations
+
+- **Directory and contact identity audit events are recorded but not shown**
+  anywhere yet (M7 audit views).
+- **No unarchive** for organizations or contacts.
+- **Contact identity edits are all-or-nothing per BR-021**; a salesperson who
+  shares a contact cannot fix a typo and must ask management.
+- **Activities & Follow-ups calendar view** is not built.
+- **Organization pickers load at most 100 organizations**; beyond that they
+  need search (the directory page itself is paginated).
+- From earlier milestones, unchanged: PATCH routes have no idempotency key;
+  idempotency and link-token cleanup are unscheduled; five pre-existing
+  fast-refresh lint warnings; identity provider and MFA undecided.
+
+### 9. Local startup
+
+```bash
+npm run db:up
+npm run db:migrate && npm run db:migrate:test   # 0000–0004
+npm run db:seed  && npm run db:seed:test        # now with contacts and activities
+npm run dev:server                              # API  http://localhost:4800
+npm run dev                                     # web  http://localhost:5173
+```
+
+To see M4: as `rafiq.hasan@example.com`, open **Organizations & Contacts**,
+then Farzana Yasmin (shared with Tasnia: only your link and notes show); open
+Municipal Service Portal → Contacts and Activities tabs. As
+`nadia.islam@example.com`, the same contact shows both links and can be
+edited. As `imran.hossain@example.com`, Golam Mostafa shows only City Wi-Fi.
+
+### 10. Next task
+
+**Milestone 5 — tender cycles and secure documents** (`Plan.md` §6), not to
+be started until this milestone is reviewed. It needs Penta's decision on
+private file storage and the scanning service before upload can be enabled.
 
 ---
 
 ## Milestone 3 — ownership transfers and team administration
 
 **Branch:** `m3-transfers-administration`, created from `m2-stages-status-follow-ups` at `27ed8b8` (M2 plus its review)
-**Commit:** the Milestone 3 commit that contains this section
+**Commits:** `22507ed` (Milestone 3), `ca21a7e` (CI note)
 **Date:** 05 October 2026
-**Status:** Complete and ready for review. Not merged. Milestone 4 not started.
+**Status:** Complete. Open for review as **PR #2** into `main`, which carries
+the M1 handover review, M2, the M2 review and M3. GitHub CI run 37318264686
+passed every step on a clean runner, which is also M2's first CI run. Not
+merged.
 
 ### 1. Milestone 2 review, before starting
 

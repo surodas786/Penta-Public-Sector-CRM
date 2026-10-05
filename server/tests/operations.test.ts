@@ -141,7 +141,7 @@ describe('operational guards', () => {
       }
 
       // Tables arrive with the feature that uses them (plan section 5).
-      for (const deferred of ['contacts', 'opportunity_contacts', 'activities', 'tenders', 'documents', 'notifications']) {
+      for (const deferred of ['tenders', 'documents', 'notifications']) {
         expect(tables).not.toContain(deferred);
       }
     });

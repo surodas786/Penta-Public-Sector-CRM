@@ -3,12 +3,13 @@
 A CRM for tracking public sector project opportunities in Bangladesh: pipeline
 stages, follow-ups, tender cycles and section-based ownership.
 
-**Status: Milestone 3.** Persistent accounts and sessions, server-enforced
+**Status: Milestone 4.** Persistent accounts and sessions, server-enforced
 access control, opportunity creation and editing, persistent stage and status
 changes (Pipeline board and dropdown), Awarded/Lost outcomes with
 management-only reopening, the complete follow-up lifecycle, ownership
 transfers, management's team view, and account and section administration with
-single-use invitation and reset links.
+single-use invitation and reset links, the shared organization directory,
+contacts with opportunity-specific relationship notes, and activities.
 Later features are deliberately unavailable rather than mocked — see
 [`docs/progress.md`](docs/progress.md).
 
@@ -106,8 +107,8 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run typecheck` | TypeScript for the web, server and e2e projects |
 | `npm run lint` | ESLint across all source |
 | `npm test` | Backend integration suite against the test database — **the milestone gate** |
-| `npm run test:smoke` | Playwright browser checks — sign-in/create smoke test and the M2 board and follow-up flows (starts its own servers against the test database) |
-| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as two Playwright runs so neither exceeds the login rate limit (10 per 15 minutes) |
+| `npm run test:smoke` | Playwright browser checks, as three isolated runs (smoke + M2, M3, M4), each starting its own servers on freshly seeded test data |
+| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as three Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
 
@@ -152,11 +153,12 @@ Access control is enforced in the database query, not in the browser. See
 [`docs/adr/0001-architecture.md`](docs/adr/0001-architecture.md) and
 [`docs/adr/0002-authentication-and-sessions.md`](docs/adr/0002-authentication-and-sessions.md) and
 [`docs/adr/0003-stage-status-and-follow-up-lifecycle.md`](docs/adr/0003-stage-status-and-follow-up-lifecycle.md) and
-[`docs/adr/0004-transfers-and-administration.md`](docs/adr/0004-transfers-and-administration.md).
+[`docs/adr/0004-transfers-and-administration.md`](docs/adr/0004-transfers-and-administration.md) and
+[`docs/adr/0005-directory-contacts-and-activities.md`](docs/adr/0005-directory-contacts-and-activities.md).
 
 ## Not in this milestone
 
-Organizations and contacts, activities, tenders, documents, dashboards,
-reports, CSV export, search and notifications. Each is visibly unavailable in the application with the reason
+Tenders, documents, dashboards, reports, CSV export, search and
+notifications. Each is visibly unavailable in the application with the reason
 stated.
 [`docs/progress.md`](docs/progress.md) has the full list and the next task.

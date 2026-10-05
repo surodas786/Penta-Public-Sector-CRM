@@ -21,6 +21,7 @@ import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
 import { requestContext } from './http/requestContext.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createActivitiesRouter, createContactLinksRouter, createContactsRouter } from './routes/contacts.js';
 import { createFollowUpsRouter } from './routes/followUps.js';
 import { createLookupsRouter } from './routes/lookups.js';
 import { createOpportunitiesRouter } from './routes/opportunities.js';
@@ -157,7 +158,10 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
 
   app.use('/api/opportunities', createOpportunitiesRouter({ db: database.db, csrfGuard }));
   app.use('/api/follow-ups', createFollowUpsRouter({ db: database.db, csrfGuard }));
-  app.use('/api/organizations', createOrganizationsRouter({ db: database.db }));
+  app.use('/api/organizations', createOrganizationsRouter({ db: database.db, csrfGuard }));
+  app.use('/api/contacts', createContactsRouter({ db: database.db, csrfGuard }));
+  app.use('/api/contact-links', createContactLinksRouter({ db: database.db, csrfGuard }));
+  app.use('/api/activities', createActivitiesRouter({ db: database.db, csrfGuard }));
   app.use('/api/lookups', createLookupsRouter({ db: database.db }));
   app.use('/api/team', createTeamRouter({ db: database.db }));
   app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin }));

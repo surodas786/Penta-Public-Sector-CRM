@@ -1,7 +1,7 @@
 # Penta Public Sector Sales CRM — project instructions
 
 A sales CRM for public sector project opportunities in Bangladesh, built from an
-approved MagicPatterns prototype. Currently at the end of **Milestone 3**.
+approved MagicPatterns prototype. Currently at the end of **Milestone 4**.
 
 ## Read before changing anything
 
@@ -66,7 +66,7 @@ npm run dev:demo       # the approved synthetic prototype, no API, no database
 npm run typecheck      # web + server + e2e projects
 npm run lint
 npm test               # backend integration suite (the milestone gate)
-npm run test:smoke     # Playwright browser smoke test
+npm run test:smoke     # Playwright browser checks (three isolated runs)
 npm run build          # web (with demo-exclusion checks) + server
 ```
 
@@ -83,12 +83,13 @@ npm run build          # web (with demo-exclusion checks) + server
 
 ## Current state
 
-Milestones 1–3 are complete: persistence, authentication, server-side
+Milestones 1–4 are complete: persistence, authentication, server-side
 permissions, opportunity create / list / detail / basic edit, stage and status
 transitions (board and dropdown), Awarded/Lost outcomes, management-only
 reopening, the follow-up lifecycle, ownership transfers, management's team
-view, account and section administration, and single-use invitation/reset
-links — all with optimistic concurrency, durable idempotency and audit.
+view, account and section administration, single-use invitation/reset
+links, the organization directory, contacts with link-scoped relationship
+notes, and activities — all with optimistic concurrency, durable idempotency and audit.
 
 Every writer locks the opportunity row before any follow-up row; account
 changes lock the active administrator rows first, in id order. Keep both
@@ -97,6 +98,9 @@ orders in new services (ADRs 0003 and 0004).
 Never log request data: unexpected errors go through `describeForLog` in
 `server/http/errors.ts` (SEC-032).
 
-Contacts, activities, tenders, documents, dashboards, reports, search and
-notifications are **not** implemented. They are visibly unavailable in the UI
-rather than mocked. See `docs/progress.md` before starting Milestone 4.
+Contacts are visible only through links to accessible opportunities
+(`contactScope`); relationship notes live on the link, never the contact.
+
+Tenders, documents, dashboards, reports, search and notifications are **not**
+implemented. They are visibly unavailable in the UI
+rather than mocked. See `docs/progress.md` before starting Milestone 5.

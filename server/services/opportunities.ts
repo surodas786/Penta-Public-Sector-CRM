@@ -6,7 +6,7 @@
  * rows only (SEC-002). Every write re-validates the proposed associations
  * against current database state rather than trusting the request (SEC-001).
  */
-import { and, asc, count, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import type {
   BoardDto,
@@ -20,6 +20,7 @@ import type {
   Paginated,
 } from '../../shared/api.js';
 import {
+  ACTIVITY_TYPE_LABELS,
   BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
   LOSS_REASON_LABELS,
@@ -42,7 +43,7 @@ import type { z } from 'zod';
 
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { auditEvents, followUps, opportunities, organizations, sections, users } from '../db/schema.js';
+import { auditEvents, contacts, followUps, opportunities, organizations, sections, users } from '../db/schema.js';
 import { forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { eligibleOwnerScope, opportunityScope, scopedWhere } from '../policy/scope.js';
@@ -409,6 +410,16 @@ export async function createOpportunity(options: {
 
   // --- One transaction: opportunity + first follow-up + audit (BR-014) ---
   const created = await db.transaction(async (tx) => {
+    // Share-locks the organization so a concurrent archive (which takes an
+    // update lock) cannot slip between the check above and this insert.
+    const [current] = await tx
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(and(eq(organizations.id, command.organizationId), isNull(organizations.archivedAt)))
+      .for('share')
+      .limit(1);
+    if (!current) throw validationFailed({ organizationId: 'Select a current procuring organization.' });
+
     const referenceResult = await tx.execute<{ reference: string }>(
       sql`SELECT 'OPP-' || lpad(nextval('opportunity_reference_seq')::text, 6, '0') AS reference`,
     );
@@ -700,7 +711,7 @@ export async function listOpportunityHistory(options: {
     items: rows.map((row) => {
       const before = (row.beforeData ?? {}) as Record<string, unknown>;
       const after = (row.afterData ?? {}) as Record<string, unknown>;
-      const subject = after.task ?? before.task;
+      const subject = after.task ?? before.task ?? after.about ?? before.about;
       return {
         id: row.id,
         action: row.action,
@@ -723,12 +734,13 @@ export async function listOpportunityHistory(options: {
 // ---------------------------------------------------------------------------
 
 /** Keys kept in audit data for context, not shown as field changes. */
-const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context']);
+const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context', 'about']);
 
 const ID_FIELDS = {
   user: ['ownerId', 'assignedUserId', 'managerId', 'leadUserId'],
   organization: ['organizationId'],
   section: ['sectionId'],
+  contact: ['contactId'],
 } as const;
 
 type HistoryNames = Map<string, string>;
@@ -756,6 +768,7 @@ async function resolveHistoryNames(db: Database, payloads: unknown[]): Promise<H
   const userIds = collect(ID_FIELDS.user);
   const organizationIds = collect(ID_FIELDS.organization);
   const sectionIds = collect(ID_FIELDS.section);
+  const contactIds = collect(ID_FIELDS.contact);
 
   if (userIds.length > 0) {
     const rows = await db
@@ -778,6 +791,14 @@ async function resolveHistoryNames(db: Database, payloads: unknown[]): Promise<H
       .where(inArray(sections.id, sectionIds));
     for (const row of rows) names.set(row.id, row.name);
   }
+  if (contactIds.length > 0) {
+    // Only contacts already named in this opportunity's own history.
+    const rows = await db
+      .select({ id: contacts.id, name: contacts.fullName })
+      .from(contacts)
+      .where(inArray(contacts.id, contactIds));
+    for (const row of rows) names.set(row.id, row.name);
+  }
   return names;
 }
 
@@ -789,6 +810,7 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   lossReason: LOSS_REASON_LABELS,
   state: FOLLOW_UP_STATE_LABELS,
   role: ROLE_LABELS,
+  type: ACTIVITY_TYPE_LABELS,
 };
 
 /**

@@ -60,7 +60,7 @@ test('sign in, create, persist across reload, sign out', async ({ page }) => {
   const detailUrl = page.url();
 
   // --- The first follow-up exists (BR-014) --------------------------------
-  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+  await main.getByRole('tab', { name: /Activities/ }).click();
   await expect(main.getByText('Arrange the first briefing')).toBeVisible();
 
   // --- Creation history (FR-062) ------------------------------------------

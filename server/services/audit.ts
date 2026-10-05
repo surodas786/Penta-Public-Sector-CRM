@@ -10,7 +10,13 @@ import type { Database } from '../db/client.js';
 import { auditEvents } from '../db/schema.js';
 import { now } from '../clock.js';
 
-export type AuditDomain = 'commercial' | 'administrative';
+/**
+ * commercial      follows opportunity scope (FR-062, SEC-012)
+ * administrative  accounts and sections; administrators only
+ * directory       shared organization and contact identity changes, which
+ *                 belong to no single opportunity
+ */
+export type AuditDomain = 'commercial' | 'administrative' | 'directory';
 
 export interface AuditWrite {
   actorId: string;
@@ -78,6 +84,15 @@ export const OPPORTUNITY_FIELD_LABELS: Record<string, string> = {
   active: 'Active',
   leadUserId: 'Section lead',
   expiresAt: 'Link expires',
+  // Contacts and activities (Milestone 4).
+  contactId: 'Contact',
+  relationshipNotes: 'Relationship notes',
+  designation: 'Designation',
+  phone: 'Phone',
+  subject: 'Subject',
+  type: 'Type',
+  occurredAt: 'When',
+  notes: 'Notes',
 };
 
 /**

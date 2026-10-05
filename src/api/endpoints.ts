@@ -7,6 +7,12 @@
  */
 import type {
   AccountLinkDto,
+  ActivityDto,
+  ContactDetailDto,
+  ContactListItemDto,
+  OpportunityContactDto,
+  OrganizationDetailDto,
+  OrganizationListItemDto,
   AdminAuditEntryDto,
   AdminSectionDto,
   AdminUserDto,
@@ -303,4 +309,106 @@ export async function setPasswordWithLink(token: string, password: string): Prom
     body: { token, password },
     suppressUnauthenticatedNotice: true,
   });
+}
+
+// --- Organization directory (M4) ---------------------------------------------
+
+export function fetchDirectory(
+  params: { q?: string; type?: string; page?: number; pageSize?: number; includeArchived?: string },
+  signal?: AbortSignal,
+): Promise<Paginated<OrganizationListItemDto>> {
+  return apiRequest(`/api/organizations${toQuery(params)}`, { signal });
+}
+
+export function fetchOrganization(id: string, signal?: AbortSignal): Promise<OrganizationDetailDto> {
+  return apiRequest(`/api/organizations/${id}`, { signal });
+}
+
+export function createOrganization(body: Record<string, unknown>, idempotencyKey: string): Promise<OrganizationDetailDto> {
+  return apiRequest('/api/organizations', { method: 'POST', body, idempotencyKey });
+}
+
+export function updateOrganization(id: string, body: Record<string, unknown>): Promise<OrganizationDetailDto> {
+  return apiRequest(`/api/organizations/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveOrganization(id: string, body: Record<string, unknown>): Promise<OrganizationDetailDto> {
+  return apiRequest(`/api/organizations/${id}/archive`, { method: 'POST', body });
+}
+
+// --- Contacts and links (M4) ---------------------------------------------------
+
+export function fetchContacts(
+  params: { q?: string; organizationId?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<Paginated<ContactListItemDto>> {
+  return apiRequest(`/api/contacts${toQuery(params)}`, { signal });
+}
+
+export function fetchContact(id: string, signal?: AbortSignal): Promise<ContactDetailDto> {
+  return apiRequest(`/api/contacts/${id}`, { signal });
+}
+
+export function createContact(body: Record<string, unknown>, idempotencyKey: string): Promise<ContactDetailDto> {
+  return apiRequest('/api/contacts', { method: 'POST', body, idempotencyKey });
+}
+
+export function updateContact(id: string, body: Record<string, unknown>): Promise<ContactDetailDto> {
+  return apiRequest(`/api/contacts/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveContact(id: string, body: Record<string, unknown>): Promise<ContactDetailDto> {
+  return apiRequest(`/api/contacts/${id}/archive`, { method: 'POST', body });
+}
+
+export function fetchOpportunityContacts(
+  opportunityId: string,
+  signal?: AbortSignal,
+): Promise<{ items: OpportunityContactDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/contacts`, { signal });
+}
+
+export function linkContact(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityContactDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/contacts`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateContactLink(linkId: string, body: Record<string, unknown>): Promise<OpportunityContactDto> {
+  return apiRequest(`/api/contact-links/${linkId}`, { method: 'PATCH', body });
+}
+
+export function removeContactLink(linkId: string, body: Record<string, unknown>): Promise<void> {
+  return apiRequest(`/api/contact-links/${linkId}/remove`, { method: 'POST', body });
+}
+
+// --- Activities (M4) -------------------------------------------------------------
+
+export function fetchOpportunityActivities(
+  opportunityId: string,
+  params: { page?: number; pageSize?: number } = {},
+  signal?: AbortSignal,
+): Promise<Paginated<ActivityDto>> {
+  return apiRequest(`/api/opportunities/${opportunityId}/activities${toQuery(params)}`, { signal });
+}
+
+export function fetchActivities(
+  params: { q?: string; type?: string; organizationId?: string; contactId?: string; authoredBy?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<Paginated<ActivityDto>> {
+  return apiRequest(`/api/activities${toQuery(params)}`, { signal });
+}
+
+export function createActivity(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<ActivityDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/activities`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateActivity(id: string, body: Record<string, unknown>): Promise<ActivityDto> {
+  return apiRequest(`/api/activities/${id}`, { method: 'PATCH', body });
 }

@@ -206,3 +206,23 @@ export const BUSINESS_TIME_ZONE = 'Asia/Dhaka';
 
 /** §20 requires this wording instead of the ambiguous "BST". */
 export const BUSINESS_TIME_LABEL = 'Bangladesh time (UTC+6)';
+
+/** FR-040. "Email" is a manual log of an email, never a sent message. */
+export const ACTIVITY_TYPES = [
+  'meeting',
+  'phone_call',
+  'email',
+  'office_visit',
+  'internal_discussion',
+  'other',
+] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+
+export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
+  meeting: 'Meeting',
+  phone_call: 'Phone Call',
+  email: 'Email',
+  office_visit: 'Office Visit',
+  internal_discussion: 'Internal Discussion',
+  other: 'Other',
+};

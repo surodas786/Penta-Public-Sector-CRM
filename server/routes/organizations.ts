@@ -1,20 +1,32 @@
 /**
- * Shared organization directory (FR-031).
+ * The shared organization directory (FR-030, FR-031, FR-033).
  *
- * Basic directory information only: name, type, location. No private contact
- * details, no project commentary, and no opportunity counts — a count would
- * have to be scoped, and scoped counts arrive with the M6 aggregates.
+ * Every sales role may read and maintain basic organization details; the
+ * System Administrator has no sales directory (403). The services own every
+ * rule; this router validates input and adapts HTTP.
  */
 import { Router, type RequestHandler } from 'express';
-import { and, asc, count, ilike, isNull, or, type SQL } from 'drizzle-orm';
 
-import type { OrganizationSummaryDto, Paginated } from '../../shared/api.js';
-import { listOrganizationsQuerySchema } from '../../shared/validation.js';
+import {
+  archiveSchema,
+  createOrganizationSchema,
+  listDirectoryQuerySchema,
+  updateOrganizationSchema,
+  uuidField,
+} from '../../shared/validation.js';
 import { requireSalesAccess } from '../auth/sessionGuard.js';
 import type { Database } from '../db/client.js';
-import { organizations } from '../db/schema.js';
-import { unauthenticated } from '../http/errors.js';
+import { notFound, unauthenticated } from '../http/errors.js';
+import { requireIdempotencyKey } from '../http/idempotencyKey.js';
 import { parseOrThrow, singleValueQuery } from '../http/validate.js';
+import {
+  archiveOrganization,
+  createOrganization,
+  getOrganization,
+  listDirectory,
+  updateOrganization,
+} from '../services/directory.js';
+import { runIdempotent } from '../services/idempotency.js';
 
 function handle(fn: (...args: Parameters<RequestHandler>) => Promise<void>): RequestHandler {
   return (req, res, next) => {
@@ -22,8 +34,14 @@ function handle(fn: (...args: Parameters<RequestHandler>) => Promise<void>): Req
   };
 }
 
-export function createOrganizationsRouter(options: { db: Database }): Router {
-  const { db } = options;
+function readId(value: unknown): string {
+  const result = uuidField.safeParse(value);
+  if (!result.success) throw notFound('malformed organization id');
+  return result.data;
+}
+
+export function createOrganizationsRouter(options: { db: Database; csrfGuard: RequestHandler }): Router {
+  const { db, csrfGuard } = options;
   const router = Router();
 
   router.use(requireSalesAccess);
@@ -32,44 +50,63 @@ export function createOrganizationsRouter(options: { db: Database }): Router {
     '/',
     handle(async (req, res) => {
       if (!req.actor) throw unauthenticated();
-
-      const query = parseOrThrow(listOrganizationsQuerySchema, singleValueQuery(req.query));
-
-      const filters: SQL[] = [isNull(organizations.archivedAt)];
-      if (query.q) {
-        const term = `%${query.q}%`;
-        filters.push(or(ilike(organizations.name, term), ilike(organizations.location, term)) as SQL);
-      }
-      const where = and(...filters) as SQL;
-
-      const totalRows = await db.select({ value: count() }).from(organizations).where(where);
-      const total = totalRows[0]?.value ?? 0;
-
-      const rows = await db
-        .select({
-          id: organizations.id,
-          name: organizations.name,
-          type: organizations.type,
-          location: organizations.location,
-        })
-        .from(organizations)
-        .where(where)
-        .orderBy(asc(organizations.name))
-        .limit(query.pageSize)
-        .offset((query.page - 1) * query.pageSize);
-
-      const body: Paginated<OrganizationSummaryDto> = {
-        items: rows,
-        total,
-        page: query.page,
-        pageSize: query.pageSize,
-      };
-      res.json(body);
+      const query = parseOrThrow(listDirectoryQuerySchema, singleValueQuery(req.query));
+      res.json(await listDirectory(db, req.actor, query));
     }),
   );
 
-  // No detail route in M1: the create form needs the searchable list only, and
-  // endpoints are added with the feature that uses them (plan section 5).
+  router.post(
+    '/',
+    csrfGuard,
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+      const command = parseOrThrow(createOrganizationSchema, req.body);
+      const key = requireIdempotencyKey(req);
+      const { result, replayed } = await runIdempotent({
+        db,
+        actorId: actor.id,
+        operation: 'organization.create',
+        key,
+        payload: req.body,
+        execute: (completeClaim) => createOrganization({ db, actor, command, requestId: req.requestId, completeClaim }),
+        replay: (entityId) => getOrganization(db, actor, entityId),
+      });
+      res.status(replayed ? 200 : 201).json(result);
+    }),
+  );
+
+  router.get(
+    '/:id',
+    handle(async (req, res) => {
+      if (!req.actor) throw unauthenticated();
+      res.json(await getOrganization(db, req.actor, readId(req.params.id)));
+    }),
+  );
+
+  router.patch(
+    '/:id',
+    csrfGuard,
+    handle(async (req, res) => {
+      if (!req.actor) throw unauthenticated();
+      const command = parseOrThrow(updateOrganizationSchema, req.body);
+      res.json(
+        await updateOrganization({ db, actor: req.actor, organizationId: readId(req.params.id), command, requestId: req.requestId }),
+      );
+    }),
+  );
+
+  router.post(
+    '/:id/archive',
+    csrfGuard,
+    handle(async (req, res) => {
+      if (!req.actor) throw unauthenticated();
+      const command = parseOrThrow(archiveSchema, req.body);
+      res.json(
+        await archiveOrganization({ db, actor: req.actor, organizationId: readId(req.params.id), command, requestId: req.requestId }),
+      );
+    }),
+  );
 
   return router;
 }

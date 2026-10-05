@@ -216,7 +216,7 @@ test('review 4a: completing the last open follow-up requires a replacement', asy
   await board();
   await card(lane(page, 'Awaiting Tender'), PORTAL).getByRole('button').click();
   const main = page.locator('#main-content');
-  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+  await main.getByRole('tab', { name: /Activities/ }).click();
 
   await main.getByRole('button', { name: 'Complete' }).first().click();
   const dialog = page.getByRole('dialog');
@@ -247,7 +247,7 @@ test('review 4b: an On Hold record may close its last follow-up without a replac
   await board();
   await card(lane(page, 'On Hold'), DOCUMENTS).getByRole('button').click();
   const main = page.locator('#main-content');
-  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+  await main.getByRole('tab', { name: /Activities/ }).click();
 
   await main.getByRole('button', { name: 'Complete' }).first().click();
   const dialog = page.getByRole('dialog');

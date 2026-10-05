@@ -7,7 +7,7 @@
  */
 import { and, eq, or, sql, type SQL } from 'drizzle-orm';
 
-import { opportunities, users } from '../db/schema.js';
+import { contacts, opportunities, opportunityContacts, users } from '../db/schema.js';
 import type { UserRole } from '../../shared/enums.js';
 import { type Actor, hasCoherentScope } from './actor.js';
 
@@ -170,6 +170,50 @@ export function keepsFollowUpAfterTransfer(
   if (assignee.id === transfer.newOwnerId) return true;
   if (assignee.role === 'management') return true;
   return assignee.role === 'lead' && assignee.sectionId === transfer.newSectionId;
+}
+
+// ---------------------------------------------------------------------------
+// Directory, contacts and activities (Milestone 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * SEC-004 / BR-020: a contact is visible only through a live link to an
+ * opportunity the actor can see. Management sees every contact. The predicate
+ * reuses `opportunityScope`, so a transfer changes contact visibility on the
+ * next request with no separate bookkeeping.
+ */
+export function contactScope(actor: Actor): SQL {
+  if (!canAccessSalesRecords(actor)) return MATCH_NOTHING;
+  if (actor.role === 'management') return MATCH_EVERYTHING;
+  return sql`EXISTS (
+    SELECT 1 FROM ${opportunityContacts}
+    JOIN ${opportunities} ON ${opportunities.id} = ${opportunityContacts.opportunityId}
+    WHERE ${opportunityContacts.contactId} = ${contacts.id}
+      AND ${opportunityContacts.removedAt} IS NULL
+      AND ${opportunityScope(actor)}
+  )`;
+}
+
+/** FR-033: every sales role may add to and correct the shared directory. */
+export function canEditDirectory(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/** FR-033: archiving an organization or a contact is management's decision. */
+export function canArchiveDirectory(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && actor.role === 'management';
+}
+
+/**
+ * FR-041: a salesperson amends only activities they authored, and only while
+ * the record is still theirs to see; leads and management amend any activity
+ * in scope. Visibility is decided separately, through the opportunity: an
+ * author who has lost access gets a 404 before this is ever asked.
+ */
+export function canEditActivity(actor: Actor, activity: { authorId: string }): boolean {
+  if (!canAccessSalesRecords(actor)) return false;
+  if (actor.role === 'management' || actor.role === 'lead') return true;
+  return activity.authorId === actor.id;
 }
 
 export function canAdministerAccounts(actor: Actor): boolean {

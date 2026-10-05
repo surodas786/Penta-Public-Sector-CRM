@@ -63,15 +63,13 @@ export function ApiShell() {
       to: '/organizations',
       label: 'Organizations & Contacts',
       icon: Building2Icon,
-      available: false,
+      available: true,
       show: sales,
-      reason: 'Contacts and relationship notes arrive with the organizations and contacts milestone.',
     },
     {
       to: '/activities',
       label: 'Activities & Follow-ups',
       icon: CalendarCheckIcon,
-      // Follow-ups are live; the Activity Log tab inside says it arrives with M4.
       available: true,
       show: sales,
     },
