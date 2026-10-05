@@ -35,7 +35,7 @@ import {
   isTerminalStage,
   type BoardLane,
 } from '../../../shared/enums.js';
-import { formatBdt, formatBdtShort } from '../../../shared/money.js';
+import { formatBdt, formatBdtShort, isValidMoneyString } from '../../../shared/money.js';
 import { ApiRequestError, newIdempotencyKey } from '../../api/client.js';
 import {
   fetchOpportunity,
@@ -625,6 +625,16 @@ function HistoryTab({
   );
 }
 
+const MONEY_FIELDS = new Set(['estimatedValue', 'awardedValue']);
+
+/** History carries storage values for dates and money; show them as the rest of the page does. */
+function displayChange(field: string, value: string | null): string {
+  if (value === null) return '—';
+  if (MONEY_FIELDS.has(field) && isValidMoneyString(value)) return formatBdt(value);
+  if (/Date$/.test(field) && /^\d{4}-\d{2}-\d{2}$/.test(value)) return formatCalendarDate(value);
+  return value;
+}
+
 function HistoryItem({ entry }: { entry: HistoryEntryDto }) {
   const creation = entry.action === 'opportunity.created' || entry.action === 'follow_up.created';
   return (
@@ -645,11 +655,11 @@ function HistoryItem({ entry }: { entry: HistoryEntryDto }) {
             <li key={change.field} className="text-[12.5px] text-slate-600">
               <span className="font-medium text-slate-700">{change.label}</span>:{' '}
               {creation || change.before === null ? (
-                <span>{change.after ?? '—'}</span>
+                <span>{displayChange(change.field, change.after)}</span>
               ) : (
                 <>
-                  <span className="text-slate-500 line-through">{change.before ?? '—'}</span>{' '}
-                  <span aria-hidden="true">→</span> <span>{change.after ?? '—'}</span>
+                  <span className="text-slate-500 line-through">{displayChange(change.field, change.before)}</span>{' '}
+                  <span aria-hidden="true">→</span> <span>{displayChange(change.field, change.after)}</span>
                 </>
               )}
             </li>

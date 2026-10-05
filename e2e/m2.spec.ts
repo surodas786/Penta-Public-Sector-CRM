@@ -1,23 +1,33 @@
 /**
- * Milestone 2 browser checks (AT-05, AT-06, FR-021).
+ * Milestone 2 browser checks (AT-05, AT-06, FR-021, BR-011, BR-012, BR-014).
  *
- * Real drag-and-drop against the real API and the test database: a cancelled
- * or refused move puts the card back exactly where it was, a confirmed move
- * survives a reload, outcome fields are enforced, and completing the last open
- * follow-up asks for its replacement. The permission and integrity rules
- * themselves are proved by the backend suite; this checks the UI honours them.
+ * Real drag-and-drop against the real API and the test database. Each test
+ * maps to one of the Milestone 2 review flows: a move persists across a
+ * reload; Awarded without value/date and Lost without a reason are refused;
+ * On Hold keeps the stage; the last open follow-up needs a replacement unless
+ * the record is On Hold; a salesperson cannot reopen a closed record and
+ * management can, with a reason. A cancelled or refused move puts the card
+ * back where it was.
+ *
+ * The salesperson tests share one signed-in page: the whole browser run must
+ * stay under the login rate limit (10 per 15 minutes, SEC-031), which is not
+ * relaxed for tests. Set REVIEW_SHOTS to a directory to save a screenshot of
+ * each review flow's outcome.
  */
+import path from 'node:path';
+
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'Synthetic-Dev-2026';
 const RAFIQ = 'rafiq.hasan@example.com';
+const ARIF = 'arif.rahman@example.com';
 
 const PORTAL = 'Municipal Service Portal'; // Rafiq, Requirements Discussion
 const DOCUMENTS = 'Agency Document Management System'; // Rafiq, Tender Published
+const TRAINING = 'Training Institute Learning Portal'; // Rafiq, Bid Submitted
 const RIVERBANK = 'Riverbank e-Services Portal'; // Rafiq, Awarded
 
 test.describe.configure({ mode: 'serial' });
-
 
 async function signIn(page: Page, email: string) {
   await page.goto('/sign-in');
@@ -25,6 +35,11 @@ async function signIn(page: Page, email: string) {
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/opportunities$/);
+}
+
+async function shot(page: Page, name: string) {
+  const directory = process.env.REVIEW_SHOTS;
+  if (directory) await page.screenshot({ path: path.join(directory, `${name}.png`), fullPage: true });
 }
 
 const lane = (page: Page, title: string) => page.getByRole('region', { name: `${title} column` });
@@ -58,8 +73,25 @@ async function laneOrder(page: Page, title: string): Promise<string[]> {
     .allInnerTexts();
 }
 
-test('a cancelled stage dialog returns the card to its original lane and position', async ({ page }) => {
+/** One salesperson session for every test that does not change account. */
+let page: Page;
+
+test.beforeAll(async ({ browser }) => {
+  page = await browser.newPage();
   await signIn(page, RAFIQ);
+});
+
+test.afterAll(async () => {
+  await page.close();
+});
+
+async function board() {
+  await page.goto('/opportunities');
+  await expect(lane(page, 'Identified')).toBeVisible();
+}
+
+test('a cancelled stage dialog returns the card to its original lane and position', async () => {
+  await board();
   await expect(card(lane(page, 'Requirements Discussion'), PORTAL)).toBeVisible();
   const before = await laneOrder(page, 'Requirements Discussion');
   expect(before).toContain(PORTAL);
@@ -79,8 +111,8 @@ test('a cancelled stage dialog returns the card to its original lane and positio
   expect(await laneOrder(page, 'Requirements Discussion')).toEqual(before);
 });
 
-test('a move the server refuses returns the card and says why', async ({ page }) => {
-  await signIn(page, RAFIQ);
+test('a move the server refuses returns the card and says why', async () => {
+  await board();
   await expect(card(lane(page, 'Requirements Discussion'), PORTAL)).toBeVisible();
   const before = await laneOrder(page, 'Requirements Discussion');
   expect(before).toContain(PORTAL);
@@ -97,18 +129,21 @@ test('a move the server refuses returns the card and says why', async ({ page })
     }),
   );
 
-  // The next stage with a next action in place is sent without a dialog.
-  await drag(page, card(lane(page, 'Requirements Discussion'), PORTAL), lane(page, 'Awaiting Tender'));
-  await expect(page.getByText(/This record changed after you opened it/)).toBeVisible();
+  try {
+    // The next stage with a next action in place is sent without a dialog.
+    await drag(page, card(lane(page, 'Requirements Discussion'), PORTAL), lane(page, 'Awaiting Tender'));
+    await expect(page.getByText(/This record changed after you opened it/)).toBeVisible();
 
-  await expect(card(lane(page, 'Requirements Discussion'), PORTAL)).toBeVisible();
-  await expect(card(lane(page, 'Awaiting Tender'), PORTAL)).toHaveCount(0);
-  expect(await laneOrder(page, 'Requirements Discussion')).toEqual(before);
-  await page.unroute('**/api/opportunities/*/stage');
+    await expect(card(lane(page, 'Requirements Discussion'), PORTAL)).toBeVisible();
+    await expect(card(lane(page, 'Awaiting Tender'), PORTAL)).toHaveCount(0);
+    expect(await laneOrder(page, 'Requirements Discussion')).toEqual(before);
+  } finally {
+    await page.unroute('**/api/opportunities/*/stage');
+  }
 });
 
-test('a confirmed move persists across a reload', async ({ page }) => {
-  await signIn(page, RAFIQ);
+test('review 1: a moved card stays moved after a reload', async () => {
+  await board();
   await drag(page, card(lane(page, 'Requirements Discussion'), PORTAL), lane(page, 'Awaiting Tender'));
 
   await expect(page.getByText('Moved to Awaiting Tender')).toBeVisible();
@@ -117,26 +152,47 @@ test('a confirmed move persists across a reload', async ({ page }) => {
   await page.reload();
   await expect(card(lane(page, 'Awaiting Tender'), PORTAL)).toBeVisible();
   await expect(card(lane(page, 'Requirements Discussion'), PORTAL)).toHaveCount(0);
+  await shot(page, 'review-1-move-persists-after-reload');
 });
 
-test('Awarded refuses to save without the actual value, then the card goes back', async ({ page }) => {
-  await signIn(page, RAFIQ);
+test('review 2a: Awarded without an actual value or award date is refused', async () => {
+  await board();
   await drag(page, card(lane(page, 'Tender Published'), DOCUMENTS), lane(page, 'Awarded'));
 
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Move to Awarded' })).toBeVisible();
   await dialog.getByLabel('Actual awarded value (BDT)').fill('');
+  await dialog.getByLabel('Award date').fill('');
   await dialog.getByRole('button', { name: 'Confirm stage change' }).click();
 
-  // The server's field error, next to the field; nothing saved.
+  // The server's field errors, next to their fields; nothing saved.
   await expect(dialog.getByText('Enter the actual awarded value.')).toBeVisible();
+  await expect(dialog.getByText('Enter the award date.')).toBeVisible();
+  await shot(page, 'review-2a-awarded-refused');
+
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(card(lane(page, 'Tender Published'), DOCUMENTS)).toBeVisible();
   await expect(card(lane(page, 'Awarded'), DOCUMENTS)).toHaveCount(0);
 });
 
-test('On Hold keeps the stage and moves the card to the On Hold lane', async ({ page }) => {
-  await signIn(page, RAFIQ);
+test('review 2b: Lost without a reason is refused', async () => {
+  await board();
+  await drag(page, card(lane(page, 'Bid Submitted'), TRAINING), lane(page, 'Lost'));
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'Move to Lost' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Confirm stage change' }).click();
+
+  await expect(dialog.getByText('Choose the reason the opportunity was lost.')).toBeVisible();
+  await shot(page, 'review-2b-lost-refused');
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(card(lane(page, 'Bid Submitted'), TRAINING)).toBeVisible();
+  await expect(card(lane(page, 'Lost'), TRAINING)).toHaveCount(0);
+});
+
+test('review 3: On Hold keeps the previous stage', async () => {
+  await board();
   await drag(page, card(lane(page, 'Tender Published'), DOCUMENTS), lane(page, 'On Hold'));
 
   const dialog = page.getByRole('dialog');
@@ -150,18 +206,14 @@ test('On Hold keeps the stage and moves the card to the On Hold lane', async ({ 
   await expect(held).toBeVisible();
 
   await held.getByRole('button').click();
-  await expect(page.getByText('On Hold — stage retained as Tender Published')).toBeVisible();
+  const main = page.locator('#main-content');
+  await expect(main.getByText('On Hold — stage retained as Tender Published')).toBeVisible();
+  await expect(main.getByText('Ministry budget review until next quarter.')).toBeVisible();
+  await shot(page, 'review-3-on-hold-keeps-stage');
 });
 
-test('a salesperson cannot drag a closed card', async ({ page }) => {
-  await signIn(page, RAFIQ);
-  const closed = card(lane(page, 'Awarded'), RIVERBANK);
-  await expect(closed).toHaveAttribute('draggable', 'false');
-  await expect(closed).toHaveAttribute('title', /Only management can reopen/);
-});
-
-test('completing the last open follow-up asks for its replacement', async ({ page }) => {
-  await signIn(page, RAFIQ);
+test('review 4a: completing the last open follow-up requires a replacement', async () => {
+  await board();
   await card(lane(page, 'Awaiting Tender'), PORTAL).getByRole('button').click();
   const main = page.locator('#main-content');
   await main.getByRole('tab', { name: /Follow-ups/ }).click();
@@ -169,6 +221,13 @@ test('completing the last open follow-up asks for its replacement', async ({ pag
   await main.getByRole('button', { name: 'Complete' }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Next follow-up (required)')).toBeVisible();
+  // It also says how to stop work instead of replacing the task.
+  await expect(dialog.getByText(/put the opportunity On Hold, cancel it or record its outcome/)).toBeVisible();
+
+  // Submitting without the replacement is refused by the server.
+  await dialog.getByRole('button', { name: 'Mark complete' }).click();
+  await expect(dialog.getByText('Describe the next action in at least 3 characters.')).toBeVisible();
+  await shot(page, 'review-4a-replacement-required');
 
   await dialog.getByLabel('Completion note').fill('Scope confirmed in writing.');
   await dialog.getByLabel('Next action').fill('Send the revised proposal');
@@ -182,4 +241,72 @@ test('completing the last open follow-up asks for its replacement', async ({ pag
   await main.getByRole('tab', { name: /Change History/ }).click();
   await expect(main.getByText('Follow-up completed').first()).toBeVisible();
   await expect(main.getByText('Stage changed').first()).toBeVisible();
+});
+
+test('review 4b: an On Hold record may close its last follow-up without a replacement', async () => {
+  await board();
+  await card(lane(page, 'On Hold'), DOCUMENTS).getByRole('button').click();
+  const main = page.locator('#main-content');
+  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+
+  await main.getByRole('button', { name: 'Complete' }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Next follow-up (required)')).toHaveCount(0);
+  await expect(dialog.getByText('Also schedule the next follow-up')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Mark complete' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await expect(main.getByRole('button', { name: 'Complete' })).toHaveCount(0);
+  await shot(page, 'review-4b-on-hold-closes-last-task');
+});
+
+test('review 5a: a salesperson cannot reopen an Awarded opportunity', async () => {
+  await board();
+  const closed = card(lane(page, 'Awarded'), RIVERBANK);
+  await expect(closed).toHaveAttribute('draggable', 'false');
+  await expect(closed).toHaveAttribute('title', /Only management can reopen/);
+
+  await closed.getByRole('button').click();
+  const main = page.locator('#main-content');
+  await expect(main.getByRole('heading', { name: RIVERBANK })).toBeVisible();
+  await expect(main.getByText('Closed as Awarded. Only management can reopen it.')).toBeVisible();
+  await expect(main.getByRole('button', { name: 'Reopen' })).toHaveCount(0);
+  await expect(main.getByRole('combobox', { name: 'Change stage' })).toHaveCount(0);
+  await shot(page, 'review-5a-salesperson-cannot-reopen');
+});
+
+test('review 5b: management reopens with a reason', async ({ browser }) => {
+  const manager = await browser.newPage();
+  try {
+    await signIn(manager, ARIF);
+    await card(lane(manager, 'Awarded'), RIVERBANK).getByRole('button').click();
+    const main = manager.locator('#main-content');
+    await main.getByRole('button', { name: 'Reopen' }).click();
+
+    const dialog = manager.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: 'Reopen opportunity' })).toBeVisible();
+
+    // No reason and no next action: refused.
+    await dialog.getByRole('button', { name: 'Reopen opportunity' }).click();
+    await expect(dialog.getByText('Explain why the opportunity is being reopened.')).toBeVisible();
+    await expect(dialog.getByText('Describe the next action in at least 3 characters.')).toBeVisible();
+
+    await dialog.getByLabel('Reopen at stage').selectOption('evaluation');
+    await dialog.getByLabel('Reason for reopening').fill('Award withdrawn after a procedural challenge.');
+    await dialog.getByLabel('Next action').fill('Request the re-evaluation timetable');
+    await dialog.getByLabel('Due date').fill('2027-01-20');
+    await dialog.getByRole('button', { name: 'Reopen opportunity' }).click();
+    await expect(dialog).toHaveCount(0);
+
+    await manager.reload();
+    await expect(main.getByText('Evaluation', { exact: true }).first()).toBeVisible();
+    await main.getByRole('tab', { name: /Change History/ }).click();
+    const reopened = main.getByRole('listitem').filter({ hasText: 'Opportunity reopened' });
+    await expect(reopened).toContainText('Reason: Award withdrawn after a procedural challenge.');
+    // The previous outcome stays in history.
+    await expect(reopened).toContainText('Awarded value');
+    await shot(manager, 'review-5b-management-reopened-with-reason');
+  } finally {
+    await manager.close();
+  }
 });

@@ -89,7 +89,7 @@ All on 05 October 2026, against PostgreSQL 18 in Docker (port 55432).
 | `npm run lint` | **Pass** — 0 errors, 5 warnings (the same pre-existing five; the M2 helpers were moved out of component files rather than adding new ones) |
 | `npm run check:env` | **Pass** — 16 variables |
 | `npm test` | **240 passed, 0 failed**, 9 files (168 M1 + 72 M2) |
-| `npm run test:smoke` | **9 passed** — 2 M1 smoke + 7 M2 browser checks |
+| `npm run test:smoke` | **12 passed** — 2 M1 smoke + 10 M2 browser checks (rerun after the review fixes below) |
 | `npm run build` | **Pass** — demo-exclusion check passes before and after bundling; server compiles |
 | `npm run evidence` | 22 screenshots in `docs/evidence/` (14 M1 recaptured on the current UI, 8 new) |
 
@@ -98,7 +98,7 @@ All on 05 October 2026, against PostgreSQL 18 in Docker (port 55432).
 | `transitions.test.ts` | 44 | AT-05: forward/skip/backward, history, Awarded and Lost validation and closure, On Hold/Cancelled/return, reopening permissions and history, active-pipeline value, 404 equality, forged fields, idempotent replay and key reuse, replay after access loss, seven database CHECK constraints from the application role |
 | `followUps.test.ts` | 23 | AT-06: last-task replacement rule (complete and cancel), On Hold exemption, double-click and repeated requests, reschedule audit, **Dhaka-midnight overdue boundary with the injected clock**, overdue → upcoming after rescheduling, historical past-due entries, assignee eligibility for every role including inactive owners, closed-record refusal, scope and 404 equality, list scoping and counts, history wording |
 | `m2Concurrency.test.ts` | 5 | Genuinely concurrent connections, 4 rounds each: two completions of the last two tasks; two stage changes from one version; completion racing a Lost outcome; one key sent twice at once; a mixed burst checked against the next-action invariant across the whole database |
-| `e2e/m2.spec.ts` | 7 | Real drag-and-drop: cancelled dialog restores lane and position; a refused (409) move restores the card and shows why; a confirmed move survives reload; Awarded without a value shows the server's field error and restores; On Hold keeps the stage; a salesperson cannot drag a closed card; completing the last follow-up asks for its replacement |
+| `e2e/m2.spec.ts` | 10 | Real drag-and-drop: cancelled dialog restores lane and position; a refused (409) move restores the card and shows why; plus the five review flows in §7 |
 
 **Mutation check.** With the opportunity row lock removed, the
 concurrent-completion test fails (both requests succeed and the record is left
@@ -144,7 +144,31 @@ next action and both history events.
 | AT-15 | Partial, as planned: concurrency and retries for M2 operations. Transfer/task races need M3 |
 | AT-11 | Partial: the Dhaka-midnight task boundary is tested. Tender 72-hour and seven-day windows arrive with M5/M6 |
 
-### 7. Remaining issues and limitations
+### 7. Milestone 2 review flows
+
+Requested before Milestone 3. The Chrome extension was not connected, so the
+flows were run in a real Chromium browser through Playwright, against the real
+API and a freshly seeded test database. They are now permanent tests in
+`e2e/m2.spec.ts` (run with `npm run test:smoke`; set `REVIEW_SHOTS=<dir>` to
+save a screenshot of each outcome).
+
+| Review flow | Result |
+| --- | --- |
+| Move a Kanban card, refresh, the change persists | **Pass** — card moved to Awaiting Tender, still there after reload |
+| Awarded without value/date fails | **Pass** — both field errors shown, nothing saved, card returns to Tender Published |
+| Lost without a reason fails | **Pass** — "Choose the reason the opportunity was lost.", card returns to Bid Submitted |
+| On Hold keeps the previous stage | **Pass** — On Hold lane; detail shows "stage retained as Tender Published" and the note |
+| Completing the last open follow-up needs a replacement or a closing/hold transition | **Pass** — dialog requires the next follow-up and names On Hold / cancel / outcome as the alternatives; submitting without it is refused; with it, it saves and becomes the next action. On an On Hold record the last task closes without a replacement |
+| Salesperson cannot reopen; management can with a reason | **Pass** — salesperson: card not draggable, no Reopen button or stage menu, "Only management can reopen it"; management: refused without a reason and next action, then reopened at Evaluation with the reason and previous outcome in Change History |
+
+**Found and fixed during the review:** the reopening entry in Change History
+listed fields that were empty before and after (e.g. "Lost reason: —") and
+showed raw `2026-10-01` dates and `23500000.00` amounts. Unchanged fields are
+now omitted and dates and money are formatted like the rest of the page. The
+browser suite also now shares one salesperson session, so the full run signs
+in 5 times instead of brushing against the 10-per-15-minutes login limit.
+
+### 8. Remaining issues and limitations
 
 - **Board beyond 50 cards per lane** shows "N more — use the Table view"; the
   lane count and value still include them.
@@ -162,7 +186,7 @@ next action and both history events.
 - **Pre-existing**: five fast-refresh lint warnings; the local `main` branch
   is behind `origin/main`.
 
-### 8. Local startup
+### 9. Local startup
 
 ```bash
 npm install
@@ -182,7 +206,7 @@ and use Change Stage… and the Follow-ups tab; as `arif.rahman@example.com`,
 open an Awarded record and use Reopen. `npm run db:reset` restores the
 fixtures.
 
-### 9. Next task
+### 10. Next task
 
 **Milestone 3 — transfers and administration** (`Plan.md` §6), not to be
 started until this milestone is reviewed. The transfer service must take the

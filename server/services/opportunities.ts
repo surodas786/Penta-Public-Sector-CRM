@@ -798,6 +798,9 @@ function toHistoryChanges(
 
   return [...keys]
     .filter((key) => !HISTORY_CONTEXT_KEYS.has(key))
+    // A field that was empty before and after (e.g. the loss fields when an
+    // Awarded record is reopened) is not a change worth showing.
+    .filter((key) => (before[key] ?? null) !== null || (after[key] ?? null) !== null)
     .map((key) => ({
       field: key,
       label: OPPORTUNITY_FIELD_LABELS[key] ?? key,
