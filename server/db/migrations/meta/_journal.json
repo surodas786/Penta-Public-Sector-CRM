@@ -15,6 +15,13 @@
       "when": 1791118421581,
       "tag": "0001_privileges_and_reference_sequence",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791201209242,
+      "tag": "0002_stage_status_follow_up_integrity",
+      "breakpoints": true
     }
   ]
 }

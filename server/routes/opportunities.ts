@@ -7,34 +7,48 @@
  */
 import { Router, type RequestHandler } from 'express';
 
-import { IDEMPOTENCY_HEADER } from '../../shared/api.js';
+import type { OpportunityDetailDto } from '../../shared/api.js';
 import {
   FORBIDDEN_PATCH_FIELDS,
+  boardQuerySchema,
+  changeStageSchema,
+  changeStatusSchema,
+  createFollowUpSchema,
   createOpportunitySchema,
   listOpportunitiesQuerySchema,
   paginationQuerySchema,
   patchOpportunitySchema,
+  reopenOpportunitySchema,
   uuidField,
 } from '../../shared/validation.js';
 import { requireAuth, requireSalesAccess } from '../auth/sessionGuard.js';
 import type { Database } from '../db/client.js';
-import { forbidden, notFound, unauthenticated, validationFailed } from '../http/errors.js';
+import { forbidden, notFound, unauthenticated } from '../http/errors.js';
+import { requireIdempotencyKey } from '../http/idempotencyKey.js';
 import { parseOrThrow, singleValueQuery } from '../http/validate.js';
+import type { Actor } from '../policy/actor.js';
 import { canCreateOpportunity } from '../policy/scope.js';
-import {
-  claimIdempotencyKey,
-  completeIdempotencyClaim,
-  releaseIdempotencyClaim,
-} from '../services/idempotency.js';
+import { createFollowUp, getScopedFollowUp, listAssigneeOptions } from '../services/followUps.js';
+import { runIdempotent, type CompleteClaimInTransaction } from '../services/idempotency.js';
 import {
   assertOpportunityVisible,
   createOpportunity,
+  getBoard,
+  getCreationResult,
   getOpportunityDetail,
   listOpportunities,
   listOpportunityFollowUps,
   listOpportunityHistory,
   patchOpportunity,
 } from '../services/opportunities.js';
+import { changeStage, changeStatus, reopenOpportunity } from '../services/transitions.js';
+
+interface TransitionArgs {
+  actor: Actor;
+  opportunityId: string;
+  requestId: string;
+  completeClaim: CompleteClaimInTransaction;
+}
 
 /** Wraps an async handler so a rejection reaches the error middleware. */
 function handle(fn: (...args: Parameters<RequestHandler>) => Promise<void>): RequestHandler {
@@ -100,64 +114,42 @@ export function createOpportunitiesRouter(options: {
       }
 
       const command = parseOrThrow(createOpportunitySchema, req.body);
+      const key = requireIdempotencyKey(req);
 
-      const idempotencyKey = req.get(IDEMPOTENCY_HEADER)?.trim();
-      if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
-        throw validationFailed({
-          [IDEMPOTENCY_HEADER]:
-            'Provide an Idempotency-Key header between 8 and 200 characters so a retry cannot create a duplicate.',
-        });
-      }
-
-      // Claimed before the business transaction so a concurrent duplicate
-      // collides on the unique index instead of racing through (BR-091).
-      const claim = await claimIdempotencyKey({
+      // The claim is taken before the business transaction, so a concurrent
+      // duplicate collides on the unique index instead of racing through, and
+      // it is completed inside that transaction (BR-091).
+      const { result, replayed } = await runIdempotent({
         db,
         actorId: actor.id,
         operation: 'opportunity.create',
-        key: idempotencyKey,
+        key,
         payload: req.body,
-      });
-
-      if (claim.kind === 'replay') {
+        execute: (completeClaim) =>
+          createOpportunity({ db, actor, command, requestId: req.requestId, completeClaim }),
         // Re-read through the scoped query: a replay after access was revoked
         // must 404 rather than return stored commercial data.
-        const opportunity = await getOpportunityDetail(db, actor, claim.entityId);
-        const followUps = await listOpportunityFollowUps({
-          db,
-          actor,
-          opportunityId: claim.entityId,
-          page: 1,
-          pageSize: 1,
-        });
-        res.status(200).json({
-          opportunity,
-          firstFollowUp: followUps.items[0] ?? null,
-          warnings: [],
-          replayed: true,
-        });
+        replay: (entityId) => getCreationResult(db, actor, entityId),
+      });
+
+      if (replayed) {
+        res.status(200).json({ ...result, replayed: true });
         return;
       }
+      res.status(201).json(result);
+    }),
+  );
 
-      try {
-        const result = await createOpportunity({
-          db,
-          actor,
-          command,
-          requestId: req.requestId,
-        });
-        await completeIdempotencyClaim({
-          db,
-          claimId: claim.claimId,
-          entityId: result.opportunity.id,
-        });
-        res.status(201).json(result);
-      } catch (error) {
-        // Release the key so an immediate corrected retry is not blocked by a
-        // claim that produced nothing.
-        await releaseIdempotencyClaim({ db, claimId: claim.claimId });
-        throw error;
-      }
+  // --- Pipeline board (registered before /:id) ----------------------------
+  router.get(
+    '/board',
+    requireSalesAccess,
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+
+      const query = parseOrThrow(boardQuerySchema, singleValueQuery(req.query));
+      res.json(await getBoard(db, actor, query));
     }),
   );
 
@@ -231,6 +223,101 @@ export function createOpportunitiesRouter(options: {
       const id = readIdParam(req.params.id);
       const { page, pageSize } = parseOrThrow(paginationQuerySchema, singleValueQuery(req.query));
       res.json(await listOpportunityHistory({ db, actor, opportunityId: id, page, pageSize }));
+    }),
+  );
+
+  // --- Stage, status and reopening (M2) -----------------------------------
+  //
+  // Each is a dedicated, versioned, idempotent operation. The fingerprint
+  // covers the record id as well as the body, so a key can never be replayed
+  // against a different opportunity. `build` validates the body first (422
+  // before any lookup, so it says nothing about the record).
+  const transition = (
+    operation: string,
+    build: (body: unknown) => (args: TransitionArgs) => Promise<OpportunityDetailDto>,
+  ): RequestHandler =>
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+
+      const id = readIdParam(req.params.id);
+      const run = build(req.body);
+      const key = requireIdempotencyKey(req);
+
+      const { result } = await runIdempotent({
+        db,
+        actorId: actor.id,
+        operation,
+        key,
+        payload: { id, body: req.body },
+        execute: (completeClaim) =>
+          run({ actor, opportunityId: id, requestId: req.requestId, completeClaim }),
+        replay: (entityId) => getOpportunityDetail(db, actor, entityId),
+      });
+      res.json(result);
+    });
+
+  router.post(
+    '/:id/stage',
+    csrfGuard,
+    transition('opportunity.stage', (body) => {
+      const command = parseOrThrow(changeStageSchema, body);
+      return (args) => changeStage({ db, command, ...args });
+    }),
+  );
+
+  router.post(
+    '/:id/status',
+    csrfGuard,
+    transition('opportunity.status', (body) => {
+      const command = parseOrThrow(changeStatusSchema, body);
+      return (args) => changeStatus({ db, command, ...args });
+    }),
+  );
+
+  router.post(
+    '/:id/reopen',
+    csrfGuard,
+    transition('opportunity.reopen', (body) => {
+      const command = parseOrThrow(reopenOpportunitySchema, body);
+      return (args) => reopenOpportunity({ db, command, ...args });
+    }),
+  );
+
+  // --- Follow-ups on one opportunity (M2) ----------------------------------
+  router.get(
+    '/:id/follow-up-assignees',
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+
+      const id = readIdParam(req.params.id);
+      res.json({ items: await listAssigneeOptions(db, actor, id) });
+    }),
+  );
+
+  router.post(
+    '/:id/follow-ups',
+    csrfGuard,
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+
+      const id = readIdParam(req.params.id);
+      const command = parseOrThrow(createFollowUpSchema, req.body);
+      const key = requireIdempotencyKey(req);
+
+      const { result, replayed } = await runIdempotent({
+        db,
+        actorId: actor.id,
+        operation: 'follow_up.create',
+        key,
+        payload: { id, body: req.body },
+        execute: (completeClaim) =>
+          createFollowUp({ db, actor, opportunityId: id, command, requestId: req.requestId, completeClaim }),
+        replay: (entityId) => getScopedFollowUp(db, actor, entityId),
+      });
+      res.status(replayed ? 200 : 201).json(result);
     }),
   );
 

@@ -10,6 +10,7 @@ import { AccessDeniedPanel } from './components/Feedback.js';
 import { ApiShell } from './layout/ApiShell.js';
 import { UnavailableFeature } from './components/Feedback.js';
 import { AdministrationPage } from './pages/AdministrationPage.js';
+import { FollowUpsPage } from './pages/FollowUpsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
 import { OpportunityDetailPage } from './pages/OpportunityDetailPage.js';
@@ -82,15 +83,7 @@ function AppRoutes() {
               />
             }
           />
-          <Route
-            path="activities"
-            element={
-              <UnavailableFeature
-                title="Activities & Follow-ups"
-                reason="Logging activities and completing, rescheduling or cancelling follow-ups arrive with the stages and follow-ups milestone."
-              />
-            }
-          />
+          <Route path="activities" element={<FollowUpsPage />} />
           <Route
             path="tenders"
             element={

@@ -5,7 +5,9 @@
  * session data and any private account field (plan 7.3).
  */
 import type {
+  BoardLane,
   FollowUpState,
+  LossReason,
   OpportunityStage,
   OpportunityStatus,
   OrganizationType,
@@ -30,6 +32,7 @@ export type ApiErrorCode =
   | 'version_conflict'
   | 'idempotency_key_reuse'
   | 'idempotency_in_progress'
+  | 'invalid_transition'
   | 'validation_failed'
   | 'rate_limited'
   | 'invalid_csrf'
@@ -94,6 +97,8 @@ export interface OpportunityListItemDto {
   sectionId: string;
   sectionName: string;
   expectedAwardDate: string | null;
+  /** Decimal string; set only while the stage is Awarded (D-006 shows it on the board). */
+  awardedValue: string | null;
   nextAction: NextActionDto | null;
   createdAt: string;
   version: number;
@@ -114,6 +119,14 @@ export interface OpportunityDetailDto extends OpportunityListItemDto {
   description: string | null;
   fundingSource: string | null;
   expectedPublicationDate: string | null;
+  /** BR-011 outcome fields. Cleared on reopening; the previous outcome stays in history. */
+  awardDate: string | null;
+  lossReason: LossReason | null;
+  lossNote: string | null;
+  /** Lost date, or the date a record was cancelled. */
+  closedDate: string | null;
+  /** The explanation recorded when the record was put On Hold or Cancelled. */
+  statusNote: string | null;
   createdByName: string;
   updatedAt: string;
 }
@@ -127,7 +140,58 @@ export interface FollowUpDto {
   priority: Priority;
   assigneeId: string;
   assigneeName: string;
+  createdByName: string;
   createdAt: string;
+  completedAt: string | null;
+  completedByName: string | null;
+  completionNote: string | null;
+  cancelledAt: string | null;
+  cancelledByName: string | null;
+  cancellationReason: string | null;
+  version: number;
+}
+
+/** A follow-up in the cross-opportunity list, with the parent it belongs to. */
+export interface FollowUpListItemDto extends FollowUpDto {
+  opportunity: {
+    id: string;
+    reference: string;
+    name: string;
+    stage: OpportunityStage;
+    status: OpportunityStatus;
+    ownerName: string;
+    sectionName: string;
+  };
+}
+
+export interface FollowUpListDto extends Paginated<FollowUpListItemDto> {
+  /** Today's Dhaka date, the basis every bucket below was computed against (FR-043). */
+  today: string;
+  /** Per-view totals over the same scoped, filtered population. */
+  counts: Record<'open' | 'overdue' | 'today' | 'upcoming' | 'completed' | 'cancelled' | 'all', number>;
+}
+
+/** Minimal assignee option (FR-042). No email, no private account field. */
+export interface AssigneeOptionDto {
+  id: string;
+  fullName: string;
+  relation: 'owner' | 'section_lead' | 'management';
+}
+
+export interface BoardLaneDto {
+  lane: BoardLane;
+  /** Permitted records in this lane, which may exceed `items.length`. */
+  total: number;
+  /** Decimal string. Awarded sums actual awarded value; every other lane sums estimates (D-006). */
+  value: string;
+  valueBasis: 'awarded' | 'estimated';
+  items: OpportunityListItemDto[];
+}
+
+export interface BoardDto {
+  lanes: BoardLaneDto[];
+  /** Cards returned per lane at most; the table view pages through the rest. */
+  laneLimit: number;
 }
 
 export interface HistoryEntryDto {
@@ -137,6 +201,8 @@ export interface HistoryEntryDto {
   actorName: string;
   occurredAt: string;
   reason: string | null;
+  /** For follow-up events, the task the event concerns. */
+  subject: string | null;
   changes: HistoryChangeDto[];
 }
 

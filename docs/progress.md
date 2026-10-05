@@ -1,5 +1,196 @@
 # Implementation progress
 
+**Current state (05 October 2026):** Milestone 2 complete on branch
+`m2-stages-status-follow-ups`, not merged and not deployed. Milestone 3 has not
+been started. Sections, newest first: Milestone 2 · Milestone 1 handover review
+· Milestone 1.
+
+---
+
+## Milestone 2 — stages, statuses and follow-ups
+
+**Branch:** `m2-stages-status-follow-ups`, created from `origin/main` at `94fae7f` (merged M1)
+**Commits:** `1f59c0b` (M1 handover review), then the Milestone 2 commit that contains this section
+**Date:** 05 October 2026
+**Status:** Complete and ready for review. Not merged. Milestone 3 not started.
+
+### 1. What was built
+
+| Requirement | Where | What it does |
+| --- | --- | --- |
+| FR-020, FR-021 | `server/services/transitions.ts` `changeStage`; `POST /api/opportunities/:id/stage` | Stage changes from the board and the detail page's dropdown. The next stage needs nothing extra; skipping forward or moving back requires an explanation (stored as the audit reason). Each change is its own history entry |
+| BR-011 | same | Awarded requires a positive actual value (decimal string) and an award date not in the future. Lost requires one of the six preset reasons and a closed date; "Other" requires explanatory text |
+| BR-010, D-001 | `changeStatus`; `POST …/status` | On Hold and Cancelled keep the stored stage, require an explanation, and are refused on Awarded/Lost. A held or cancelled record appears only in its status lane; returning to Active restores the retained stage |
+| BR-012 | `reopenOpportunity`; `POST …/reopen` | Management only (403 for leads and salespeople on a visible record). Requires a reason, a working stage and a new next action; clears the outcome fields, and the previous outcome is kept in the reopening event's before-values |
+| BR-014 | `transitions.ts`, `followUps.ts` | Awarded, Lost and Cancelled close every open follow-up as **Cancelled** with a reason, never Completed, one audit event each. On Hold keeps tasks open and the UI marks them "On Hold". Returning to Active requires a next action when none is open |
+| FR-042, D-004 | `server/services/followUps.ts`; `POST /api/opportunities/:id/follow-ups`, `GET …/follow-up-assignees` | Quick creation with server-checked assignees: salesperson → self; lead → owner or self; management → owner, the section's lead or a management account. All must be active and already able to see the record; assignment never grants access |
+| BR-013, BR-014 | `POST /api/follow-ups/:id/complete`, `/cancel` | Closing the last open follow-up of an Active, nonterminal opportunity requires a replacement in the same request (422 `replacement` otherwise); the replacement becomes the next action |
+| FR-043 | `POST /api/follow-ups/:id/reschedule` | Records old date, new date, actor and reason. A same-date reschedule is refused |
+| FR-043, BR-030 | `GET /api/follow-ups` | Scoped cross-opportunity list with Open / Overdue / Today / Upcoming / Completed / Cancelled / All and an "Assigned to me" filter. Buckets and counts are computed in SQL against today's Dhaka date. Past due dates are accepted and show as overdue at once |
+| BR-090 | all M2 services | Every writer locks the opportunity row (`FOR UPDATE`, through the scope predicate) before any follow-up, and checks the version both after the lock and in the UPDATE predicate |
+| BR-091 | `runIdempotent` in `server/services/idempotency.ts` | Every M2 mutation requires an `Idempotency-Key`; the fingerprint covers the record id and body; the claim is completed inside the business transaction; replay re-reads through scope (404 after access is lost) |
+| FR-062, SEC-012 | `server/services/audit.ts` | `opportunity.stage_changed`, `.status_changed`, `.reopened`, `follow_up.created`, `.completed`, `.rescheduled`, `.cancelled` — all in the same transaction, with actor, request id, before/after and reason. Change History shows names and labels, not ids or storage values |
+| SEC-001–003 | `server/policy/scope.ts` | New permissions (`canChangeStageOrStatus`, `canManageFollowUps`, `canReopenOpportunity`, `followUpAssigneeScope`) live in the policy module only. Missing and inaccessible records and follow-ups return the identical 404 |
+| FR-021, D-006 | `GET /api/opportunities/board`; `src/app/components/PipelineBoard.tsx` | The approved Pipeline board restored in API mode, bounded to 50 cards per lane with server-computed counts and values. The Awarded lane sums actual awarded value; the others sum estimates, and each header says which |
+
+**Interface.** The Opportunities page has the approved Pipeline/Table toggle
+again, Pipeline by default as in the demo. A dropped card shows in the target
+lane marked "Not saved yet" until the server confirms; a cancelled dialog or a
+refused move returns it to its original lane and position. The detail page
+gains the approved "Change Stage…" menu, Return to Active, Cancel opportunity,
+Reopen (management), Add Follow-up and per-task Complete / Reschedule / Cancel.
+The Activities & Follow-ups screen is live for follow-ups. Dialogs reuse the
+approved `Modal`, `Field` and button primitives; nothing in `src/demo`,
+`src/components` or `src/pages` was changed.
+
+**Interface deviations, for product sign-off.**
+
+| Change | Reason |
+| --- | --- |
+| Lost reason is a six-option select plus explanation, not free text | BR-011 presets |
+| Skip/backward moves ask "why"; Awarded/Lost/Cancelled dialogs state that open follow-ups will be closed as Cancelled | FR-021, BR-014 |
+| Completing a follow-up may require a replacement next action | BR-014 |
+| Rescheduling requires a reason; follow-ups can be cancelled | FR-043, FR-042 (Cancelled is a production addition, D-007) |
+| Reopen button for management on closed records; Edit disabled on closed records | BR-012 |
+| Board lane headers carry an "estimated / actual awarded value" label for screen readers and as a tooltip | D-006 |
+| Activities & Follow-ups: the Activity Log tab, the calendar view and "Quick Add" (which needs an opportunity picker) are not yet available; follow-ups are added from the opportunity page | Activities arrive in M4 |
+
+### 2. Implementation decisions
+
+Recorded in `docs/adr/0003-stage-status-and-follow-up-lifecycle.md`, with the
+reasoning. In short: moves to Awarded/Lost are not "skips"; a held or cancelled
+record changes stage only by returning to Active; Cancelled → On Hold is
+refused; a closed date cannot be in the future; cancelling records today as the
+closed date; closed records stay read-only for basic edits until reopened or
+returned; creation stays nonterminal; follow-ups may be added while On Hold but
+not once closed. None of these relaxes a requirement; each fills a gap the
+requirements leave open and is flagged here for review.
+
+### 3. Database
+
+| Migration | Contents |
+| --- | --- |
+| `0002_stage_status_follow_up_integrity.sql` | `follow_ups.cancelled_by`; CHECK constraints for outcome consistency (Awarded value and date; Lost preset reason, date and "Other" explanation; outcome fields only on the matching stage; terminal records always Active; On Hold/Cancelled explained) and follow-up state consistency (Completed records who and when; Cancelled records who, when and why; never both) |
+
+Additive only. Existing rows were checked against every constraint before it
+was written. No table was added: stage history is the append-only audit trail.
+**Rollback** statements are in the migration header and were exercised on both
+local databases during development (see defect 1 below). Applied to the
+development and test databases; re-running is a no-op.
+
+### 4. Commands run and results
+
+All on 05 October 2026, against PostgreSQL 18 in Docker (port 55432).
+
+| Command | Result |
+| --- | --- |
+| `npm run db:migrate` / `db:migrate:test` | `0002` applied; repeat run is a no-op |
+| `npm run typecheck` | **Pass** (web, server, e2e) |
+| `npm run lint` | **Pass** — 0 errors, 5 warnings (the same pre-existing five; the M2 helpers were moved out of component files rather than adding new ones) |
+| `npm run check:env` | **Pass** — 16 variables |
+| `npm test` | **240 passed, 0 failed**, 9 files (168 M1 + 72 M2) |
+| `npm run test:smoke` | **9 passed** — 2 M1 smoke + 7 M2 browser checks |
+| `npm run build` | **Pass** — demo-exclusion check passes before and after bundling; server compiles |
+| `npm run evidence` | 22 screenshots in `docs/evidence/` (14 M1 recaptured on the current UI, 8 new) |
+
+| New test file | Tests | Covers |
+| --- | --- | --- |
+| `transitions.test.ts` | 44 | AT-05: forward/skip/backward, history, Awarded and Lost validation and closure, On Hold/Cancelled/return, reopening permissions and history, active-pipeline value, 404 equality, forged fields, idempotent replay and key reuse, replay after access loss, seven database CHECK constraints from the application role |
+| `followUps.test.ts` | 23 | AT-06: last-task replacement rule (complete and cancel), On Hold exemption, double-click and repeated requests, reschedule audit, **Dhaka-midnight overdue boundary with the injected clock**, overdue → upcoming after rescheduling, historical past-due entries, assignee eligibility for every role including inactive owners, closed-record refusal, scope and 404 equality, list scoping and counts, history wording |
+| `m2Concurrency.test.ts` | 5 | Genuinely concurrent connections, 4 rounds each: two completions of the last two tasks; two stage changes from one version; completion racing a Lost outcome; one key sent twice at once; a mixed burst checked against the next-action invariant across the whole database |
+| `e2e/m2.spec.ts` | 7 | Real drag-and-drop: cancelled dialog restores lane and position; a refused (409) move restores the card and shows why; a confirmed move survives reload; Awarded without a value shows the server's field error and restores; On Hold keeps the stage; a salesperson cannot drag a closed card; completing the last follow-up asks for its replacement |
+
+**Mutation check.** With the opportunity row lock removed, the
+concurrent-completion test fails (both requests succeed and the record is left
+with no next action). The lock is restored; the test is evidence, not
+decoration.
+
+**Server restart (plan 7.8 step 2, M1 and M2).** On the development stack, an
+opportunity was created and moved to Initial Engagement through the API; the
+API process was stopped (port confirmed closed) and started again; the record
+read back with the same stage, version 2, the exact value `1234567.89`, its
+next action and both history events.
+
+### 5. Defects found and fixed during this milestone
+
+1. **An Awarded record without an awarded value passed the database check.**
+   The first version of the constraint was `stage <> 'awarded' OR
+   (awarded_value > 0 AND award_date IS NOT NULL)`. For a NULL value,
+   `awarded_value > 0` is NULL, and a CHECK that evaluates to NULL passes. The
+   new database-guarantee test caught it. Fixed with `IS NOT NULL` first; the
+   unpublished migration was rolled back with its documented statements on both
+   databases and regenerated.
+2. **The Pipeline board widened the whole page.** The lane headers' screen-reader
+   labels are absolutely positioned and had no positioned ancestor inside the
+   scrolling board, so the far-right lanes stretched the document to 3236 px at
+   a 1440 px viewport. Found by measuring the evidence screenshots. Fixed by
+   making the board's scroll container the containing block; every capture is
+   now exactly the viewport width, including 360 px.
+3. **A Playwright drag could start on the wrong card.** `dragTo` scrolled the
+   horizontally scrolling board between mouse-down and the drag starting.
+   Test-only; the spec now starts the drag on the source before moving.
+4. **The evidence capture tripped the login rate limit** (10 per 15 minutes).
+   The limit was left as it is; the capture now reuses sessions and signs in 9
+   times.
+5. The M1 issues from the handover review: idempotency completion moved inside
+   the transaction; create replay finds the first follow-up by creation order.
+
+### 6. Acceptance coverage
+
+| Test | Status |
+| --- | --- |
+| AT-05 | **Covered.** Board changes persist; Awarded fails without value/date; Lost fails without reason; On Hold keeps the stage and leaves the active-pipeline value; a cancelled dialog restores the card; only management reopens |
+| AT-06 | **Covered.** Last-task rule; rescheduling moves the overdue calculation on the correct Dhaka date; terminal closure marks remaining tasks Cancelled; repeated requests do not duplicate events |
+| AT-15 | Partial, as planned: concurrency and retries for M2 operations. Transfer/task races need M3 |
+| AT-11 | Partial: the Dhaka-midnight task boundary is tested. Tender 72-hour and seven-day windows arrive with M5/M6 |
+
+### 7. Remaining issues and limitations
+
+- **Board beyond 50 cards per lane** shows "N more — use the Table view"; the
+  lane count and value still include them.
+- **Keyboard users** change stage from the detail page's menu; drag-and-drop
+  itself is mouse/touch only (FR-015 asks for a usable alternative, which the
+  menu and the Table view provide).
+- **No dashboard reflects M2 yet.** Active-pipeline totals are verified through
+  the board's lane values; the dashboard cards are M6.
+- **Follow-up list filters** are Assigned to: everyone / me. Filtering by a
+  named colleague or by owner/section needs a scoped people lookup that does
+  not exist yet; the demo's richer filters arrive with M3's team views.
+- **Basic edit (PATCH) still has no idempotency key**; its version check
+  already prevents a double apply, and M7 reviews it.
+- **Idempotency record cleanup** is still unscheduled (background jobs).
+- **Pre-existing**: five fast-refresh lint warnings; the local `main` branch
+  is behind `origin/main`.
+
+### 8. Local startup
+
+```bash
+npm install
+cp .env.example .env     # then generate SESSION_SECRET and CSRF_SECRET (see README)
+npm run db:up            # PostgreSQL 18 on localhost:55432
+npm run db:migrate && npm run db:migrate:test   # applies 0000–0002
+npm run db:seed  && npm run db:seed:test
+npm run dev:server       # API  http://localhost:4800
+npm run dev              # web  http://localhost:5173
+npm run dev:demo         # the approved synthetic prototype (no API)
+```
+
+Sign in with the synthetic accounts listed in M1 §6 below; the password is
+`SEED_DEFAULT_PASSWORD` in your `.env`. To see M2: as
+`rafiq.hasan@example.com`, drag a card on the Pipeline board, or open a record
+and use Change Stage… and the Follow-ups tab; as `arif.rahman@example.com`,
+open an Awarded record and use Reopen. `npm run db:reset` restores the
+fixtures.
+
+### 9. Next task
+
+**Milestone 3 — transfers and administration** (`Plan.md` §6), not to be
+started until this milestone is reviewed. The transfer service must take the
+opportunity row lock first, like every M2 writer, so a transfer and a
+simultaneous task completion cannot leave tasks with the old owner (BR-090).
+
+---
+
 ## Milestone 1 handover review — 05 October 2026
 
 Performed before starting Milestone 2, on branch `m2-stages-status-follow-ups`

@@ -8,6 +8,7 @@
 import { z } from 'zod';
 
 import {
+  LOSS_REASONS,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
   PRIORITIES,
@@ -94,8 +95,10 @@ export type LoginInput = z.infer<typeof loginSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * M1 creates Active, nonterminal opportunities only. Outcome creation needs the
- * award/loss capture rules that arrive with the M2 transition services.
+ * Opportunities are created Active and nonterminal, with their first follow-up
+ * (BR-014). An outcome is then recorded through the stage-change service, so
+ * Awarded and Lost always pass through the BR-011 capture rules and leave an
+ * audited transition rather than appearing fully formed.
  */
 export const M1_CREATABLE_STAGES = OPPORTUNITY_STAGES.filter(
   (stage) => !isTerminalStage(stage),
@@ -114,7 +117,7 @@ export const createOpportunitySchema = z
     sectionId: uuidField,
     stage: z.enum(OPPORTUNITY_STAGES).refine(
       (stage) => !isTerminalStage(stage),
-      'Awarded and Lost opportunities are created through the stage workflow, which is not available yet.',
+      'Create the opportunity at a working stage, then record Awarded or Lost as a stage change.',
     ),
     priority: z.enum(PRIORITIES).default('medium'),
     expectedPublicationDate: optionalDate(),
@@ -198,6 +201,141 @@ export const FORBIDDEN_PATCH_FIELDS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// Stage and status transitions (FR-021, BR-010–012, BR-014)
+// ---------------------------------------------------------------------------
+
+/** Reasons, explanations and notes recorded with a transition. */
+const reasonText = (requiredMessage: string) =>
+  z.string().trim().min(3, requiredMessage).max(2000, 'Use at most 2000 characters.');
+
+/** Positive BDT amount (BR-011: the awarded value must be positive, not merely non-negative). */
+export const positiveMoneyField = moneyField.refine(
+  (value) => /[1-9]/.test(value),
+  'Enter an amount greater than zero.',
+);
+
+/**
+ * A follow-up created as part of another operation: a replacement next action,
+ * or the next action required when an opportunity returns to active work.
+ * The assignee defaults server-side to an eligible owner when omitted.
+ */
+export const followUpDraftSchema = z
+  .object({
+    title: z
+      .string()
+      .trim()
+      .min(3, 'Describe the next action in at least 3 characters.')
+      .max(200, 'Use at most 200 characters.'),
+    dueDate: calendarDateField,
+    assigneeId: uuidField.optional(),
+    priority: z.enum(PRIORITIES).optional(),
+  })
+  .strict();
+
+export type FollowUpDraftInput = z.input<typeof followUpDraftSchema>;
+
+/**
+ * Field presence only. Which fields a particular move requires depends on the
+ * record's current stage and status, so the server decides that after reading
+ * the record (and the shared `classifyStageMove` tells the browser when to ask).
+ */
+export const changeStageSchema = z
+  .object({
+    version: z.number().int().positive('Reload the record and try again.'),
+    stage: z.enum(OPPORTUNITY_STAGES),
+    explanation: optionalText(2000),
+    awardedValue: z
+      .union([z.string(), z.null()])
+      .optional()
+      .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+      .refine(
+        (value) => value === undefined || positiveMoneyField.safeParse(value).success,
+        'Enter an amount greater than zero, with at most two decimal places.',
+      ),
+    awardDate: optionalDate(),
+    lossReason: z.enum(LOSS_REASONS).optional(),
+    lossNote: optionalText(2000),
+    closedDate: optionalDate(),
+    nextFollowUp: followUpDraftSchema.optional(),
+  })
+  .strict();
+
+export type ChangeStageInput = z.input<typeof changeStageSchema>;
+
+export const changeStatusSchema = z
+  .object({
+    version: z.number().int().positive('Reload the record and try again.'),
+    status: z.enum(OPPORTUNITY_STATUSES),
+    reason: reasonText('Explain the status change in at least 3 characters.'),
+    nextFollowUp: followUpDraftSchema.optional(),
+  })
+  .strict();
+
+export type ChangeStatusInput = z.input<typeof changeStatusSchema>;
+
+export const reopenOpportunitySchema = z
+  .object({
+    version: z.number().int().positive('Reload the record and try again.'),
+    stage: z
+      .enum(OPPORTUNITY_STAGES)
+      .refine((stage) => !isTerminalStage(stage), 'Choose the working stage to reopen at.'),
+    reason: reasonText('Explain why the opportunity is being reopened.'),
+    nextFollowUp: followUpDraftSchema,
+  })
+  .strict();
+
+export type ReopenOpportunityInput = z.input<typeof reopenOpportunitySchema>;
+
+// ---------------------------------------------------------------------------
+// Follow-up lifecycle (FR-042, FR-043, BR-014, BR-030)
+// ---------------------------------------------------------------------------
+
+export const createFollowUpSchema = z
+  .object({
+    title: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+    dueDate: calendarDateField,
+    assigneeId: uuidField,
+    priority: z.enum(PRIORITIES).default('medium'),
+  })
+  .strict();
+
+export type CreateFollowUpInput = z.input<typeof createFollowUpSchema>;
+
+export const completeFollowUpSchema = z
+  .object({
+    version: z.number().int().positive('Reload the follow-up and try again.'),
+    completionNote: optionalText(2000),
+    replacement: followUpDraftSchema.optional(),
+  })
+  .strict();
+
+export type CompleteFollowUpInput = z.input<typeof completeFollowUpSchema>;
+
+export const rescheduleFollowUpSchema = z
+  .object({
+    version: z.number().int().positive('Reload the follow-up and try again.'),
+    dueDate: calendarDateField,
+    reason: reasonText('Give a reason for the new date.'),
+  })
+  .strict();
+
+export type RescheduleFollowUpInput = z.input<typeof rescheduleFollowUpSchema>;
+
+export const cancelFollowUpSchema = z
+  .object({
+    version: z.number().int().positive('Reload the follow-up and try again.'),
+    reason: reasonText('Give a reason for cancelling this follow-up.'),
+    replacement: followUpDraftSchema.optional(),
+  })
+  .strict();
+
+export type CancelFollowUpInput = z.input<typeof cancelFollowUpSchema>;
+
+/** FR-043 filters. Buckets are decided against today's Dhaka date on the server. */
+export const FOLLOW_UP_VIEWS = ['open', 'overdue', 'today', 'upcoming', 'completed', 'cancelled', 'all'] as const;
+export type FollowUpView = (typeof FOLLOW_UP_VIEWS)[number];
+
+// ---------------------------------------------------------------------------
 // List queries
 // ---------------------------------------------------------------------------
 
@@ -239,6 +377,29 @@ export const listOpportunitiesQuerySchema = z
     expectedAwardTo: optionalDate(),
     sort: z.enum(OPPORTUNITY_SORT_KEYS).optional().default('createdAt'),
     dir: z.enum(['asc', 'desc']).optional().default('desc'),
+  })
+  .strict();
+
+/** The board takes no stage or status filter: those are its lanes. */
+export const boardQuerySchema = z
+  .object({
+    q: z.string().trim().max(200).optional(),
+    priority: z.enum(PRIORITIES).optional(),
+    solutionCategory: z.enum(SOLUTION_CATEGORIES).optional(),
+    organizationId: uuidField.optional(),
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+  })
+  .strict();
+
+export const listFollowUpsQuerySchema = z
+  .object({
+    page: pageNumber.optional().default(1),
+    pageSize: pageSizeNumber.optional().default(25),
+    view: z.enum(FOLLOW_UP_VIEWS).optional().default('open'),
+    /** `me`, or a user id. Narrows within scope; never widens it. */
+    assignedTo: z.union([z.literal('me'), uuidField]).optional(),
+    q: z.string().trim().max(200).optional(),
   })
   .strict();
 

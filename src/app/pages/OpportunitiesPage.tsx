@@ -1,14 +1,17 @@
 /**
- * Opportunity list — the approved table view, backed by a scoped, paginated
- * server query (plan 7.5).
+ * Opportunities — the approved Pipeline and Table views, both backed by scoped
+ * server queries (plan 7.5, FR-021).
  *
- * The Pipeline (Kanban) view is deliberately absent in API mode: drag-and-drop
- * changes a stage, and the stage-transition service arrives in the next
- * milestone. Showing a board that cannot persist a move would be misleading.
+ * The table is paginated on the server. The board is bounded per lane, and a
+ * drag only becomes a change once the server commits it: see PipelineBoard
+ * and TransitionDialog.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { PlusIcon, SearchIcon, XIcon } from 'lucide-react';
+import { toast } from 'sonner';
+import { KanbanSquareIcon, PlusIcon, SearchIcon, TableIcon, XIcon } from 'lucide-react';
+
+import type { OpportunityListItemDto } from '../../../shared/api.js';
 
 import {
   PRIORITIES,
@@ -19,17 +22,36 @@ import {
   STATUS_LABELS,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
+  isTerminalStage,
+  type BoardLane,
 } from '../../../shared/enums.js';
 import { formatBdt, formatBdtShort } from '../../../shared/money.js';
-import { fetchOpportunities } from '../../api/endpoints.js';
+import { ApiRequestError, newIdempotencyKey } from '../../api/client.js';
+import { fetchBoard, fetchOpportunities } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/Feedback';
 import { FilterSelect, inputCls } from '../../components/ui/FormFields';
-import { PageContainer, PageHeader, Pagination, SortHeader, tdCls, thCls } from '../../components/ui/Layout';
+import {
+  PageContainer,
+  PageHeader,
+  Pagination,
+  SegmentedControl,
+  SortHeader,
+  tdCls,
+  thCls,
+} from '../../components/ui/Layout';
 import { useAuth } from '../AuthContext.js';
 import { useApiResource } from '../useApiResource.js';
 import { OpportunityCreateDialog } from '../components/OpportunityCreateDialog.js';
-import { ErrorPanel, LoadingRows } from '../components/Feedback.js';
+import { ErrorPanel, LoadingPanel, LoadingRows } from '../components/Feedback.js';
+import { PipelineBoard, type PendingMove } from '../components/PipelineBoard.js';
+import { TransitionDialog } from '../components/TransitionDialog.js';
+import {
+  needsTransitionDialog,
+  sendDirectStageChange,
+  transitionRequestFor,
+  type TransitionRequest,
+} from '../transitions.js';
 import { DueTag, PriorityBadge, StageBadge } from '../ui/ApiBadges.js';
 import { dhakaToday, formatCalendarDate } from '../ui/dates.js';
 
@@ -46,6 +68,7 @@ export function OpportunitiesPage() {
   const today = dhakaToday();
 
   const read = (key: string, fallback = '') => params.get(key) ?? fallback;
+  const view = read('view') === 'table' ? 'table' : 'pipeline';
   const page = Math.max(1, Number(read('page', '1')) || 1);
   const q = read('q');
   const stage = read('stage');
@@ -75,7 +98,67 @@ export function OpportunitiesPage() {
     [query],
   );
 
-  const { data, error, loading, reload } = useApiResource(fetcher, [query]);
+  const { data, error, loading, reload } = useApiResource(
+    useCallback((signal: AbortSignal) => (view === 'table' ? fetcher(signal) : Promise.resolve(null)), [view, fetcher]),
+    [query, view],
+  );
+
+  const boardQuery = useMemo(() => ({ q, priority, solutionCategory }), [q, priority, solutionCategory]);
+  const board = useApiResource(
+    useCallback(
+      (signal: AbortSignal) => (view === 'pipeline' ? fetchBoard(boardQuery, signal) : Promise.resolve(null)),
+      [view, boardQuery],
+    ),
+    [boardQuery, view],
+  );
+
+  // --- Board moves ---------------------------------------------------------
+  const [pending, setPending] = useState<PendingMove | null>(null);
+  const [transition, setTransition] = useState<{ item: OpportunityListItemDto; request: TransitionRequest } | null>(
+    null,
+  );
+
+  /** Clears the pending card: it is shown in its original lane again. */
+  const restore = () => {
+    setPending(null);
+    setTransition(null);
+  };
+
+  const dragRefusal = (item: OpportunityListItemDto): string | null =>
+    isTerminalStage(item.stage) && user?.role !== 'management'
+      ? 'Only management can reopen an Awarded or Lost opportunity.'
+      : null;
+
+  const handleMove = async (item: OpportunityListItemDto, to: BoardLane) => {
+    const current = item.status === 'active' ? item.stage : item.status;
+    if (current === to || pending) return;
+
+    const request = transitionRequestFor(item, to);
+    if (typeof request === 'string') {
+      toast.error(request, { description: item.name });
+      return;
+    }
+
+    setPending({ id: item.id, to });
+    if (needsTransitionDialog(item, request)) {
+      setTransition({ item, request });
+      return;
+    }
+
+    // The next stage, with a next action already in place: no extra input.
+    try {
+      const updated = await sendDirectStageChange(item, to as never, newIdempotencyKey());
+      toast.success(`Moved to ${STAGE_LABELS[updated.stage]}`, { description: item.name });
+      board.reload();
+    } catch (caught) {
+      const message = caught instanceof ApiRequestError ? caught.message : 'The move could not be saved.';
+      toast.error(message, { description: `${item.name} is back where it was.` });
+      // A conflict or an uncertain network result: show the server's truth.
+      board.reload();
+    } finally {
+      setPending(null);
+    }
+  };
 
   const activeFilterCount = [q, stage, status, priority, solutionCategory].filter(Boolean).length;
   const pageCount = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
@@ -87,6 +170,13 @@ export function OpportunitiesPage() {
         ? `${user.section?.name ?? 'Your section'} — every opportunity in your section`
         : 'Opportunities you own';
 
+  const shownTotal =
+    view === 'table'
+      ? (data?.total ?? null)
+      : board.data
+        ? board.data.lanes.reduce((sum, lane) => sum + lane.total, 0)
+        : null;
+
   const toggleSort = (key: SortKey) =>
     update({ sort: key, dir: sort === key && dir === 'asc' ? 'desc' : 'asc' }, false);
 
@@ -95,16 +185,27 @@ export function OpportunitiesPage() {
       <PageHeader
         title="Opportunities"
         subtitle={
-          data
-            ? `${data.total} accessible ${data.total === 1 ? 'opportunity' : 'opportunities'} · ${scopeNote}`
+          shownTotal !== null
+            ? `${shownTotal} accessible ${shownTotal === 1 ? 'opportunity' : 'opportunities'} · ${scopeNote}`
             : scopeNote
         }
         actions={
-          user?.capabilities.createOpportunity ? (
-            <Button variant="primary" icon={<PlusIcon className="h-4 w-4" />} onClick={() => setCreateOpen(true)}>
-              Add Opportunity
-            </Button>
-          ) : null
+          <>
+            <SegmentedControl
+              label="View"
+              value={view}
+              onChange={(next) => update({ view: next === 'pipeline' ? '' : next }, false)}
+              options={[
+                { id: 'pipeline', label: 'Pipeline', icon: <KanbanSquareIcon className="h-3.5 w-3.5" /> },
+                { id: 'table', label: 'Table', icon: <TableIcon className="h-3.5 w-3.5" /> },
+              ]}
+            />
+            {user?.capabilities.createOpportunity ? (
+              <Button variant="primary" icon={<PlusIcon className="h-4 w-4" />} onClick={() => setCreateOpen(true)}>
+                Add Opportunity
+              </Button>
+            ) : null}
+          </>
         }
       />
 
@@ -123,23 +224,28 @@ export function OpportunitiesPage() {
             </span>
           </label>
 
-          <FilterSelect label="Stage" value={stage} onChange={(value) => update({ stage: value })}>
-            <option value="">All stages</option>
-            {OPPORTUNITY_STAGES.map((value) => (
-              <option key={value} value={value}>
-                {STAGE_LABELS[value]}
-              </option>
-            ))}
-          </FilterSelect>
+          {/* On the board, stage and status are the lanes themselves. */}
+          {view === 'table' && (
+            <>
+              <FilterSelect label="Stage" value={stage} onChange={(value) => update({ stage: value })}>
+                <option value="">All stages</option>
+                {OPPORTUNITY_STAGES.map((value) => (
+                  <option key={value} value={value}>
+                    {STAGE_LABELS[value]}
+                  </option>
+                ))}
+              </FilterSelect>
 
-          <FilterSelect label="Status" value={status} onChange={(value) => update({ status: value })}>
-            <option value="">All statuses</option>
-            {OPPORTUNITY_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {STATUS_LABELS[value]}
-              </option>
-            ))}
-          </FilterSelect>
+              <FilterSelect label="Status" value={status} onChange={(value) => update({ status: value })}>
+                <option value="">All statuses</option>
+                {OPPORTUNITY_STATUSES.map((value) => (
+                  <option key={value} value={value}>
+                    {STATUS_LABELS[value]}
+                  </option>
+                ))}
+              </FilterSelect>
+            </>
+          )}
 
           <FilterSelect label="Priority" value={priority} onChange={(value) => update({ priority: value })}>
             <option value="">All priorities</option>
@@ -178,7 +284,30 @@ export function OpportunitiesPage() {
         )}
       </div>
 
-      {error ? (
+      {view === 'pipeline' ? (
+        board.error ? (
+          <ErrorPanel error={board.error} onRetry={board.reload} />
+        ) : !board.data ? (
+          <LoadingPanel label="Loading pipeline…" />
+        ) : (
+          <>
+            <p className="text-[11.5px] text-slate-500">
+              Drag a card to change its stage or status. Moves are saved only after the server confirms
+              them; a cancelled or refused move returns the card to where it was. Lane values are
+              estimates, except Awarded, which shows actual awarded value. Keyboard users can change
+              the stage from the opportunity page.
+            </p>
+            <PipelineBoard
+              board={board.data}
+              today={today}
+              pending={pending}
+              dragRefusal={dragRefusal}
+              onOpen={(id) => navigate(`/opportunities/${id}`)}
+              onMove={(item, to) => void handleMove(item, to)}
+            />
+          </>
+        )
+      ) : error ? (
         <ErrorPanel error={error} onRetry={reload} />
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -303,6 +432,20 @@ export function OpportunitiesPage() {
           )}
         </div>
       )}
+
+      <TransitionDialog
+        subject={transition?.item ?? null}
+        request={transition?.request ?? null}
+        onClose={restore}
+        onDone={() => {
+          restore();
+          board.reload();
+        }}
+        onReload={() => {
+          restore();
+          board.reload();
+        }}
+      />
 
       <OpportunityCreateDialog
         open={createOpen}

@@ -62,8 +62,14 @@ export const OPPORTUNITY_FIELD_LABELS: Record<string, string> = {
   awardedValue: 'Awarded value',
   awardDate: 'Award date',
   lossReason: 'Lost reason',
+  lossNote: 'Lost reason explanation',
   closedDate: 'Closed date',
   statusNote: 'Status note',
+  // Follow-up events share the history view (FR-062).
+  dueDate: 'Due date',
+  assignedUserId: 'Assigned to',
+  state: 'State',
+  completionNote: 'Completion note',
 };
 
 /**

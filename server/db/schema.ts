@@ -184,6 +184,45 @@ export const opportunities = pgTable(
       'opportunities_awarded_value_nonnegative',
       sql`${table.awardedValue} IS NULL OR ${table.awardedValue} >= 0`,
     ),
+    // --- Migration 0002: outcome consistency (BR-010, BR-011, BR-012) -------
+    // These make an inconsistent outcome unrepresentable even if a future
+    // code path bypasses the transition service.
+    check(
+      'opportunities_awarded_requires_outcome',
+      // IS NOT NULL first: a bare `awarded_value > 0` is NULL for a missing
+      // value, and a CHECK that evaluates to NULL passes.
+      sql`${table.stage} <> 'awarded' OR (${table.awardedValue} IS NOT NULL AND ${table.awardedValue} > 0 AND ${table.awardDate} IS NOT NULL)`,
+    ),
+    check(
+      'opportunities_lost_requires_outcome',
+      sql`${table.stage} <> 'lost' OR (${table.lossReason} IS NOT NULL AND ${table.closedDate} IS NOT NULL)`,
+    ),
+    check(
+      'opportunities_loss_reason_preset',
+      sql`${table.lossReason} IS NULL OR ${table.lossReason} IN ('price', 'technical_eligibility', 'competitor_selected', 'budget_unavailable', 'no_bid', 'other')`,
+    ),
+    check(
+      'opportunities_loss_other_explained',
+      sql`${table.lossReason} IS DISTINCT FROM 'other' OR ${table.lossNote} IS NOT NULL`,
+    ),
+    // Reopening clears the outcome; the previous one is kept in audit history.
+    check(
+      'opportunities_award_only_when_awarded',
+      sql`${table.stage} = 'awarded' OR (${table.awardedValue} IS NULL AND ${table.awardDate} IS NULL)`,
+    ),
+    check(
+      'opportunities_loss_only_when_lost',
+      sql`${table.stage} = 'lost' OR (${table.lossReason} IS NULL AND ${table.lossNote} IS NULL)`,
+    ),
+    // BR-010: On Hold and Cancelled are never applied to a terminal record.
+    check(
+      'opportunities_terminal_status_active',
+      sql`${table.stage} NOT IN ('awarded', 'lost') OR ${table.status} = 'active'`,
+    ),
+    check(
+      'opportunities_held_or_cancelled_explained',
+      sql`${table.status} = 'active' OR ${table.statusNote} IS NOT NULL`,
+    ),
   ],
 );
 
@@ -210,6 +249,7 @@ export const followUps = pgTable(
     completedBy: uuid('completed_by').references(() => users.id, { onDelete: 'restrict' }),
     completionNote: text('completion_note'),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledBy: uuid('cancelled_by').references(() => users.id, { onDelete: 'restrict' }),
     cancellationReason: text('cancellation_reason'),
     createdBy: uuid('created_by')
       .notNull()
@@ -224,6 +264,17 @@ export const followUps = pgTable(
     index('follow_ups_state_due_idx').on(table.state, table.dueDate),
     // Supports the "earliest due open follow-up, creation-time tie-breaker" lookup.
     index('follow_ups_next_action_idx').on(table.opportunityId, table.dueDate, table.createdAt),
+    // --- Migration 0002: state consistency (FR-042, BR-014) ------------------
+    // A completed task records who and when; a cancelled one records why. A
+    // task can never be both, so a cancellation cannot pose as a completion.
+    check(
+      'follow_ups_completed_consistent',
+      sql`(${table.state} = 'completed') = (${table.completedAt} IS NOT NULL AND ${table.completedBy} IS NOT NULL)`,
+    ),
+    check(
+      'follow_ups_cancelled_consistent',
+      sql`(${table.state} = 'cancelled') = (${table.cancelledAt} IS NOT NULL AND ${table.cancelledBy} IS NOT NULL AND ${table.cancellationReason} IS NOT NULL)`,
+    ),
   ],
 );
 

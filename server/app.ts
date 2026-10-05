@@ -20,6 +20,7 @@ import { createCsrfProtection, createOriginGuard } from './http/csrf.js';
 import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
 import { requestContext } from './http/requestContext.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createFollowUpsRouter } from './routes/followUps.js';
 import { createLookupsRouter } from './routes/lookups.js';
 import { createOpportunitiesRouter } from './routes/opportunities.js';
 import { createOrganizationsRouter } from './routes/organizations.js';
@@ -140,6 +141,7 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
   );
 
   app.use('/api/opportunities', createOpportunitiesRouter({ db: database.db, csrfGuard }));
+  app.use('/api/follow-ups', createFollowUpsRouter({ db: database.db, csrfGuard }));
   app.use('/api/organizations', createOrganizationsRouter({ db: database.db }));
   app.use('/api/lookups', createLookupsRouter({ db: database.db }));
 

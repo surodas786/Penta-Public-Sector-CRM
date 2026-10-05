@@ -151,6 +151,55 @@ export async function releaseIdempotencyClaim(options: {
     );
 }
 
+/**
+ * Marks the claim complete inside the business transaction.
+ *
+ * Doing this in `tx` rather than after the commit means the business write and
+ * the claim's completion are one atomic step: there is no moment at which the
+ * record exists but the key still says "in progress", so a crash between the
+ * two can no longer strand a retry behind a 409 for the retention period.
+ */
+export type CompleteClaimInTransaction = (tx: Database, entityId: string) => Promise<void>;
+
+/**
+ * Runs a mutation under an idempotency key (BR-091).
+ *
+ * `execute` receives the completion callback and must call it inside its own
+ * transaction. `replay` re-reads the canonical result through the normal scoped
+ * services, so a retry after access was revoked gets a 404, never stored data.
+ * The payload passed here is fingerprinted; reusing a key with a different
+ * payload is a 409.
+ */
+export async function runIdempotent<T>(options: {
+  db: Database;
+  actorId: string;
+  operation: string;
+  key: string;
+  payload: unknown;
+  execute: (completeClaim: CompleteClaimInTransaction) => Promise<T>;
+  replay: (entityId: string) => Promise<T>;
+}): Promise<{ result: T; replayed: boolean }> {
+  const { db, actorId, operation, key, payload, execute, replay } = options;
+
+  const claim = await claimIdempotencyKey({ db, actorId, operation, key, payload });
+  if (claim.kind === 'replay') {
+    return { result: await replay(claim.entityId), replayed: true };
+  }
+
+  const completeClaim: CompleteClaimInTransaction = async (tx, entityId) => {
+    await completeIdempotencyClaim({ db: tx, claimId: claim.claimId, entityId });
+  };
+
+  try {
+    return { result: await execute(completeClaim), replayed: false };
+  } catch (error) {
+    // Only an in-progress claim is removed. If the transaction had already
+    // committed (and so completed the claim), this deletes nothing.
+    await releaseIdempotencyClaim({ db, claimId: claim.claimId });
+    throw error;
+  }
+}
+
 /** Housekeeping entry point; see the ADR for the scheduled-cleanup decision. */
 export async function pruneExpiredIdempotencyRecords(db: Database): Promise<number> {
   const deleted = await db

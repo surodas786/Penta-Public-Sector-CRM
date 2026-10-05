@@ -39,6 +39,53 @@ export function isTerminalStage(stage: OpportunityStage): boolean {
   return TERMINAL_STAGES.includes(stage);
 }
 
+/** The eight working stages, in pipeline order. Skips and backward moves are measured against this. */
+export const PIPELINE_STAGES = OPPORTUNITY_STAGES.filter(
+  (stage) => !TERMINAL_STAGES.includes(stage),
+) as readonly OpportunityStage[];
+
+/** BR-011: the six preset lost reasons. `other` requires explanatory text. */
+export const LOSS_REASONS = [
+  'price',
+  'technical_eligibility',
+  'competitor_selected',
+  'budget_unavailable',
+  'no_bid',
+  'other',
+] as const;
+export type LossReason = (typeof LOSS_REASONS)[number];
+
+export const LOSS_REASON_LABELS: Record<LossReason, string> = {
+  price: 'Price',
+  technical_eligibility: 'Technical eligibility',
+  competitor_selected: 'Competitor selected',
+  budget_unavailable: 'Budget unavailable',
+  no_bid: 'No bid',
+  other: 'Other',
+};
+
+export type StageMoveKind = 'same' | 'forward' | 'skip' | 'backward' | 'outcome';
+
+/**
+ * Classifies a stage change between two stages (FR-021).
+ *
+ *   forward   the next pipeline stage; no explanation needed
+ *   skip      forward by more than one stage; explanation required
+ *   backward  any earlier pipeline stage; explanation required
+ *   outcome   to Awarded or Lost, which have their own required fields
+ *             (BR-011) rather than a skip explanation
+ *
+ * Moves out of a terminal stage are reopenings, decided separately (BR-012).
+ */
+export function classifyStageMove(from: OpportunityStage, to: OpportunityStage): StageMoveKind {
+  if (from === to) return 'same';
+  if (isTerminalStage(to)) return 'outcome';
+  const fromIndex = PIPELINE_STAGES.indexOf(from);
+  const toIndex = PIPELINE_STAGES.indexOf(to);
+  if (toIndex < fromIndex) return 'backward';
+  return toIndex - fromIndex === 1 ? 'forward' : 'skip';
+}
+
 export const OPPORTUNITY_STATUSES = ['active', 'on_hold', 'cancelled'] as const;
 export type OpportunityStatus = (typeof OPPORTUNITY_STATUSES)[number];
 
@@ -65,6 +112,23 @@ export function boardLaneLabel(stage: OpportunityStage, status: OpportunityStatu
  */
 export function isActivePipeline(stage: OpportunityStage, status: OpportunityStatus): boolean {
   return status === 'active' && !isTerminalStage(stage);
+}
+
+/**
+ * Kanban lanes (D-001): the ten stages plus the On Hold and Cancelled status
+ * lanes. A record sits in exactly one lane, chosen by `boardLane`.
+ */
+export const BOARD_LANES = [...OPPORTUNITY_STAGES, 'on_hold', 'cancelled'] as const;
+export type BoardLane = (typeof BOARD_LANES)[number];
+
+export function boardLane(stage: OpportunityStage, status: OpportunityStatus): BoardLane {
+  if (status === 'on_hold' || status === 'cancelled') return status;
+  return stage;
+}
+
+export function boardLaneTitle(lane: BoardLane): string {
+  if (lane === 'on_hold' || lane === 'cancelled') return STATUS_LABELS[lane];
+  return STAGE_LABELS[lane];
 }
 
 export const SOLUTION_CATEGORIES = [

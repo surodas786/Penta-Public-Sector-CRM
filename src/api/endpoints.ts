@@ -6,9 +6,12 @@
  * reassembles one (plan 4.2).
  */
 import type {
+  AssigneeOptionDto,
+  BoardDto,
   CreateOpportunityResultDto,
   CurrentUserDto,
   FollowUpDto,
+  FollowUpListDto,
   HistoryEntryDto,
   OpportunityDetailDto,
   OpportunityListItemDto,
@@ -110,6 +113,98 @@ export function updateOpportunity(
   body: Record<string, unknown>,
 ): Promise<OpportunityDetailDto> {
   return apiRequest(`/api/opportunities/${id}`, { method: 'PATCH', body });
+}
+
+// --- Pipeline board, stage and status (M2) ---------------------------------
+
+export interface BoardParams {
+  [key: string]: string | undefined;
+  q?: string;
+  priority?: string;
+  solutionCategory?: string;
+}
+
+export function fetchBoard(params: BoardParams, signal?: AbortSignal): Promise<BoardDto> {
+  return apiRequest(`/api/opportunities/board${toQuery(params)}`, { signal });
+}
+
+/** Every transition carries the version it was read at and a retry-stable key. */
+export function changeStage(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/stage`, { method: 'POST', body, idempotencyKey });
+}
+
+export function changeStatus(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/status`, { method: 'POST', body, idempotencyKey });
+}
+
+export function reopenOpportunity(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/reopen`, { method: 'POST', body, idempotencyKey });
+}
+
+// --- Follow-ups (M2) ----------------------------------------------------------
+
+export interface FollowUpListParams {
+  [key: string]: string | number | undefined;
+  view?: string;
+  assignedTo?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export function fetchFollowUps(params: FollowUpListParams, signal?: AbortSignal): Promise<FollowUpListDto> {
+  return apiRequest(`/api/follow-ups${toQuery(params)}`, { signal });
+}
+
+export function fetchFollowUpAssignees(
+  opportunityId: string,
+  signal?: AbortSignal,
+): Promise<{ items: AssigneeOptionDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/follow-up-assignees`, { signal });
+}
+
+export function createFollowUp(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/follow-ups`, { method: 'POST', body, idempotencyKey });
+}
+
+export function completeFollowUp(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/follow-ups/${id}/complete`, { method: 'POST', body, idempotencyKey });
+}
+
+export function rescheduleFollowUp(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/follow-ups/${id}/reschedule`, { method: 'POST', body, idempotencyKey });
+}
+
+export function cancelFollowUp(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/follow-ups/${id}/cancel`, { method: 'POST', body, idempotencyKey });
 }
 
 // --- Lookups ----------------------------------------------------------------

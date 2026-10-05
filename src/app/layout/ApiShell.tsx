@@ -71,9 +71,9 @@ export function ApiShell() {
       to: '/activities',
       label: 'Activities & Follow-ups',
       icon: CalendarCheckIcon,
-      available: false,
+      // Follow-ups are live; the Activity Log tab inside says it arrives with M4.
+      available: true,
       show: sales,
-      reason: 'The follow-up lifecycle arrives with the stages and follow-ups milestone.',
     },
     {
       to: '/tenders',

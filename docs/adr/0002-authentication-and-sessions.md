@@ -84,6 +84,9 @@ that in any environment served over HTTPS.
   original call and the replay gets a 404 rather than cached commercial data.
 - A failed business transaction releases the claim, so a corrected retry is not
   blocked by a key that produced nothing.
+- *(Milestone 2)* The claim is completed inside the business transaction, not
+  after it, so there is no window in which the record exists but the key still
+  reads "in progress". See `docs/adr/0003-stage-status-and-follow-up-lifecycle.md`.
 - Records expire after 24 hours; `pruneExpiredIdempotencyRecords` exists for the
   scheduled cleanup that arrives with the background-jobs milestone. Until then
   the table is small and bounded by development traffic.
