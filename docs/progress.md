@@ -226,10 +226,19 @@ Municipal Service Portal → **Documents** and upload a PDF or text file. As
 
 ### 10. Next task
 
-**Milestone 6 — dashboards, reports, search and notifications**
-(`Plan.md` §6), not to be started until this milestone is reviewed. Before
-documents are enabled anywhere beyond development, Penta must choose the
-production file storage and scanning service (§8).
+Feature development is paused at the end of Milestone 5 (handover,
+05 October 2026). Next session, in order:
+
+1. **Verify Milestone 5** against this section: confirm the branch and
+   commit, a clean tree, migration `0005` applied, then re-run
+   `npm run typecheck`, `npm run lint`, `npm test` (expect 412 passed),
+   `npm run test:smoke` (expect 20 passed in four runs) and `npm run build`.
+   Review the interface deviations (§2) and decisions (§3).
+2. **Begin Milestone 6 — dashboards, reports, search and notifications**
+   (`Plan.md` §6) **only when instructed.**
+
+Separately, before documents are enabled anywhere beyond development, Penta
+must choose the production file storage and scanning service (§8).
 
 ---
 

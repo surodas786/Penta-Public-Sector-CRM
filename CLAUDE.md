@@ -66,7 +66,7 @@ npm run dev:demo       # the approved synthetic prototype, no API, no database
 npm run typecheck      # web + server + e2e projects
 npm run lint
 npm test               # backend integration suite (the milestone gate)
-npm run test:smoke     # Playwright browser checks (three isolated runs)
+npm run test:smoke     # Playwright browser checks (four isolated runs)
 npm run build          # web (with demo-exclusion checks) + server
 ```
 
