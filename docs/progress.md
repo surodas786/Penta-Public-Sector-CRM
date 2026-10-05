@@ -2,8 +2,13 @@
 
 **Current state (05 October 2026):** Milestone 3 complete on branch
 `m3-transfers-administration`, which is stacked on `m2-stages-status-follow-ups`
-(M2 reviewed, not yet merged). Nothing is merged or deployed. Milestone 4 has
-not been started. Sections, newest first: Milestone 3 · Milestone 2 ·
+(M2 reviewed, not yet merged). The branch is open for review as **PR #2**
+into `main`, carrying the M1 handover review, M2, the M2 review and M3.
+GitHub CI run 37318264686 passed every step on a clean runner: install,
+migrations, typecheck, lint, env check, integration tests, browser tests and
+the production build with demo-exclusion. That run is also M2's first CI run,
+since M2 had no pull request of its own. Nothing is merged or deployed.
+Milestone 4 has not been started. Sections, newest first: Milestone 3 · Milestone 2 ·
 Milestone 1 handover review · Milestone 1.
 
 ---
