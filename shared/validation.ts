@@ -8,7 +8,11 @@
 import { z } from 'zod';
 
 import {
+  ACTIVITY_TYPES,
+  BID_STATUSES,
+  DOCUMENT_CATEGORIES,
   LOSS_REASONS,
+  ORGANIZATION_TYPES,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
   PRIORITIES,
@@ -18,6 +22,7 @@ import {
   type OpportunityStage,
 } from './enums.js';
 import { isValidMoneyString } from './money.js';
+import { DASHBOARD_RANGES, EXPORT_KINDS, REPORT_KEYS, SEARCH_MIN_LENGTH, SEARCH_RESULT_TYPES } from './reporting.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -503,10 +508,26 @@ export const listOpportunitiesQuerySchema = z
     sectionId: uuidField.optional(),
     expectedAwardFrom: optionalDate(),
     expectedAwardTo: optionalDate(),
+    /**
+     * BR-060: records with no expected award date, which a date range would
+     * otherwise hide silently. Cannot be combined with the range.
+     */
+    expectedAward: z.literal('undated').optional(),
+    /** §10.1 active pipeline (status Active, stage neither Awarded nor Lost): the dashboard drill-down. */
+    pipeline: z.literal('active').optional(),
+    /** Outcome dates, for the awarded-this-quarter and outcome drill-downs. */
+    awardDateFrom: optionalDate(),
+    awardDateTo: optionalDate(),
+    closedDateFrom: optionalDate(),
+    closedDateTo: optionalDate(),
     sort: z.enum(OPPORTUNITY_SORT_KEYS).optional().default('createdAt'),
     dir: z.enum(['asc', 'desc']).optional().default('desc'),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.expectedAward && (value.expectedAwardFrom || value.expectedAwardTo)), {
+    message: 'Choose either undated records or an expected award date range.',
+    path: ['expectedAward'],
+  });
 
 /** The board takes no stage or status filter: those are its lanes. */
 export const boardQuerySchema = z
@@ -527,6 +548,11 @@ export const listFollowUpsQuerySchema = z
     view: z.enum(FOLLOW_UP_VIEWS).optional().default('open'),
     /** `me`, or a user id. Narrows within scope; never widens it. */
     assignedTo: z.union([z.literal('me'), uuidField]).optional(),
+    /** §20: the opportunity-owner filter, independent of the assignee filter. */
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+    /** §10.1 shows overdue tasks on On Hold records separately. */
+    hold: z.enum(['exclude', 'only']).optional(),
     q: z.string().trim().max(200).optional(),
   })
   .strict();
@@ -543,5 +569,461 @@ export const paginationQuerySchema = z
   .object({
     page: pageNumber.optional().default(1),
     pageSize: pageSizeNumber.optional().default(25),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Organization directory (FR-030, FR-031, FR-033)
+// ---------------------------------------------------------------------------
+
+/** FR-030: HTTP or HTTPS only. */
+const websiteField = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => {
+    if (value === undefined) return true;
+    if (value.length > 500) return false;
+    try {
+      const url = new URL(value);
+      return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.includes('.');
+    } catch {
+      return false;
+    }
+  }, 'Enter a full web address starting with http:// or https://');
+
+const organizationFields = {
+  name: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  type: z.enum(ORGANIZATION_TYPES),
+  parentId: z.union([uuidField, z.null()]).optional(),
+  location: optionalText(200),
+  website: websiteField,
+  basicNotes: optionalText(2000),
+};
+
+export const createOrganizationSchema = z
+  .object({
+    ...organizationFields,
+    /** Set after the user has seen the duplicate-name warning (FR-033). */
+    acknowledgeDuplicates: z.boolean().optional(),
+  })
+  .strict();
+
+export type CreateOrganizationInput = z.input<typeof createOrganizationSchema>;
+
+export const updateOrganizationSchema = z
+  .object({
+    version: z.number().int().positive('Reload the organization and try again.'),
+    name: organizationFields.name.optional(),
+    type: organizationFields.type.optional(),
+    parentId: organizationFields.parentId,
+    location: organizationFields.location,
+    website: organizationFields.website,
+    basicNotes: organizationFields.basicNotes,
+    acknowledgeDuplicates: z.boolean().optional(),
+  })
+  .strict();
+
+export const archiveSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    reason: z.string().trim().min(3, 'Give a reason.').max(2000, 'Use at most 2000 characters.'),
+  })
+  .strict();
+
+const listPage = {
+  page: z
+    .string()
+    .regex(/^\d{1,6}$/, 'Page must be a whole number.')
+    .transform(Number)
+    .refine((value) => value >= 1, 'Page must be 1 or greater.')
+    .optional()
+    .default(1),
+  pageSize: z
+    .string()
+    .regex(/^\d{1,3}$/, 'Page size must be a whole number.')
+    .transform(Number)
+    .refine((value) => value >= 1 && value <= 100, 'Page size must be between 1 and 100.')
+    .optional()
+    .default(25),
+};
+
+export const listDirectoryQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    type: z.enum(ORGANIZATION_TYPES).optional(),
+    includeArchived: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Contacts and links (FR-032, BR-020, BR-021, SEC-004)
+// ---------------------------------------------------------------------------
+
+/** A string, never a number; at most 50 characters and at least one digit (FR-032). */
+const phoneField = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine(
+    (value) => value === undefined || (value.length <= 50 && /\d/.test(value) && /^[\d\s+().\-/x]+$/i.test(value)),
+    'Use digits, spaces and + ( ) - / only, up to 50 characters.',
+  );
+
+const optionalEmail = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => value === undefined || emailField.safeParse(value).success, 'Enter a valid email address.')
+  .transform((value) => value?.toLowerCase());
+
+const contactIdentity = {
+  organizationId: uuidField,
+  fullName: z.string().trim().min(2, 'Enter the full name.').max(200, 'Use at most 200 characters.'),
+  designation: z.string().trim().min(2, 'Enter the designation.').max(200, 'Use at most 200 characters.'),
+  department: optionalText(200),
+  email: optionalEmail,
+  phone: phoneField,
+};
+
+const relationshipNotesField = optionalText(4000);
+
+/** BR-020: a contact is created together with its first link. */
+export const createContactSchema = z
+  .object({
+    ...contactIdentity,
+    opportunityId: uuidField,
+    relationshipNotes: relationshipNotesField,
+  })
+  .strict();
+
+export type CreateContactInput = z.input<typeof createContactSchema>;
+
+export const updateContactSchema = z
+  .object({
+    version: z.number().int().positive('Reload the contact and try again.'),
+    organizationId: uuidField.optional(),
+    fullName: contactIdentity.fullName.optional(),
+    designation: contactIdentity.designation.optional(),
+    department: contactIdentity.department,
+    email: contactIdentity.email,
+    phone: contactIdentity.phone,
+  })
+  .strict();
+
+export const linkContactSchema = z
+  .object({
+    contactId: uuidField,
+    relationshipNotes: relationshipNotesField,
+  })
+  .strict();
+
+export const updateLinkSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    relationshipNotes: z.union([z.string().max(4000, 'Use at most 4000 characters.'), z.null()]),
+  })
+  .strict();
+
+export const removeLinkSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    reason: optionalText(2000),
+  })
+  .strict();
+
+export const listContactsQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    organizationId: uuidField.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Activities (FR-040, FR-041)
+// ---------------------------------------------------------------------------
+
+/** An instant with an explicit offset, e.g. 2026-10-05T14:30:00+06:00. */
+export const instantField = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/, 'Enter the date and time.')
+  .refine((value) => !Number.isNaN(Date.parse(value)), 'That date and time does not exist.');
+
+const activityFields = {
+  type: z.enum(ACTIVITY_TYPES),
+  occurredAt: instantField,
+  subject: z.string().trim().min(1, 'Enter a subject.').max(200, 'Use at most 200 characters.'),
+  notes: optionalText(10_000),
+  contactId: z.union([uuidField, z.null()]).optional(),
+};
+
+export const createActivitySchema = z
+  .object({
+    ...activityFields,
+    /** The approved form's optional next action, created in the same transaction. */
+    nextFollowUp: followUpDraftSchema.optional(),
+  })
+  .strict();
+
+export type CreateActivityInput = z.input<typeof createActivitySchema>;
+
+export const updateActivitySchema = z
+  .object({
+    version: z.number().int().positive('Reload the activity and try again.'),
+    type: activityFields.type.optional(),
+    occurredAt: activityFields.occurredAt.optional(),
+    subject: activityFields.subject.optional(),
+    notes: activityFields.notes,
+    contactId: activityFields.contactId,
+  })
+  .strict();
+
+export const listActivitiesQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    type: z.enum(ACTIVITY_TYPES).optional(),
+    organizationId: uuidField.optional(),
+    contactId: uuidField.optional(),
+    authoredBy: z.literal('me').optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Tenders (FR-050, FR-051, FR-052, BR-040)
+// ---------------------------------------------------------------------------
+
+/** HTTP or HTTPS only (§7.1). */
+const noticeUrlField = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => {
+    if (value === undefined) return true;
+    if (value.length > 2000) return false;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'Enter a web address starting with http:// or https://.');
+
+const optionalInstant = z
+  .union([z.string(), z.null()])
+  .optional()
+  .transform((value) => (value === null || value === undefined || value.trim() === '' ? undefined : value.trim()))
+  .refine((value) => value === undefined || instantField.safeParse(value).success, 'Enter the date and time.');
+
+/** Bid statuses a tender may be given directly. Submitted only through Mark Submitted. */
+export const EDITABLE_BID_STATUSES = BID_STATUSES.filter((status) => status !== 'submitted') as [
+  'reviewing',
+  'preparing',
+  'not_participating',
+];
+
+const tenderFields = {
+  procuringOrganizationId: uuidField,
+  title: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  reference: z.string().trim().min(1, 'Enter the tender reference.').max(200, 'Use at most 200 characters.'),
+  procurementMethod: optionalText(200),
+  noticeUrl: noticeUrlField,
+  publicationDate: calendarDateField,
+  clarificationDeadline: optionalInstant,
+  submissionDeadline: instantField,
+  bidStatus: z.enum(EDITABLE_BID_STATUSES),
+  participationReason: optionalText(2000),
+  notes: optionalText(10_000),
+};
+
+/**
+ * FR-050: a new notice becomes the current one; the previous current notice,
+ * if any, is marked Superseded in the same transaction and kept with its bid
+ * history.
+ */
+export const createTenderSchema = z.object(tenderFields).strict();
+
+export type CreateTenderInput = z.input<typeof createTenderSchema>;
+
+export const updateTenderSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    procuringOrganizationId: tenderFields.procuringOrganizationId.optional(),
+    title: tenderFields.title.optional(),
+    reference: tenderFields.reference.optional(),
+    procurementMethod: tenderFields.procurementMethod,
+    noticeUrl: tenderFields.noticeUrl,
+    publicationDate: tenderFields.publicationDate.optional(),
+    clarificationDeadline: tenderFields.clarificationDeadline,
+    submissionDeadline: tenderFields.submissionDeadline.optional(),
+    bidStatus: tenderFields.bidStatus.optional(),
+    participationReason: tenderFields.participationReason,
+    notes: tenderFields.notes,
+  })
+  .strict();
+
+export const submitTenderSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    submittedAt: instantField,
+    /** BR-040: required when the submission time is after the recorded deadline. */
+    lateSubmissionNote: optionalText(2000),
+    /**
+     * FR-051: the user's explicit answer to "move the opportunity to Bid
+     * Submitted?". Required, with no default, so the stage never changes
+     * without a decision.
+     */
+    moveOpportunityToBidSubmitted: z.boolean({ error: 'Choose whether to move the opportunity to Bid Submitted.' }),
+  })
+  .strict();
+
+export type SubmitTenderInput = z.input<typeof submitTenderSchema>;
+
+export const tenderNoticeSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+  })
+  .strict();
+
+export const cancelTenderSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    reason: z.string().trim().min(3, 'Give a reason.').max(2000, 'Use at most 2000 characters.'),
+  })
+  .strict();
+
+export const TENDER_NOTICE_FILTERS = ['active', 'all'] as const;
+
+export const listTendersQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+    bidStatus: z.enum(BID_STATUSES).optional(),
+    /** FR-052 / BR-060: the deadline filter is on the submission deadline, as Dhaka dates. */
+    deadlineFrom: calendarDateField.optional(),
+    deadlineTo: calendarDateField.optional(),
+    /** `active`: current notices only (the default). `all`: every cycle. */
+    notice: z.enum(TENDER_NOTICE_FILTERS).optional().default('active'),
+    /**
+     * §10.1 dashboard window: current participating notices whose deadline is
+     * from now up to, not including, now plus seven days (an instant window).
+     */
+    window: z.literal('7d').optional(),
+    dir: z.enum(['asc', 'desc']).optional().default('asc'),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Documents (FR-060, FR-061, SEC-010, SEC-011)
+// ---------------------------------------------------------------------------
+
+export const finalizeUploadSchema = z
+  .object({
+    /** Required for a new document; a revision keeps its document's category. */
+    category: z.enum(DOCUMENT_CATEGORIES).optional(),
+    /** FR-061: present when this upload is a new revision of an existing document. */
+    documentId: uuidField.optional(),
+    note: optionalText(2000),
+  })
+  .strict()
+  .refine((value) => value.documentId !== undefined || value.category !== undefined, {
+    message: 'Choose a category.',
+    path: ['category'],
+  });
+
+export type FinalizeUploadInput = z.input<typeof finalizeUploadSchema>;
+
+export const updateDocumentSchema = z
+  .object({
+    version: z.number().int().positive('Reload and try again.'),
+    category: z.enum(DOCUMENT_CATEGORIES),
+  })
+  .strict();
+
+export const listDocumentsQuerySchema = z
+  .object({
+    includeArchived: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Dashboards, reports, exports, search and notifications (Milestone 6)
+// ---------------------------------------------------------------------------
+
+export const dashboardQuerySchema = z
+  .object({
+    /** FR-082: management only; narrows within scope. */
+    sectionId: uuidField.optional(),
+    /** FR-082: leads and management only; narrows within scope. */
+    ownerId: uuidField.optional(),
+    range: z.enum(DASHBOARD_RANGES).optional().default('all'),
+  })
+  .strict();
+
+/** Filters every report shares. Dates are Dhaka calendar dates on the report's named basis (BR-060). */
+const reportFilterFields = {
+  from: optionalDate(),
+  to: optionalDate(),
+  sectionId: uuidField.optional(),
+  ownerId: uuidField.optional(),
+};
+
+function chronological<T extends { from?: string | undefined; to?: string | undefined }>(value: T): boolean {
+  return !(value.from && value.to && value.to < value.from);
+}
+
+export const reportFiltersSchema = z
+  .object(reportFilterFields)
+  .strict()
+  .refine(chronological, { message: 'The end date is before the start date.', path: ['to'] });
+
+export const reportQuerySchema = z
+  .object({
+    ...reportFilterFields,
+    ...listPage,
+    /** Checked against the report's own column list by the server. */
+    sort: z.string().trim().max(40).regex(/^[a-zA-Z]+$/, 'Unknown sort column.').optional(),
+    dir: z.enum(['asc', 'desc']).optional(),
+  })
+  .strict()
+  .refine(chronological, { message: 'The end date is before the start date.', path: ['to'] });
+
+export const reportKeySchema = z.enum(REPORT_KEYS);
+export const exportKindSchema = z.enum(EXPORT_KINDS);
+
+export const searchQuerySchema = z
+  .object({
+    q: z
+      .string()
+      .trim()
+      .min(SEARCH_MIN_LENGTH, `Type at least ${SEARCH_MIN_LENGTH} characters.`)
+      .max(100, 'Use at most 100 characters.'),
+    /** One result type, paged; without it, the first few of every type. */
+    type: z.enum(SEARCH_RESULT_TYPES).optional(),
+    ...listPage,
+  })
+  .strict();
+
+export const listNotificationsQuerySchema = z
+  .object({
+    ...listPage,
+    unread: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+
+/**
+ * An export carries the filters of the screen it was requested from, as that
+ * screen sends them (query-string values). The server validates them with
+ * that screen's own schema (FR-083: same access and filter rules).
+ */
+export const createExportSchema = z
+  .object({
+    kind: z.enum(EXPORT_KINDS),
+    filters: z.record(z.string(), z.string().max(200)).optional().default({}),
   })
   .strict();

@@ -1,15 +1,14 @@
 /**
- * Activities & Follow-ups — the approved screen, with its Follow-ups tab live
- * (FR-042, FR-043).
+ * Activities & Follow-ups — the approved screen (FR-040–FR-043).
  *
- * Lists, buckets and counts all come from one scoped server query; the server
- * decides what is overdue against today's Dhaka date, so this page never
- * trusts the browser clock for it. The Activity Log tab and the calendar view
- * arrive with activities (M4) and are marked unavailable rather than faked.
+ * Follow-up lists, buckets and counts come from one scoped server query; the
+ * server decides what is overdue against today's Dhaka date, so this page
+ * never trusts the browser clock for it. The Activity Log tab lists scoped
+ * activities. The calendar view is not built yet and says so.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { CalendarClockIcon, CheckIcon, LockIcon, SearchIcon, XIcon } from 'lucide-react';
+import { CalendarClockIcon, CheckIcon, SearchIcon, XIcon } from 'lucide-react';
 
 import type { FollowUpListItemDto } from '../../../shared/api.js';
 import { boardLaneLabel } from '../../../shared/enums.js';
@@ -17,6 +16,7 @@ import { fetchFollowUps } from '../../api/endpoints.js';
 import { EmptyState } from '../../components/ui/Feedback';
 import { FilterSelect, inputCls } from '../../components/ui/FormFields';
 import { PageContainer, PageHeader, Pagination, Tabs } from '../../components/ui/Layout';
+import { ActivityLogTab } from '../components/ActivityLogTab.js';
 import { ErrorPanel, LoadingPanel } from '../components/Feedback.js';
 import {
   CancelFollowUpDialog,
@@ -26,6 +26,9 @@ import {
 import { DueTag, PriorityBadge } from '../ui/ApiBadges.js';
 import { formatCalendarDate, formatInstant } from '../ui/dates.js';
 import { useApiResource } from '../useApiResource.js';
+import { FilterChips, type FilterChip } from '../components/FilterChips.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type View = 'open' | 'overdue' | 'today' | 'upcoming' | 'completed' | 'cancelled' | 'all';
 const VIEWS: { id: View; label: string }[] = [
@@ -48,7 +51,15 @@ export function FollowUpsPage() {
   const read = (key: string, fallback = '') => params.get(key) ?? fallback;
   const tab = read('tab') === 'log' ? 'log' : 'followups';
   const view = (VIEWS.some((item) => item.id === read('filter')) ? read('filter') : 'open') as View;
-  const assignedTo = read('assignee') === 'me' ? 'me' : '';
+  // `me`, or a person's id from a dashboard drill-down; the server only ever
+  // narrows within scope with it.
+  const assigneeParam = read('assignee');
+  const assignedTo = assigneeParam === 'me' || UUID.test(assigneeParam) ? assigneeParam : '';
+  // Dashboard drill-downs (FR-014, §20): the opportunity owner, section and
+  // On Hold filters are independent of the assignee filter.
+  const owner = UUID.test(read('owner')) ? read('owner') : '';
+  const section = UUID.test(read('section')) ? read('section') : '';
+  const hold = read('hold') === 'exclude' || read('hold') === 'only' ? read('hold') : '';
   const q = read('q');
   const page = Math.max(1, Number(read('page', '1')) || 1);
 
@@ -63,11 +74,29 @@ export function FollowUpsPage() {
   };
 
   const query = useMemo(
-    () => ({ view, assignedTo: assignedTo || undefined, q: q || undefined, page, pageSize: PAGE_SIZE }),
-    [view, assignedTo, q, page],
+    () => ({
+      view,
+      assignedTo: assignedTo || undefined,
+      ownerId: owner || undefined,
+      sectionId: section || undefined,
+      hold: hold || undefined,
+      q: q || undefined,
+      page,
+      pageSize: PAGE_SIZE,
+    }),
+    [view, assignedTo, owner, section, hold, q, page],
   );
   const fetcher = useCallback((signal: AbortSignal) => fetchFollowUps(query, signal), [query]);
   const { data, error, loading, reload } = useApiResource(fetcher, [query]);
+
+  const chips: FilterChip[] = [];
+  if (owner) chips.push({ key: 'owner', label: 'Opportunities of one owner', onRemove: () => update({ owner: '' }) });
+  if (section) chips.push({ key: 'section', label: 'One section', onRemove: () => update({ section: '' }) });
+  if (assignedTo && assignedTo !== 'me') {
+    chips.push({ key: 'assignee', label: 'Assigned to one person', onRemove: () => update({ assignee: '' }) });
+  }
+  if (hold === 'exclude') chips.push({ key: 'hold', label: 'Not On Hold records', onRemove: () => update({ hold: '' }) });
+  if (hold === 'only') chips.push({ key: 'hold', label: 'On Hold records only', onRemove: () => update({ hold: '' }) });
 
   const done = () => {
     setAction(null);
@@ -94,11 +123,7 @@ export function FollowUpsPage() {
         </div>
 
         {tab === 'log' ? (
-          <EmptyState
-            icon={<LockIcon className="h-8 w-8" />}
-            title="Not available yet"
-            description="Logging meetings, calls, emails and visits arrives with the organizations, contacts and activities milestone."
-          />
+          <ActivityLogTab />
         ) : (
           <>
             <div className="flex flex-wrap items-end gap-2 border-b border-slate-200 px-4 py-3">
@@ -122,7 +147,11 @@ export function FollowUpsPage() {
               >
                 <option value="">Everyone in scope</option>
                 <option value="me">Me</option>
+                {assignedTo && assignedTo !== 'me' && <option value={assignedTo}>One person (from the dashboard)</option>}
               </FilterSelect>
+              <div className="basis-full">
+                <FilterChips chips={chips} />
+              </div>
             </div>
 
             <div
@@ -193,7 +222,7 @@ export function FollowUpsPage() {
       </div>
 
       <p className="text-[11.5px] text-slate-500">
-        Follow-ups are added from an opportunity’s page. The calendar view arrives with activities.
+        Follow-ups are added from an opportunity’s page. The calendar view is not available yet.
       </p>
 
       {/* The list cannot know whether a task is its opportunity's last open

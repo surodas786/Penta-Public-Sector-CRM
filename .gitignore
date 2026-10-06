@@ -19,6 +19,9 @@ dist-ssr
 !.env.example
 !.env.demo
 
+# Private local document storage (DOCUMENT_STORAGE_DIR) — never committed
+var
+
 # Test artefacts
 test-results
 playwright-report

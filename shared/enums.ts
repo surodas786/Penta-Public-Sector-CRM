@@ -206,3 +206,107 @@ export const BUSINESS_TIME_ZONE = 'Asia/Dhaka';
 
 /** §20 requires this wording instead of the ambiguous "BST". */
 export const BUSINESS_TIME_LABEL = 'Bangladesh time (UTC+6)';
+
+/** FR-040. "Email" is a manual log of an email, never a sent message. */
+export const ACTIVITY_TYPES = [
+  'meeting',
+  'phone_call',
+  'email',
+  'office_visit',
+  'internal_discussion',
+  'other',
+] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+
+export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
+  meeting: 'Meeting',
+  phone_call: 'Phone Call',
+  email: 'Email',
+  office_visit: 'Office Visit',
+  internal_discussion: 'Internal Discussion',
+  other: 'Other',
+};
+
+// ---------------------------------------------------------------------------
+// Tenders and documents (Milestone 5)
+// ---------------------------------------------------------------------------
+
+export const BID_STATUSES = ['reviewing', 'preparing', 'submitted', 'not_participating'] as const;
+export type BidStatus = (typeof BID_STATUSES)[number];
+
+export const BID_STATUS_LABELS: Record<BidStatus, string> = {
+  reviewing: 'Reviewing',
+  preparing: 'Preparing',
+  submitted: 'Submitted',
+  not_participating: 'Not Participating',
+};
+
+/** FR-050: a production addition. Superseded and cancelled notices raise no deadline alerts. */
+export const NOTICE_STATES = ['current', 'superseded', 'cancelled'] as const;
+export type NoticeState = (typeof NOTICE_STATES)[number];
+
+export const NOTICE_STATE_LABELS: Record<NoticeState, string> = {
+  current: 'Current',
+  superseded: 'Superseded',
+  cancelled: 'Cancelled',
+};
+
+/**
+ * FR-052 deadline indicator, decided by the server against the real clock:
+ *   missed       current, participating, deadline passed, not submitted (red)
+ *   due_soon     the same, deadline within 72 hours (amber)
+ *   upcoming     the same, later deadline (neutral)
+ *   submitted    bid submitted (green)
+ *   not_participating, inactive (superseded or cancelled notice): grey
+ */
+export const TENDER_INDICATORS = ['missed', 'due_soon', 'upcoming', 'submitted', 'not_participating', 'inactive'] as const;
+export type TenderIndicator = (typeof TENDER_INDICATORS)[number];
+
+export const DOCUMENT_CATEGORIES = [
+  'tender_document',
+  'requirements',
+  'meeting_notes',
+  'proposal',
+  'correspondence',
+  'other',
+] as const;
+export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
+
+export const DOCUMENT_CATEGORY_LABELS: Record<DocumentCategory, string> = {
+  tender_document: 'Tender Document',
+  requirements: 'Requirements',
+  meeting_notes: 'Meeting Notes',
+  proposal: 'Proposal',
+  correspondence: 'Correspondence',
+  other: 'Other',
+};
+
+/**
+ * SEC-010: a file is downloadable only when `clean`. `pending` covers both
+ * "being scanned" and "no scanner available"; `infected` is rejected;
+ * `failed` means the scanner could not decide.
+ */
+export const SCAN_STATES = ['pending', 'clean', 'infected', 'failed'] as const;
+export type ScanState = (typeof SCAN_STATES)[number];
+
+/**
+ * FR-051: Mark Submitted offers "move to Bid Submitted" only while the
+ * opportunity is active and at an earlier pipeline stage. It never offers a
+ * move backwards and never Awarded.
+ */
+export function offersBidSubmittedStage(stage: OpportunityStage, status: OpportunityStatus): boolean {
+  const index = PIPELINE_STAGES.indexOf(stage);
+  return status === 'active' && index >= 0 && index < PIPELINE_STAGES.indexOf('bid_submitted');
+}
+
+/** FR-052: amber means a deadline within this many hours. */
+export const TENDER_DUE_SOON_HOURS = 72;
+
+export const TENDER_INDICATOR_LABELS: Record<TenderIndicator, string> = {
+  missed: 'Deadline passed, not submitted',
+  due_soon: 'Due within 72 hours',
+  upcoming: 'Due later',
+  submitted: 'Submitted',
+  not_participating: 'Not participating',
+  inactive: 'No alert: notice superseded or cancelled, or opportunity closed',
+};

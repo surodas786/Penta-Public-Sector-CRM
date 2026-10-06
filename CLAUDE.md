@@ -1,7 +1,7 @@
 # Penta Public Sector Sales CRM — project instructions
 
 A sales CRM for public sector project opportunities in Bangladesh, built from an
-approved MagicPatterns prototype. Currently at the end of **Milestone 3**.
+approved MagicPatterns prototype. Currently at the end of **Milestone 8** (release preparation).
 
 ## Read before changing anything
 
@@ -42,7 +42,7 @@ document. If a conflict appears, follow the requirements and flag it.
 
 ```
 shared/     types, enums and Zod schemas used by BOTH the browser and server
-server/     Express API: db/ policy/ services/ routes/ auth/ http/ tests/
+server/     Express API: db/ policy/ services/ routes/ auth/ http/ jobs/ tests/
 src/        React app
   app/      API mode (production path)
   demo/     the approved synthetic prototype, unchanged
@@ -62,12 +62,17 @@ npm run db:seed        # synthetic fixtures; refuses production
 npm run dev:server     # API on :4800
 npm run dev            # web on :5173
 npm run dev:demo       # the approved synthetic prototype, no API, no database
+npm run jobs:run       # run due background jobs once (notifications, exports, housekeeping)
 
 npm run typecheck      # web + server + e2e projects
 npm run lint
 npm test               # backend integration suite (the milestone gate)
-npm run test:smoke     # Playwright browser smoke test
+npm run test:smoke     # Playwright browser checks (six isolated runs)
 npm run build          # web (with demo-exclusion checks) + server
+npm run test:browsers  # M8 interface checks in Chromium, Edge, Firefox
+npm run check:production-server   # compiled server in production mode
+npm run capacity:seed && npm run capacity:load   # NFR-010 envelope (local)
+npm run ops:restore-drill          # backup → restore → verify (needs BACKUP_ENCRYPTION_KEY)
 ```
 
 ## Conventions
@@ -83,20 +88,51 @@ npm run build          # web (with demo-exclusion checks) + server
 
 ## Current state
 
-Milestones 1–3 are complete: persistence, authentication, server-side
+Milestones 1–7 are complete: persistence, authentication, server-side
 permissions, opportunity create / list / detail / basic edit, stage and status
 transitions (board and dropdown), Awarded/Lost outcomes, management-only
 reopening, the follow-up lifecycle, ownership transfers, management's team
-view, account and section administration, and single-use invitation/reset
-links — all with optimistic concurrency, durable idempotency and audit.
+view, account and section administration, single-use invitation/reset
+links, the organization directory, contacts with link-scoped relationship
+notes, activities, tender cycles (one current notice per opportunity,
+explicit stage choice on submission) and private documents (staged upload,
+idempotent finalize, scan before download, revisions, management archive),
+server-computed dashboards and reports, queued audited CSV exports, scoped
+search and persistent notifications from a durable job queue — all with
+optimistic concurrency, durable idempotency and audit. Milestone 7 verified
+every mutation's audit, version, retry and atomicity controls in
+`server/tests/m7MutationControls.test.ts`; a new mutation joins its matrices
+(a test fails if a new audit action is not covered).
 
-Every writer locks the opportunity row before any follow-up row; account
-changes lock the active administrator rows first, in id order. Keep both
-orders in new services (ADRs 0003 and 0004).
+Every writer of an opportunity's data locks the opportunity row, through
+scope, before any child row (follow-ups, activities, links, tenders,
+documents), so a transfer that commits first turns the previous owner's
+queued write into the standard 404. Every account or section change starts
+with `beginAdministrativeChange` (active administrator rows, in id order).
+Keep both orders in new services (ADRs 0003 and 0004). History views order
+by `(occurred_at, sequence)`; never page audit rows by time alone.
 
 Never log request data: unexpected errors go through `describeForLog` in
 `server/http/errors.ts` (SEC-032).
 
-Contacts, activities, tenders, documents, dashboards, reports, search and
-notifications are **not** implemented. They are visibly unavailable in the UI
-rather than mocked. See `docs/progress.md` before starting Milestone 4.
+Contacts are visible only through links to accessible opportunities
+(`contactScope`); relationship notes live on the link, never the contact.
+
+Document storage is a private local directory and the only scanner is a
+development TEST scanner (refused in production); production storage and
+scanning are **unresolved** (ADR 0006). Never present them as ready.
+
+Metric definitions (active pipeline, overdue, seven-day tenders, awarded this
+quarter) live once in `server/services/metrics.ts`; dashboards, reports, list
+drill-downs and exports must compose them, inside `scopedWhere`, never
+restate them (FR-081). Services that make an alert obsolete call
+`alertsChangedInTransaction` inside their transaction; alert *generation*
+stays in background jobs (ADR 0007). Export delivery re-checks access to
+every exported record.
+
+Milestone 8 added release evidence, not features: `docs/release/` (acceptance
+matrix, security review, capacity, interface quality, pilot handover) and
+`docs/operations/` (runbooks). Three release blockers remain open and must
+never be presented as solved: production document storage and scanning,
+identity provider and MFA, and a staging environment. No production
+deployment or real data without explicit written authorization.

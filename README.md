@@ -3,14 +3,19 @@
 A CRM for tracking public sector project opportunities in Bangladesh: pipeline
 stages, follow-ups, tender cycles and section-based ownership.
 
-**Status: Milestone 3.** Persistent accounts and sessions, server-enforced
+**Status: Milestone 6.** Persistent accounts and sessions, server-enforced
 access control, opportunity creation and editing, persistent stage and status
 changes (Pipeline board and dropdown), Awarded/Lost outcomes with
 management-only reopening, the complete follow-up lifecycle, ownership
 transfers, management's team view, and account and section administration with
-single-use invitation and reset links.
-Later features are deliberately unavailable rather than mocked — see
-[`docs/progress.md`](docs/progress.md).
+single-use invitation and reset links, the shared organization directory,
+contacts with opportunity-specific relationship notes, activities, tender
+cycles with the Tender Tracker, and private opportunity documents with
+revisions and scanning before download (development storage and a test
+scanner only — production infrastructure is undecided), server-computed
+dashboards and reports with scoped totals, audited CSV exports, scoped
+search, and persistent in-app notifications from retryable background jobs.
+See [`docs/progress.md`](docs/progress.md) for what remains.
 
 > All data in this repository is synthetic. No real Penta contract or
 > government procurement is represented, and the application has not been
@@ -64,6 +69,42 @@ npm run dev          # web    http://localhost:5173
 
 Open <http://localhost:5173> and sign in with a synthetic account (below).
 
+### Documents in development
+
+Uploaded files are stored privately on the server in `DOCUMENT_STORAGE_DIR`
+(default `./var/documents`, git-ignored) — never in the browser. A file can be
+downloaded only after a clean scan:
+
+| `DOCUMENT_SCANNER` | Effect |
+| --- | --- |
+| `none` (default if unset) | Files are stored but stay **pending** and cannot be downloaded |
+| `test` (as in `.env.example`) | Development **test** scanner: it flags the harmless EICAR test string and nothing else. It is not malware scanning, and the server refuses to start with it when `NODE_ENV=production` |
+
+`DOCUMENT_MAX_UPLOAD_MB` (default 25) and `DOCUMENT_UPLOAD_TTL_MINUTES`
+(default 60) are configurable. The API removes abandoned uploads every 15
+minutes; `npm run documents:maintain` does it once and retries pending scans.
+Production storage and scanning have **not** been chosen — see
+[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
+
+### Background jobs: notifications and exports
+
+Notifications (follow-ups due today and overdue, tender deadlines within 72
+hours, ownership changes), queued CSV exports and daily housekeeping run from
+a durable job table. By default the API process runs the worker
+(`JOBS_ENABLED=true`, polling every `JOBS_POLL_SECONDS`, default 15): it
+queues one notification scan per Bangladesh clock hour and one housekeeping
+run per day, and starts work immediately when a request queues an export or
+changes an alert. Failed jobs are retried with backoff and then left `failed`.
+
+| Command | What it does |
+| --- | --- |
+| `npm run jobs:run` | Queue the scheduled jobs and run everything due, once (for `JOBS_ENABLED=false` deployments, run it from a scheduler) |
+| `npm run jobs:run -- --status` | Job counts by state and the latest failures |
+
+`REPORT_EXPORT_TTL_HOURS` (default 24) and `REPORT_EXPORT_MAX_ROWS` (default
+50 000) bound exports. See
+[`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
+
 > **Windows note.** Hyper-V, WSL and Docker Desktop reserve blocks of TCP
 > ports, and binding one fails with `EACCES` even though it looks free. The
 > default `PORT=4800` sits outside the usual blocks; if it still fails, run
@@ -106,10 +147,12 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run typecheck` | TypeScript for the web, server and e2e projects |
 | `npm run lint` | ESLint across all source |
 | `npm test` | Backend integration suite against the test database — **the milestone gate** |
-| `npm run test:smoke` | Playwright browser checks — sign-in/create smoke test and the M2 board and follow-up flows (starts its own servers against the test database) |
-| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as two Playwright runs so neither exceeds the login rate limit (10 per 15 minutes) |
+| `npm run test:smoke` | Playwright browser checks, as six isolated runs (smoke + M2, M3, M4, M5, M6, M7), each starting its own servers on freshly seeded test data |
+| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as five Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
+| `npm run test:browsers` | The Milestone 8 interface checks (1440/768/360 px, keyboard, errors, Bangla/BDT, network failure, back navigation) in Chromium, Edge and Firefox, one run each. Firefox needs `npx playwright install firefox` |
+| `npm run check:production-server` | Starts the compiled server (`npm run build:server` first) with `NODE_ENV=production` and checks the refused test scanner, security headers, secure cookies, absent demo/reset endpoints and the readiness probe |
 
 `npm test` applies the committed migrations first and refuses to run if
 `TEST_DATABASE_URL` is missing, points at the development database, or
@@ -124,6 +167,22 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run db:migrate` / `npm run db:migrate:test` | Apply migrations as the schema owner |
 | `npm run db:seed` / `npm run db:seed:test` | Load synthetic fixtures |
 | `npm run db:reset` | Truncate and reload the fixtures |
+| `npm run documents:maintain` | Remove abandoned uploads and orphaned files; retry pending scans |
+| `npm run jobs:run` | Run due background jobs once (notifications, exports, housekeeping) |
+| `npm run jobs:run -- --check` | Monitoring check: exit 1 if a job failed in the last 24 h or due work waited over an hour |
+
+### Release and operations (Milestone 8)
+
+| Command | What it does |
+| --- | --- |
+| `npm run capacity:seed` | Creates and fills `penta_crm_capacity` with the NFR-010 envelope (100 users, 10 000 opportunities, 100 000 activities and follow-ups); local only |
+| `npm run capacity:load` | 30 concurrent synthetic users against the real app; writes `docs/evidence/capacity/` |
+| `npm run capacity:pages` | First-usable-page timings of the production build (run `npm run build:web` first) |
+| `npm run ops:backup` / `npm run ops:restore` | Consistent, encrypted backup of database and documents, and verified restore into a new database (needs `BACKUP_ENCRYPTION_KEY`) |
+| `npm run ops:restore-drill` | The whole backup → restore → run-the-app-on-the-copy drill on the isolated test database |
+| `npm run ops:create-first-administrator` | Creates the first System Administrator of an empty deployment and prints a single-use invitation link |
+
+Runbooks: `docs/operations/`. Release evidence: `docs/release/`.
 
 Creating databases and roles is an administrator action, done once by
 `npm run db:up`. The application itself always connects as the restricted
@@ -143,6 +202,7 @@ server/   Express API
   routes/   thin HTTP adapters
   auth/     passport + express-session, argon2id, PostgreSQL session store
   http/     error model, CSRF, request context, validation
+  jobs/     durable background job queue, schedule and worker
 src/      React app — app/ is API mode, demo/ is the approved prototype
 e2e/      Playwright
 docs/     requirements, progress, ADRs, screenshot evidence
@@ -152,11 +212,14 @@ Access control is enforced in the database query, not in the browser. See
 [`docs/adr/0001-architecture.md`](docs/adr/0001-architecture.md) and
 [`docs/adr/0002-authentication-and-sessions.md`](docs/adr/0002-authentication-and-sessions.md) and
 [`docs/adr/0003-stage-status-and-follow-up-lifecycle.md`](docs/adr/0003-stage-status-and-follow-up-lifecycle.md) and
-[`docs/adr/0004-transfers-and-administration.md`](docs/adr/0004-transfers-and-administration.md).
+[`docs/adr/0004-transfers-and-administration.md`](docs/adr/0004-transfers-and-administration.md) and
+[`docs/adr/0005-directory-contacts-and-activities.md`](docs/adr/0005-directory-contacts-and-activities.md) and
+[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md) and
+[`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
 
 ## Not in this milestone
 
-Organizations and contacts, activities, tenders, documents, dashboards,
-reports, CSV export, search and notifications. Each is visibly unavailable in the application with the reason
-stated.
+The complete audit and mutation-control sweep (M7) and release preparation
+(M8). Production document storage and malware scanning are undecided. The
+Activities & Follow-ups calendar view is still visibly unavailable.
 [`docs/progress.md`](docs/progress.md) has the full list and the next task.

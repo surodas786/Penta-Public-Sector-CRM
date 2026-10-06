@@ -1,12 +1,11 @@
 /**
- * Drizzle schema — Milestone 1 tables only (plan section 5).
+ * Drizzle schema (plan section 5).
  *
- * Deliberately absent until their milestone: contacts, opportunity_contacts,
- * activities, tenders, documents, notifications. Tables are introduced with the
- * feature that uses them, not in advance.
+ * Tables are introduced with the feature that uses them, not in advance.
  */
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   check,
   date,
@@ -25,14 +24,20 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import {
+  ACTIVITY_TYPES,
+  BID_STATUSES,
+  DOCUMENT_CATEGORIES,
   FOLLOW_UP_STATES,
+  NOTICE_STATES,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
   ORGANIZATION_TYPES,
   PRIORITIES,
+  SCAN_STATES,
   SOLUTION_CATEGORIES,
   USER_ROLES,
 } from '../../shared/enums.js';
+import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/reporting.js';
 
 // ---------------------------------------------------------------------------
 // Enum types
@@ -46,7 +51,16 @@ export const solutionCategoryEnum = pgEnum('solution_category', SOLUTION_CATEGOR
 export const organizationTypeEnum = pgEnum('organization_type', ORGANIZATION_TYPES);
 export const followUpStateEnum = pgEnum('follow_up_state', FOLLOW_UP_STATES);
 export const idempotencyStateEnum = pgEnum('idempotency_state', ['in_progress', 'completed']);
+export const activityTypeEnum = pgEnum('activity_type', ACTIVITY_TYPES);
 export const accountTokenPurposeEnum = pgEnum('account_token_purpose', ['invitation', 'password_reset']);
+export const bidStatusEnum = pgEnum('bid_status', BID_STATUSES);
+export const noticeStateEnum = pgEnum('notice_state', NOTICE_STATES);
+export const documentCategoryEnum = pgEnum('document_category', DOCUMENT_CATEGORIES);
+export const scanStateEnum = pgEnum('scan_state', SCAN_STATES);
+export const notificationTypeEnum = pgEnum('notification_type', NOTIFICATION_TYPES);
+export const reportExportStatusEnum = pgEnum('report_export_status', EXPORT_STATUSES);
+export const reportExportKindEnum = pgEnum('report_export_kind', EXPORT_KINDS);
+export const backgroundJobStatusEnum = pgEnum('background_job_status', ['queued', 'running', 'succeeded', 'failed']);
 
 // ---------------------------------------------------------------------------
 // Sections and users
@@ -184,6 +198,9 @@ export const opportunities = pgTable(
     index('opportunities_organization_idx').on(table.organizationId),
     index('opportunities_expected_award_idx').on(table.expectedAwardDate),
     index('opportunities_created_at_idx').on(table.createdAt),
+    // Outcome report and quarterly awarded value (Milestone 6).
+    index('opportunities_award_date_idx').on(table.awardDate),
+    index('opportunities_closed_date_idx').on(table.closedDate),
     check('opportunities_estimated_value_nonnegative', sql`${table.estimatedValue} >= 0`),
     check(
       'opportunities_awarded_value_nonnegative',
@@ -305,6 +322,11 @@ export const auditEvents = pgTable(
     reason: text('reason'),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
     requestId: text('request_id').notNull(),
+    /**
+     * Append order. Events written in one transaction can share a timestamp,
+     * so history pages order by (occurred_at, sequence) to be stable.
+     */
+    sequence: bigint('sequence', { mode: 'number' }).generatedAlwaysAsIdentity().notNull(),
   },
   (table) => [
     index('audit_events_entity_idx').on(table.entityType, table.entityId),
@@ -348,6 +370,312 @@ export const idempotencyRecords = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Contacts, opportunity links and activities (Milestone 4, migration 0004)
+// ---------------------------------------------------------------------------
+
+/**
+ * A person at a government organization (FR-032). Deliberately no notes
+ * field: anything about the relationship belongs on the opportunity link,
+ * so a contact shared across teams never carries one team's commentary to
+ * another (BR-020, SEC-004). Visibility comes only from links.
+ */
+export const contacts = pgTable(
+  'contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    fullName: text('full_name').notNull(),
+    designation: text('designation').notNull(),
+    department: text('department'),
+    /** Optional; stored lower-cased. */
+    email: text('email'),
+    /** A string, never a number: leading zeros and +880 must survive. */
+    phone: text('phone'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    archivedBy: uuid('archived_by').references(() => users.id, { onDelete: 'restrict' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    index('contacts_organization_idx').on(table.organizationId),
+    index('contacts_name_idx').on(table.fullName),
+    check('contacts_email_lowercase', sql`${table.email} IS NULL OR ${table.email} = lower(${table.email})`),
+    check('contacts_archive_consistent', sql`(${table.archivedAt} IS NULL) = (${table.archivedBy} IS NULL)`),
+  ],
+);
+
+/**
+ * The link between a contact and an opportunity, carrying the relationship
+ * notes for that opportunity only (BR-020). A removed link is kept, marked
+ * removed, so history and notes survive; at most one live link per pair.
+ */
+export const opportunityContacts = pgTable(
+  'opportunity_contacts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'restrict' }),
+    relationshipNotes: text('relationship_notes'),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    removedAt: timestamp('removed_at', { withTimezone: true }),
+    removedBy: uuid('removed_by').references(() => users.id, { onDelete: 'restrict' }),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    // BR-080: unique opportunity-contact pairs, among live links.
+    uniqueIndex('opportunity_contacts_live_pair_unique')
+      .on(table.opportunityId, table.contactId)
+      .where(sql`${table.removedAt} IS NULL`),
+    index('opportunity_contacts_contact_idx').on(table.contactId),
+    check('opportunity_contacts_removal_consistent', sql`(${table.removedAt} IS NULL) = (${table.removedBy} IS NULL)`),
+  ],
+);
+
+/**
+ * Something that happened (FR-040). Never deleted (FR-041): the runtime role
+ * has no DELETE on this table (migration 0004). Edits bump the version and
+ * leave before/after values in the audit trail.
+ */
+export const activities = pgTable(
+  'activities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    type: activityTypeEnum('type').notNull(),
+    subject: text('subject').notNull(),
+    notes: text('notes'),
+    contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'restrict' }),
+    /** The original author, kept after transfers. Grants no access (FR-041). */
+    authorId: uuid('author_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    editedAt: timestamp('edited_at', { withTimezone: true }),
+    editedBy: uuid('edited_by').references(() => users.id, { onDelete: 'restrict' }),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    index('activities_opportunity_time_idx').on(table.opportunityId, table.occurredAt),
+    // Dashboard recent activity across the scope (Milestone 6).
+    index('activities_occurred_at_idx').on(table.occurredAt),
+    index('activities_contact_idx').on(table.contactId),
+    index('activities_author_idx').on(table.authorId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Tenders (Milestone 5, migration 0005)
+// ---------------------------------------------------------------------------
+
+/**
+ * One procurement notice or bid cycle for an opportunity (FR-050). Earlier
+ * cycles are kept with their bid history; at most one is current, enforced by
+ * a partial unique index. The responsible owner is not stored: it is always
+ * the opportunity's current owner (§7.1), so a transfer moves it for free.
+ */
+export const tenders = pgTable(
+  'tenders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    procuringOrganizationId: uuid('procuring_organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    title: text('title').notNull(),
+    reference: text('reference').notNull(),
+    procurementMethod: text('procurement_method'),
+    noticeUrl: text('notice_url'),
+    publicationDate: date('publication_date').notNull(),
+    clarificationDeadline: timestamp('clarification_deadline', { withTimezone: true }),
+    submissionDeadline: timestamp('submission_deadline', { withTimezone: true }).notNull(),
+    bidStatus: bidStatusEnum('bid_status').notNull(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    participationReason: text('participation_reason'),
+    lateSubmissionNote: text('late_submission_note'),
+    isCurrent: boolean('is_current').notNull(),
+    noticeState: noticeStateEnum('notice_state').notNull(),
+    notes: text('notes'),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    // FR-050, BR-080: at most one current notice per opportunity.
+    uniqueIndex('tenders_one_current_per_opportunity')
+      .on(table.opportunityId)
+      .where(sql`${table.isCurrent}`),
+    index('tenders_opportunity_idx').on(table.opportunityId),
+    index('tenders_submission_deadline_idx').on(table.submissionDeadline),
+    index('tenders_procuring_organization_idx').on(table.procuringOrganizationId),
+    check('tenders_title_length', sql`char_length(${table.title}) BETWEEN 3 AND 200`),
+    check('tenders_reference_length', sql`char_length(${table.reference}) BETWEEN 1 AND 200`),
+    check('tenders_notice_url_http', sql`${table.noticeUrl} IS NULL OR ${table.noticeUrl} ~* '^https?://'`),
+    check('tenders_current_is_current_notice', sql`${table.isCurrent} = (${table.noticeState} = 'current')`),
+    // FR-051: Submitted always has a time, and nothing else does.
+    check(
+      'tenders_submitted_has_time',
+      sql`(${table.bidStatus} = 'submitted') = (${table.submittedAt} IS NOT NULL)`,
+    ),
+    // BR-040: Not Participating requires a reason.
+    check(
+      'tenders_not_participating_reason',
+      sql`${table.bidStatus} <> 'not_participating' OR ${table.participationReason} IS NOT NULL`,
+    ),
+    // BR-040: chronology. The deadline is compared as a Dhaka calendar date.
+    check(
+      'tenders_deadline_not_before_publication',
+      sql`(${table.submissionDeadline} AT TIME ZONE 'Asia/Dhaka')::date >= ${table.publicationDate}`,
+    ),
+    check(
+      'tenders_clarification_not_after_submission',
+      sql`${table.clarificationDeadline} IS NULL OR ${table.clarificationDeadline} <= ${table.submissionDeadline}`,
+    ),
+    // BR-040: a submission after the recorded deadline carries an explanation.
+    check(
+      'tenders_late_submission_explained',
+      sql`${table.submittedAt} IS NULL OR ${table.submittedAt} <= ${table.submissionDeadline} OR ${table.lateSubmissionNote} IS NOT NULL`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Documents (Milestone 5, migration 0005)
+// ---------------------------------------------------------------------------
+
+/**
+ * A document belongs to one opportunity (FR-060) and is a series of
+ * revisions; a replacement adds a revision and never overwrites one (FR-061).
+ * Removal is a management soft-archive with a reason; there is no delete.
+ */
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    category: documentCategoryEnum('category').notNull(),
+    latestRevision: integer('latest_revision').notNull().default(1),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    archivedBy: uuid('archived_by').references(() => users.id, { onDelete: 'restrict' }),
+    archiveReason: text('archive_reason'),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    index('documents_opportunity_idx').on(table.opportunityId),
+    check(
+      'documents_archive_consistent',
+      sql`(${table.archivedAt} IS NULL) = (${table.archivedBy} IS NULL) AND (${table.archivedAt} IS NULL) = (${table.archiveReason} IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A staged upload: the bytes are stored and validated, but nothing is visible
+ * until it is finalized into a document revision. Unfinalized uploads expire
+ * and are removed, with their stored file, by the cleanup job.
+ */
+export const documentUploads = pgTable(
+  'document_uploads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    byteSize: integer('byte_size').notNull(),
+    sha256: text('sha256').notNull(),
+    /** Generated by the server; never derived from the user's filename. */
+    storageKey: text('storage_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('document_uploads_storage_key_unique').on(table.storageKey),
+    index('document_uploads_expiry_idx').on(table.expiresAt),
+    check('document_uploads_size_positive', sql`${table.byteSize} > 0`),
+  ],
+);
+
+/**
+ * One stored file. Downloadable only when `scan_state = 'clean'` (SEC-010);
+ * the scanner that decided is recorded, so a test-scanner verdict is never
+ * mistaken for a real one.
+ */
+export const documentRevisions = pgTable(
+  'document_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'restrict' }),
+    revisionNumber: integer('revision_number').notNull(),
+    /** Each staged upload becomes at most one revision: finalize is idempotent. */
+    uploadId: uuid('upload_id')
+      .notNull()
+      .references(() => documentUploads.id, { onDelete: 'restrict' }),
+    fileName: text('file_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    byteSize: integer('byte_size').notNull(),
+    sha256: text('sha256').notNull(),
+    storageKey: text('storage_key').notNull(),
+    note: text('note'),
+    scanState: scanStateEnum('scan_state').notNull().default('pending'),
+    scanner: text('scanner'),
+    scanDetail: text('scan_detail'),
+    scannedAt: timestamp('scanned_at', { withTimezone: true }),
+    uploadedBy: uuid('uploaded_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('document_revisions_number_unique').on(table.documentId, table.revisionNumber),
+    uniqueIndex('document_revisions_upload_unique').on(table.uploadId),
+    uniqueIndex('document_revisions_storage_key_unique').on(table.storageKey),
+    index('document_revisions_scan_state_idx').on(table.scanState),
+    check('document_revisions_number_positive', sql`${table.revisionNumber} >= 1`),
+    check(
+      'document_revisions_verdict_recorded',
+      sql`${table.scanState} = 'pending' OR (${table.scannedAt} IS NOT NULL AND ${table.scanner} IS NOT NULL)`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Invitation and password-reset tokens (SEC-030, migration 0003)
 // ---------------------------------------------------------------------------
 
@@ -380,6 +708,131 @@ export const accountTokens = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Notifications, exports and background jobs (Milestone 6, migration 0006)
+// ---------------------------------------------------------------------------
+
+/**
+ * In-app alerts (FR-090, BR-070). `trigger_key` deduplicates by recipient,
+ * related record, alert type and the deadline or date the alert is about, so
+ * a job that runs twice creates one alert. The wording is built when the
+ * alert is read, from records the reader can still see; nothing commercial is
+ * frozen into the row. An alert is retired (`resolved_at`) when its task is
+ * closed or rescheduled, its notice changes, or its recipient loses access —
+ * and reads re-check all of that too, so an obsolete alert never shows even
+ * before the retirement is written. Reading never touches the task.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    recipientId: uuid('recipient_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    followUpId: uuid('follow_up_id').references(() => followUps.id, { onDelete: 'restrict' }),
+    tenderId: uuid('tender_id').references(() => tenders.id, { onDelete: 'restrict' }),
+    type: notificationTypeEnum('type').notNull(),
+    triggerKey: text('trigger_key').notNull(),
+    /** The task due date the alert is about. */
+    triggerDate: date('trigger_date'),
+    /** The submission deadline the alert is about. */
+    triggerAt: timestamp('trigger_at', { withTimezone: true }),
+    /** For ownership alerts, the owner the record was transferred to. */
+    subjectUserId: uuid('subject_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolution: text('resolution'),
+  },
+  (table) => [
+    uniqueIndex('notifications_trigger_key_unique').on(table.triggerKey),
+    index('notifications_recipient_idx').on(table.recipientId, table.resolvedAt, table.createdAt),
+    index('notifications_follow_up_idx').on(table.followUpId),
+    index('notifications_tender_idx').on(table.tenderId),
+    index('notifications_opportunity_idx').on(table.opportunityId),
+    check(
+      'notifications_subject_present',
+      sql`(${table.type} IN ('follow_up_due_today', 'follow_up_overdue') AND ${table.followUpId} IS NOT NULL AND ${table.triggerDate} IS NOT NULL)
+        OR (${table.type} = 'tender_deadline' AND ${table.tenderId} IS NOT NULL AND ${table.triggerAt} IS NOT NULL)
+        OR (${table.type} = 'ownership_changed' AND ${table.subjectUserId} IS NOT NULL)`,
+    ),
+    check('notifications_resolution_recorded', sql`(${table.resolvedAt} IS NULL) = (${table.resolution} IS NULL)`),
+  ],
+);
+
+/**
+ * Queued CSV exports (FR-083, NFR-011). The file is generated by a background
+ * job under the requester's current scope and kept until `expires_at`.
+ * Delivery re-checks that the requester may still see every record in it
+ * (SEC-005); `opportunity_ids` is what makes that check possible.
+ */
+export const reportExports = pgTable(
+  'report_exports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestedBy: uuid('requested_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    kind: reportExportKindEnum('kind').notNull(),
+    /** The validated filters, exactly as the visible report applied them. */
+    filters: jsonb('filters').notNull(),
+    status: reportExportStatusEnum('status').notNull().default('queued'),
+    rowCount: integer('row_count'),
+    fileName: text('file_name'),
+    content: text('content'),
+    opportunityIds: uuid('opportunity_ids').array(),
+    failureReason: text('failure_reason'),
+    requestId: text('request_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('report_exports_requester_idx').on(table.requestedBy, table.createdAt),
+    index('report_exports_expiry_idx').on(table.expiresAt),
+    check(
+      'report_exports_ready_complete',
+      sql`${table.status} <> 'ready' OR (${table.content} IS NOT NULL AND ${table.rowCount} IS NOT NULL AND ${table.opportunityIds} IS NOT NULL AND ${table.expiresAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Durable, retryable background work (NFR-003): notification scans, queued
+ * exports and housekeeping. Workers claim with `FOR UPDATE SKIP LOCKED`, so
+ * several API instances can share the queue; a failure is retried with
+ * backoff until `max_attempts`, then left `failed` for monitoring.
+ * `dedupe_key` makes a scheduled run idempotent across instances.
+ */
+export const backgroundJobs = pgTable(
+  'background_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').notNull(),
+    payload: jsonb('payload').notNull().default({}),
+    status: backgroundJobStatusEnum('status').notNull().default('queued'),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(5),
+    runAfter: timestamp('run_after', { withTimezone: true }).notNull().defaultNow(),
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    lockedBy: text('locked_by'),
+    /** A summary safe to log: never request data or record content (SEC-032). */
+    lastError: text('last_error'),
+    dedupeKey: text('dedupe_key'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('background_jobs_dedupe_unique').on(table.dedupeKey),
+    index('background_jobs_due_idx').on(table.status, table.runAfter),
+    check('background_jobs_attempts_bounded', sql`${table.attempts} >= 0 AND ${table.attempts} <= ${table.maxAttempts}`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Session store (connect-pg-simple)
 // ---------------------------------------------------------------------------
 
@@ -404,3 +857,10 @@ export type OpportunityRow = typeof opportunities.$inferSelect;
 export type FollowUpRow = typeof followUps.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
 export type AccountTokenRow = typeof accountTokens.$inferSelect;
+export type ContactRow = typeof contacts.$inferSelect;
+export type ActivityRow = typeof activities.$inferSelect;
+export type TenderRow = typeof tenders.$inferSelect;
+export type DocumentRevisionRow = typeof documentRevisions.$inferSelect;
+export type NotificationRow = typeof notifications.$inferSelect;
+export type ReportExportRow = typeof reportExports.$inferSelect;
+export type BackgroundJobRow = typeof backgroundJobs.$inferSelect;

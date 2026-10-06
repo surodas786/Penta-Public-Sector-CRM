@@ -10,10 +10,20 @@ import type { Database } from '../db/client.js';
 import { auditEvents } from '../db/schema.js';
 import { now } from '../clock.js';
 
-export type AuditDomain = 'commercial' | 'administrative';
+/**
+ * commercial      follows opportunity scope (FR-062, SEC-012)
+ * administrative  accounts and sections; administrators only
+ * directory       shared organization and contact identity changes, which
+ *                 belong to no single opportunity
+ * reporting       CSV exports: who exported which report, with which filters
+ *                 and how many records (FR-083). Never shown in an
+ *                 opportunity's history.
+ */
+export type AuditDomain = 'commercial' | 'administrative' | 'directory' | 'reporting';
 
 export interface AuditWrite {
-  actorId: string;
+  /** Null only for system work with no acting person, e.g. a scan verdict. */
+  actorId: string | null;
   /** Set for commercial events so history inherits opportunity scope. */
   opportunityId?: string | null;
   entityType: string;
@@ -78,6 +88,37 @@ export const OPPORTUNITY_FIELD_LABELS: Record<string, string> = {
   active: 'Active',
   leadUserId: 'Section lead',
   expiresAt: 'Link expires',
+  // Contacts and activities (Milestone 4).
+  contactId: 'Contact',
+  relationshipNotes: 'Relationship notes',
+  designation: 'Designation',
+  phone: 'Phone',
+  subject: 'Subject',
+  type: 'Type',
+  occurredAt: 'When',
+  notes: 'Notes',
+  // Tenders and documents (Milestone 5).
+  title: 'Title',
+  reference: 'Reference',
+  procuringOrganizationId: 'Procuring entity',
+  procurementMethod: 'Procurement method',
+  noticeUrl: 'Notice URL',
+  publicationDate: 'Publication date',
+  clarificationDeadline: 'Clarification deadline',
+  submissionDeadline: 'Submission deadline',
+  bidStatus: 'Bid status',
+  submittedAt: 'Submitted at',
+  participationReason: 'Reason for not participating',
+  lateSubmissionNote: 'Late submission note',
+  isCurrent: 'Current tender',
+  noticeState: 'Notice state',
+  category: 'Category',
+  fileName: 'File',
+  revisionNumber: 'Revision',
+  byteSize: 'Size (bytes)',
+  scanState: 'Scan result',
+  scanner: 'Scanner',
+  archived: 'Archived',
 };
 
 /**

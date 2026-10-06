@@ -110,7 +110,7 @@ export function OpportunityEditDialog({ open, opportunity, onClose, onSaved, onR
       onClose={onClose}
       size="lg"
       title="Edit opportunity"
-      description="Ownership, stage, status and the next action are changed through their own workflows, which are not available in this release."
+      description="Ownership, stage, status and follow-ups are changed through their own actions on this page, each with its own checks and history."
       footer={
         <>
           <Button onClick={onClose} disabled={submitting}>

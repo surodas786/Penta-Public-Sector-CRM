@@ -18,7 +18,19 @@ import pg from 'pg';
 
 import { hashPassword } from '../auth/password.js';
 import * as schema from './schema.js';
-import { followUps, opportunities, organizations, sections, users } from './schema.js';
+import {
+  activities,
+  contacts,
+  followUps,
+  opportunities,
+  opportunityContacts,
+  organizations,
+  sections,
+  tenders,
+  users,
+} from './schema.js';
+import { seedActivities, seedContactLinks, seedContacts } from './seedDirectory.js';
+import { seedTenders } from './seedTenders.js';
 import {
   legacyUuid,
   seedOpportunities,
@@ -72,6 +84,10 @@ export interface SeedSummary {
   organizations: number;
   opportunities: number;
   followUps: number;
+  contacts: number;
+  contactLinks: number;
+  activities: number;
+  tenders: number;
 }
 
 export interface SeedOptions {
@@ -108,7 +124,10 @@ export async function seedDatabase(
       // unexpected foreign key surfaces instead of being silently cleared.
       await tx.execute(sql`
         TRUNCATE TABLE
-          account_tokens, audit_events, idempotency_records, follow_ups, opportunities,
+          notifications, report_exports, background_jobs,
+          document_revisions, document_uploads, documents, tenders,
+          activities, opportunity_contacts, contacts, account_tokens, audit_events,
+          idempotency_records, follow_ups, opportunities,
           organizations, users, sections, session
         RESTART IDENTITY CASCADE
       `);
@@ -210,6 +229,92 @@ export async function seedDatabase(
         await tx.insert(followUps).values(followUpRows);
       }
 
+      // --- Milestone 4: contacts, links and activities -----------------------
+      const ownerOf = new Map(seedOpportunities.map((opp) => [opp.legacyId, opp.ownerLegacyId]));
+      const firstLink = new Map<string, string>();
+      for (const link of seedContactLinks) {
+        if (!firstLink.has(link.contactLegacyId)) firstLink.set(link.contactLegacyId, link.opportunityLegacyId);
+      }
+
+      await tx.insert(contacts).values(
+        seedContacts.map((contact) => {
+          const creator = ownerOf.get(firstLink.get(contact.legacyId) ?? '') ?? 'u-arif';
+          return {
+            id: legacyUuid(contact.legacyId),
+            organizationId: legacyUuid(contact.organizationLegacyId),
+            fullName: contact.fullName,
+            designation: contact.designation,
+            department: contact.department || null,
+            email: contact.email?.toLowerCase() ?? null,
+            phone: contact.phone,
+            createdBy: legacyUuid(creator),
+          };
+        }),
+      );
+
+      // The demo's per-contact note goes on the contact's first link only: see
+      // seedDirectory.ts for why it must not be copied to every link.
+      await tx.insert(opportunityContacts).values(
+        seedContactLinks.map((link) => {
+          const contact = seedContacts.find((row) => row.legacyId === link.contactLegacyId);
+          if (!contact) throw new Error(`Link to unknown contact ${link.contactLegacyId}`);
+          return {
+            opportunityId: legacyUuid(link.opportunityLegacyId),
+            contactId: legacyUuid(link.contactLegacyId),
+            relationshipNotes:
+              firstLink.get(link.contactLegacyId) === link.opportunityLegacyId ? contact.demoNote : null,
+            createdBy: legacyUuid(ownerOf.get(link.opportunityLegacyId) ?? 'u-arif'),
+          };
+        }),
+      );
+
+      // FR-040: an activity's contact must be linked to the same opportunity.
+      const linked = new Set(seedContactLinks.map((link) => `${link.opportunityLegacyId}|${link.contactLegacyId}`));
+      for (const activity of seedActivities) {
+        if (activity.contactLegacyId && !linked.has(`${activity.opportunityLegacyId}|${activity.contactLegacyId}`)) {
+          throw new Error(`Activity ${activity.legacyId} names a contact not linked to its opportunity.`);
+        }
+      }
+      await tx.insert(activities).values(
+        seedActivities.map((activity) => ({
+          id: legacyUuid(activity.legacyId),
+          opportunityId: legacyUuid(activity.opportunityLegacyId),
+          occurredAt: new Date(activity.occurredAt),
+          type: activity.type,
+          subject: activity.subject,
+          notes: activity.notes,
+          contactId: activity.contactLegacyId ? legacyUuid(activity.contactLegacyId) : null,
+          authorId: legacyUuid(activity.authorLegacyId),
+          createdAt: new Date(activity.occurredAt),
+          updatedAt: new Date(activity.occurredAt),
+        })),
+      );
+
+      // --- Milestone 5: tenders (documents are never seeded; see seedTenders.ts)
+      const creatorOf = (opportunityLegacyId: string) => legacyUuid(ownerOf.get(opportunityLegacyId) ?? 'u-arif');
+      await tx.insert(tenders).values(
+        seedTenders.map((tender) => ({
+          id: legacyUuid(tender.legacyId),
+          opportunityId: legacyUuid(tender.opportunityLegacyId),
+          procuringOrganizationId: legacyUuid(tender.procuringOrganizationLegacyId),
+          title: tender.title,
+          reference: tender.reference,
+          procurementMethod: tender.procurementMethod,
+          noticeUrl: tender.noticeUrl,
+          publicationDate: tender.publicationDate,
+          clarificationDeadline: tender.clarificationDeadline ? new Date(tender.clarificationDeadline) : null,
+          submissionDeadline: new Date(tender.submissionDeadline),
+          bidStatus: tender.bidStatus,
+          submittedAt: tender.submittedAt ? new Date(tender.submittedAt) : null,
+          isCurrent: true,
+          noticeState: 'current' as const,
+          notes: tender.notes,
+          createdBy: creatorOf(tender.opportunityLegacyId),
+          createdAt: new Date(`${tender.publicationDate}T11:00:00+06:00`),
+          updatedAt: new Date(`${tender.publicationDate}T11:00:00+06:00`),
+        })),
+      );
+
       // Keep new records clear of the fixture reference block.
       await tx.execute(sql`SELECT setval('opportunity_reference_seq', 1000, false)`);
 
@@ -220,6 +325,10 @@ export async function seedDatabase(
         organizations: seedOrganizations.length,
         opportunities: seedOpportunities.length,
         followUps: followUpRows.length,
+        contacts: seedContacts.length,
+        contactLinks: seedContactLinks.length,
+        activities: seedActivities.length,
+        tenders: seedTenders.length,
       };
     });
   } finally {
@@ -246,7 +355,8 @@ if (invokedDirectly) {
         `Seeded "${summary.databaseName}" with synthetic fixtures: ` +
           `${summary.sections} sections, ${summary.users} users, ` +
           `${summary.organizations} organizations, ${summary.opportunities} opportunities, ` +
-          `${summary.followUps} open follow-ups.`,
+          `${summary.followUps} open follow-ups, ${summary.contacts} contacts, ` +
+          `${summary.contactLinks} contact links, ${summary.activities} activities, ${summary.tenders} tenders.`,
       );
       console.log('All records are fictional. No real Penta or government data is present.');
     })

@@ -84,6 +84,10 @@ function notifyUnauthenticated(): void {
 export interface ApiRequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
+  /** A file sent as the raw request body instead of JSON (document uploads). */
+  file?: Blob;
+  /** Extra request headers, e.g. the upload's file name. */
+  headers?: Record<string, string>;
   signal?: AbortSignal;
   /** Required for create-style mutations; preserved across retries (BR-091). */
   idempotencyKey?: string;
@@ -92,10 +96,11 @@ export interface ApiRequestOptions {
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, signal, idempotencyKey, suppressUnauthenticatedNotice } = options;
+  const { method = 'GET', body, file, signal, idempotencyKey, suppressUnauthenticatedNotice } = options;
 
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (file) headers['Content-Type'] = 'application/octet-stream';
   if (method !== 'GET' && csrfToken) headers[CSRF_HEADER] = csrfToken;
   if (idempotencyKey) headers[IDEMPOTENCY_HEADER] = idempotencyKey;
 
@@ -106,7 +111,7 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       headers,
       // First-party session cookie.
       credentials: 'same-origin',
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: file ?? (body === undefined ? undefined : JSON.stringify(body)),
       signal,
     });
   } catch (error) {

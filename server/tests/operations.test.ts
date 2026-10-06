@@ -120,7 +120,7 @@ describe('operational guards', () => {
       await expect(runMigrations(migrationUrl)).resolves.toBeUndefined();
     });
 
-    it('creates every M1 table and no feature table that belongs to a later milestone', async () => {
+    it('creates every table the implemented milestones use', async () => {
       const result = await ctx.database.db.execute<{ table_name: string }>(sql`
         SELECT table_name FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -136,14 +136,20 @@ describe('operational guards', () => {
         'sections',
         'session',
         'users',
+        // Milestone 5
+        'tenders',
+        'documents',
+        'document_revisions',
+        'document_uploads',
+        // Milestone 6
+        'notifications',
+        'report_exports',
+        'background_jobs',
       ]) {
         expect(tables).toContain(expected);
       }
-
-      // Tables arrive with the feature that uses them (plan section 5).
-      for (const deferred of ['contacts', 'opportunity_contacts', 'activities', 'tenders', 'documents', 'notifications']) {
-        expect(tables).not.toContain(deferred);
-      }
+      // Tables arrive with the feature that uses them (plan section 5); every
+      // table in the logical data model (§12) now has its feature.
     });
 
     it('refuses to seed when NODE_ENV is production', () => {
@@ -243,6 +249,8 @@ describe('operational guards', () => {
         SESSION_SECRET: 'b'.repeat(64),
         CSRF_SECRET: 'c'.repeat(64),
         DATABASE_URL: 'postgres://u:p@db:5432/penta_crm_prod',
+        // A development .env enables the test scanner, which production refuses.
+        DOCUMENT_SCANNER: 'none',
       });
       expect(loadServerConfig().secureCookies).toBe(true);
     });

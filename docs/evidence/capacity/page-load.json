@@ -1,0 +1,226 @@
+[
+  {
+    "profile": "loopback",
+    "role": "management",
+    "screen": "sign-in",
+    "medianMs": 854,
+    "maxMs": 4676,
+    "runs": [
+      4676,
+      849,
+      854,
+      832,
+      889
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "management",
+    "screen": "dashboard",
+    "medianMs": 1196,
+    "maxMs": 1596,
+    "runs": [
+      1596,
+      1196,
+      1251,
+      1093,
+      1092
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "management",
+    "screen": "list",
+    "medianMs": 303,
+    "maxMs": 381,
+    "runs": [
+      381,
+      275,
+      303,
+      363,
+      303
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "management",
+    "screen": "detail",
+    "medianMs": 312,
+    "maxMs": 348,
+    "runs": [
+      348,
+      309,
+      308,
+      312,
+      320
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "salesperson",
+    "screen": "sign-in",
+    "medianMs": 816,
+    "maxMs": 845,
+    "runs": [
+      816,
+      780,
+      839,
+      845,
+      807
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "salesperson",
+    "screen": "dashboard",
+    "medianMs": 707,
+    "maxMs": 786,
+    "runs": [
+      707,
+      649,
+      736,
+      786,
+      684
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "salesperson",
+    "screen": "list",
+    "medianMs": 326,
+    "maxMs": 361,
+    "runs": [
+      352,
+      294,
+      326,
+      361,
+      268
+    ]
+  },
+  {
+    "profile": "loopback",
+    "role": "salesperson",
+    "screen": "detail",
+    "medianMs": 309,
+    "maxMs": 319,
+    "runs": [
+      319,
+      301,
+      314,
+      309,
+      300
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "management",
+    "screen": "sign-in",
+    "medianMs": 1489,
+    "maxMs": 1662,
+    "runs": [
+      1662,
+      1378,
+      1489,
+      1168,
+      1521
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "management",
+    "screen": "dashboard",
+    "medianMs": 1236,
+    "maxMs": 1283,
+    "runs": [
+      1236,
+      1283,
+      1253,
+      999,
+      953
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "management",
+    "screen": "list",
+    "medianMs": 455,
+    "maxMs": 517,
+    "runs": [
+      511,
+      517,
+      445,
+      455,
+      436
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "management",
+    "screen": "detail",
+    "medianMs": 453,
+    "maxMs": 1154,
+    "runs": [
+      1154,
+      488,
+      421,
+      453,
+      422
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "salesperson",
+    "screen": "sign-in",
+    "medianMs": 1514,
+    "maxMs": 1622,
+    "runs": [
+      1444,
+      1560,
+      1514,
+      1477,
+      1622
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "salesperson",
+    "screen": "dashboard",
+    "medianMs": 767,
+    "maxMs": 903,
+    "runs": [
+      668,
+      685,
+      821,
+      767,
+      903
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "salesperson",
+    "screen": "list",
+    "medianMs": 454,
+    "maxMs": 472,
+    "runs": [
+      468,
+      432,
+      425,
+      454,
+      472
+    ]
+  },
+  {
+    "profile": "office broadband (40 ms, 20/5 Mbit/s)",
+    "role": "salesperson",
+    "screen": "detail",
+    "medianMs": 428,
+    "maxMs": 483,
+    "runs": [
+      422,
+      483,
+      386,
+      455,
+      428
+    ]
+  }
+]

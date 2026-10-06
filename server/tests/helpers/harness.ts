@@ -6,16 +6,21 @@
  * stubs policy, sessions or the database: a test that passes exercises the
  * same code path a browser would.
  */
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import request from 'supertest';
 import type { Express } from 'express';
 import pg from 'pg';
 
 import { hashPassword } from '../../auth/password.js';
 import { createApp, type LoginRateLimitOptions } from '../../app.js';
+import type { DocumentScanner } from '../../documents/scanner.js';
 import { createDatabase, type DatabaseHandle } from '../../db/client.js';
 import { legacyUuid } from '../../db/seedData.js';
 import { seedDatabase } from '../../db/seed.js';
-import { loadServerConfig, resolveTestDatabaseUrl } from '../../env.js';
+import { loadServerConfig, resolveTestDatabaseUrl, type ServerConfig } from '../../env.js';
 import { CSRF_HEADER, IDEMPOTENCY_HEADER } from '../../../shared/api.js';
 
 export const TEST_ORIGIN = 'http://localhost:5173';
@@ -60,6 +65,33 @@ export const ids = {
   oppImran: legacyUuid('p11'),
   oppSadia: legacyUuid('p12'),
   oppCancelledIS: legacyUuid('p19'),
+  /** Rafiq, Bid Submitted; shares Farzana Yasmin with Tasnia's p2. */
+  oppRafiqTraining: legacyUuid('p8'),
+  /** Imran, Lost; shares Golam Mostafa with Rafiq's p1. */
+  oppImranLost: legacyUuid('p17'),
+  /** Sadia, Bid Preparation; shares Rezaul Karim with Nadia's p7. */
+  oppSadiaDataCenter: legacyUuid('p12'),
+  // Contacts (M4)
+  /** Links: p1 (Rafiq, GA, carries the demo note) and p17 (Imran, IS). */
+  contactGolam: legacyUuid('c13'),
+  /** Links: p1 only. */
+  contactLaila: legacyUuid('c14'),
+  /** Links: p2 (Tasnia, carries the note) and p8 (Rafiq). Same section, different owners. */
+  contactFarzana: legacyUuid('c6'),
+  /** Links: p7 (Nadia, GA, carries the note), p12 and p20 (Sadia, IS). */
+  contactRezaul: legacyUuid('c17'),
+  // Activities (M4)
+  /** p1, Office Visit, authored by Rafiq, with Golam Mostafa. */
+  activityRafiqVisit: legacyUuid('a1'),
+  // Tenders (M5): each opportunity's one current notice.
+  /** p2 (Tasnia, Bid Preparation), Preparing, deadline 2026-10-04 12:00 Dhaka. */
+  tenderTasnia: legacyUuid('t1'),
+  /** p3 (Rafiq, Tender Published), Reviewing, deadline 2026-10-08 15:00 Dhaka. */
+  tenderRafiq: legacyUuid('t2'),
+  /** p8 (Rafiq, Bid Submitted), Submitted. */
+  tenderRafiqSubmitted: legacyUuid('t3'),
+  /** p12 (Sadia, IS, Bid Preparation), Preparing. */
+  tenderSadia: legacyUuid('t5'),
   // Organizations
   orgSylvanHills: legacyUuid('o7'),
   orgCivicRecords: legacyUuid('o2'),
@@ -82,6 +114,7 @@ export const ABSENT_UUID = '00000000-0000-4000-8000-000000000000';
 export interface TestContext {
   app: Express;
   database: DatabaseHandle;
+  config: ServerConfig;
   close: () => Promise<void>;
 }
 
@@ -98,6 +131,10 @@ export interface TestAppOptions {
   /** Shorten so expiry can be exercised without thousands of clock steps. */
   sessionIdleMinutes?: number;
   sessionAbsoluteMinutes?: number;
+  /** Replaces the configured scanner, e.g. to make it unavailable. */
+  documentScanner?: DocumentScanner;
+  documentScannerKind?: 'none' | 'test';
+  maxUploadBytes?: number;
 }
 
 /**
@@ -117,6 +154,14 @@ export function createTestApp(options: TestAppOptions = {}): TestContext {
   const config = loadServerConfig({
     databaseUrl,
     appOrigin: TEST_ORIGIN,
+    // Each app gets its own private storage directory, and the test scanner
+    // unless a test asks otherwise; nothing depends on a developer's .env.
+    documents: {
+      storageDir: mkdtempSync(path.join(os.tmpdir(), 'penta-documents-')),
+      scanner: options.documentScannerKind ?? 'test',
+      maxUploadBytes: options.maxUploadBytes ?? 25 * 1024 * 1024,
+      uploadTtlMinutes: 60,
+    },
     ...(options.sessionIdleMinutes !== undefined
       ? { sessionIdleMinutes: options.sessionIdleMinutes }
       : {}),
@@ -130,11 +175,13 @@ export function createTestApp(options: TestAppOptions = {}): TestContext {
     config,
     // Raised far above any single suite's volume, except where a test sets it.
     loginRateLimit: options.loginRateLimit ?? { windowMs: 60_000, limit: 10_000 },
+    ...(options.documentScanner ? { documentScanner: options.documentScanner } : {}),
   });
 
   return {
     app,
     database,
+    config,
     close: async () => {
       await database.close();
     },

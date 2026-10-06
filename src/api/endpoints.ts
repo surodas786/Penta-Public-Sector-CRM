@@ -7,7 +7,19 @@
  */
 import type {
   AccountLinkDto,
+  ActivityDto,
+  ContactDetailDto,
+  ContactListItemDto,
+  OpportunityContactDto,
+  OrganizationDetailDto,
+  OrganizationListItemDto,
   AdminAuditEntryDto,
+  DocumentDetailDto,
+  DocumentDto,
+  DocumentPolicyDto,
+  StagedUploadDto,
+  TenderDto,
+  TenderSubmissionResultDto,
   AdminSectionDto,
   AdminUserDto,
   AssigneeOptionDto,
@@ -19,12 +31,20 @@ import type {
   FollowUpListDto,
   HistoryEntryDto,
   OpportunityDetailDto,
-  OpportunityListItemDto,
   OrganizationSummaryDto,
   OwnerOptionDto,
   Paginated,
   TeamDto,
+  DashboardDto,
+  NotificationDto,
+  NotificationListDto,
+  OpportunityListDto,
+  ReportDto,
+  ReportExportDto,
+  SearchResponseDto,
 } from '../../shared/api.js';
+import type { ExportKind, ReportKey } from '../../shared/reporting.js';
+import { BACKGROUND_REQUEST_HEADER, FILE_NAME_HEADER } from '../../shared/api.js';
 import { apiRequest, setCsrfToken, toQuery } from './client.js';
 
 // --- Authentication ---------------------------------------------------------
@@ -76,6 +96,14 @@ export interface OpportunityListParams {
   organizationId?: string;
   ownerId?: string;
   sectionId?: string;
+  pipeline?: string;
+  expectedAward?: string;
+  expectedAwardFrom?: string;
+  expectedAwardTo?: string;
+  awardDateFrom?: string;
+  awardDateTo?: string;
+  closedDateFrom?: string;
+  closedDateTo?: string;
   sort?: string;
   dir?: string;
 }
@@ -83,7 +111,7 @@ export interface OpportunityListParams {
 export function fetchOpportunities(
   params: OpportunityListParams,
   signal?: AbortSignal,
-): Promise<Paginated<OpportunityListItemDto>> {
+): Promise<OpportunityListDto> {
   return apiRequest(`/api/opportunities${toQuery(params)}`, { signal });
 }
 
@@ -166,6 +194,9 @@ export interface FollowUpListParams {
   [key: string]: string | number | undefined;
   view?: string;
   assignedTo?: string;
+  ownerId?: string;
+  sectionId?: string;
+  hold?: string;
   q?: string;
   page?: number;
   pageSize?: number;
@@ -303,4 +334,260 @@ export async function setPasswordWithLink(token: string, password: string): Prom
     body: { token, password },
     suppressUnauthenticatedNotice: true,
   });
+}
+
+// --- Organization directory (M4) ---------------------------------------------
+
+export function fetchDirectory(
+  params: { q?: string; type?: string; page?: number; pageSize?: number; includeArchived?: string },
+  signal?: AbortSignal,
+): Promise<Paginated<OrganizationListItemDto>> {
+  return apiRequest(`/api/organizations${toQuery(params)}`, { signal });
+}
+
+export function fetchOrganization(id: string, signal?: AbortSignal): Promise<OrganizationDetailDto> {
+  return apiRequest(`/api/organizations/${id}`, { signal });
+}
+
+export function createOrganization(body: Record<string, unknown>, idempotencyKey: string): Promise<OrganizationDetailDto> {
+  return apiRequest('/api/organizations', { method: 'POST', body, idempotencyKey });
+}
+
+export function updateOrganization(id: string, body: Record<string, unknown>): Promise<OrganizationDetailDto> {
+  return apiRequest(`/api/organizations/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveOrganization(id: string, body: Record<string, unknown>): Promise<OrganizationDetailDto> {
+  return apiRequest(`/api/organizations/${id}/archive`, { method: 'POST', body });
+}
+
+// --- Contacts and links (M4) ---------------------------------------------------
+
+export function fetchContacts(
+  params: { q?: string; organizationId?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<Paginated<ContactListItemDto>> {
+  return apiRequest(`/api/contacts${toQuery(params)}`, { signal });
+}
+
+export function fetchContact(id: string, signal?: AbortSignal): Promise<ContactDetailDto> {
+  return apiRequest(`/api/contacts/${id}`, { signal });
+}
+
+export function createContact(body: Record<string, unknown>, idempotencyKey: string): Promise<ContactDetailDto> {
+  return apiRequest('/api/contacts', { method: 'POST', body, idempotencyKey });
+}
+
+export function updateContact(id: string, body: Record<string, unknown>): Promise<ContactDetailDto> {
+  return apiRequest(`/api/contacts/${id}`, { method: 'PATCH', body });
+}
+
+export function archiveContact(id: string, body: Record<string, unknown>): Promise<ContactDetailDto> {
+  return apiRequest(`/api/contacts/${id}/archive`, { method: 'POST', body });
+}
+
+export function fetchOpportunityContacts(
+  opportunityId: string,
+  signal?: AbortSignal,
+): Promise<{ items: OpportunityContactDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/contacts`, { signal });
+}
+
+export function linkContact(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityContactDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/contacts`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateContactLink(linkId: string, body: Record<string, unknown>): Promise<OpportunityContactDto> {
+  return apiRequest(`/api/contact-links/${linkId}`, { method: 'PATCH', body });
+}
+
+export function removeContactLink(linkId: string, body: Record<string, unknown>): Promise<void> {
+  return apiRequest(`/api/contact-links/${linkId}/remove`, { method: 'POST', body });
+}
+
+// --- Activities (M4) -------------------------------------------------------------
+
+export function fetchOpportunityActivities(
+  opportunityId: string,
+  params: { page?: number; pageSize?: number } = {},
+  signal?: AbortSignal,
+): Promise<Paginated<ActivityDto>> {
+  return apiRequest(`/api/opportunities/${opportunityId}/activities${toQuery(params)}`, { signal });
+}
+
+export function fetchActivities(
+  params: { q?: string; type?: string; organizationId?: string; contactId?: string; authoredBy?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<Paginated<ActivityDto>> {
+  return apiRequest(`/api/activities${toQuery(params)}`, { signal });
+}
+
+export function createActivity(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<ActivityDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/activities`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateActivity(id: string, body: Record<string, unknown>): Promise<ActivityDto> {
+  return apiRequest(`/api/activities/${id}`, { method: 'PATCH', body });
+}
+
+// --- Tenders (M5) -------------------------------------------------------------
+
+export interface TenderListParams {
+  q?: string;
+  ownerId?: string;
+  sectionId?: string;
+  bidStatus?: string;
+  deadlineFrom?: string;
+  deadlineTo?: string;
+  notice?: 'active' | 'all';
+  window?: '7d';
+  dir?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
+}
+
+export function fetchTenders(params: TenderListParams, signal?: AbortSignal): Promise<Paginated<TenderDto>> {
+  return apiRequest(`/api/tenders${toQuery({ ...params })}`, { signal });
+}
+
+export function fetchOpportunityTenders(opportunityId: string, signal?: AbortSignal): Promise<{ items: TenderDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/tenders`, { signal });
+}
+
+export function createTender(opportunityId: string, body: Record<string, unknown>, idempotencyKey: string): Promise<TenderDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/tenders`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateTender(id: string, body: Record<string, unknown>): Promise<TenderDto> {
+  return apiRequest(`/api/tenders/${id}`, { method: 'PATCH', body });
+}
+
+export function submitTender(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<TenderSubmissionResultDto> {
+  return apiRequest(`/api/tenders/${id}/submit`, { method: 'POST', body, idempotencyKey });
+}
+
+export function designateCurrentTender(id: string, version: number): Promise<TenderDto> {
+  return apiRequest(`/api/tenders/${id}/designate-current`, { method: 'POST', body: { version } });
+}
+
+export function cancelTenderNotice(id: string, body: { version: number; reason: string }): Promise<TenderDto> {
+  return apiRequest(`/api/tenders/${id}/cancel`, { method: 'POST', body });
+}
+
+// --- Documents (M5) -----------------------------------------------------------
+
+export function fetchDocumentPolicy(signal?: AbortSignal): Promise<DocumentPolicyDto> {
+  return apiRequest('/api/documents/policy', { signal });
+}
+
+export function fetchOpportunityDocuments(
+  opportunityId: string,
+  includeArchived: boolean,
+  signal?: AbortSignal,
+): Promise<{ items: DocumentDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/documents${toQuery({ includeArchived: includeArchived ? 'true' : undefined })}`, {
+    signal,
+  });
+}
+
+export function fetchDocument(id: string, signal?: AbortSignal): Promise<DocumentDetailDto> {
+  return apiRequest(`/api/documents/${id}`, { signal });
+}
+
+/** Step 1: the raw bytes, streamed to private server storage. Nothing is kept in the browser. */
+export function stageDocumentUpload(opportunityId: string, file: File): Promise<StagedUploadDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/document-uploads`, {
+    method: 'POST',
+    file,
+    headers: { [FILE_NAME_HEADER]: encodeURIComponent(file.name) },
+  });
+}
+
+/** Step 2: idempotent; a retry with the same key returns the same document. */
+export function finalizeDocumentUpload(
+  uploadId: string,
+  body: { category?: string; documentId?: string; note?: string },
+  idempotencyKey: string,
+): Promise<DocumentDetailDto> {
+  return apiRequest(`/api/document-uploads/${uploadId}/finalize`, { method: 'POST', body, idempotencyKey });
+}
+
+export function archiveDocument(id: string, body: { version: number; reason: string }): Promise<DocumentDetailDto> {
+  return apiRequest(`/api/documents/${id}/archive`, { method: 'POST', body });
+}
+
+/** An authorized, same-origin streaming URL. It works only while the session can see the record. */
+export function documentDownloadUrl(revisionId: string, inline = false): string {
+  return `/api/document-revisions/${revisionId}/download${inline ? '?disposition=inline' : ''}`;
+}
+
+// --- Dashboards, reports, exports, search, notifications (M6) ---------------
+
+export function fetchDashboard(
+  params: { sectionId?: string; ownerId?: string; range?: string },
+  signal?: AbortSignal,
+): Promise<DashboardDto> {
+  return apiRequest(`/api/dashboard${toQuery(params)}`, { signal });
+}
+
+export function fetchReport(
+  key: ReportKey,
+  params: Record<string, string | number | undefined>,
+  signal?: AbortSignal,
+): Promise<ReportDto> {
+  return apiRequest(`/api/reports/${key}${toQuery(params)}`, { signal });
+}
+
+/** Queues a CSV export of every matching record; the key makes a retry safe (BR-091). */
+export function requestExport(kind: ExportKind, filters: Record<string, string>, idempotencyKey: string): Promise<ReportExportDto> {
+  return apiRequest('/api/exports', { method: 'POST', body: { kind, filters }, idempotencyKey });
+}
+
+export function fetchExport(id: string, signal?: AbortSignal): Promise<ReportExportDto> {
+  return apiRequest(`/api/exports/${id}`, { signal });
+}
+
+/** Same-origin download; the server re-checks access when it is opened. */
+export function exportDownloadUrl(id: string): string {
+  return `/api/exports/${id}/download`;
+}
+
+export function searchRecords(
+  params: { q: string; type?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<SearchResponseDto> {
+  return apiRequest(`/api/search${toQuery(params)}`, { signal });
+}
+
+export function fetchNotifications(
+  params: { page?: number; pageSize?: number; unread?: 'true' | 'false' },
+  signal?: AbortSignal,
+): Promise<NotificationListDto> {
+  return apiRequest(`/api/notifications${toQuery(params)}`, { signal });
+}
+
+/** Polled while a page is open; marked as background so it never extends the idle window (SEC-031). */
+export function fetchUnreadCount(signal?: AbortSignal): Promise<{ unreadCount: number }> {
+  return apiRequest('/api/notifications/unread-count', { signal, headers: { [BACKGROUND_REQUEST_HEADER]: '1' } });
+}
+
+/** Records that the alert was read. It never completes or changes the task. */
+export function markNotificationRead(id: string): Promise<{ notification: NotificationDto; unreadCount: number }> {
+  return apiRequest(`/api/notifications/${id}/read`, { method: 'POST', body: {} });
+}
+
+export function markAllNotificationsRead(): Promise<{ unreadCount: number }> {
+  return apiRequest('/api/notifications/read-all', { method: 'POST', body: {} });
 }

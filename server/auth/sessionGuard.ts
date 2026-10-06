@@ -8,6 +8,7 @@
 import { eq } from 'drizzle-orm';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
+import { BACKGROUND_REQUEST_HEADER } from '../../shared/api.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
 import { sections, users } from '../db/schema.js';
@@ -91,8 +92,11 @@ export function resolveActor({ db, idleMinutes }: SessionGuardOptions): RequestH
           return;
         }
 
-        // Sliding idle window.
-        req.session.idleExpiresAt = current + idleMinutes * 60_000;
+        // Sliding idle window. A background poll is not activity: an open but
+        // unattended tab must still reach the idle limit (SEC-031).
+        if (req.get(BACKGROUND_REQUEST_HEADER) !== '1') {
+          req.session.idleExpiresAt = current + idleMinutes * 60_000;
+        }
 
         const actor: Actor = {
           id: account.id,

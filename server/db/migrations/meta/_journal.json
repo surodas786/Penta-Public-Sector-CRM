@@ -29,6 +29,34 @@
       "when": 1791204930944,
       "tag": "0003_accounts_invitations_and_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791208399834,
+      "tag": "0004_contacts_links_and_activities",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791211097628,
+      "tag": "0005_tenders_and_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791264025635,
+      "tag": "0006_reports_exports_notifications_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791271242808,
+      "tag": "0007_audit_event_sequence",
+      "breakpoints": true
     }
   ]
 }

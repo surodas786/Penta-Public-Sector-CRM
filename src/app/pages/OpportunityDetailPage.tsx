@@ -1,19 +1,16 @@
 /**
  * Opportunity detail — the approved tabbed layout, loaded through scoped
- * endpoints (plan 7.5).
- *
- * Overview, Follow-ups and Change History are live, and so are stage, status
- * and follow-up actions (M2). Contacts, Tender and Documents keep their
- * approved position but are marked unavailable: their tables do not exist
- * yet, so an empty tab would imply "none recorded" rather than "not built".
+ * endpoints (plan 7.5). Every tab is live: Overview, Contacts, Activities
+ * (with follow-ups), Tender and Documents (M5), and Change History.
  */
-import { useCallback, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowLeftIcon,
   CalendarClockIcon,
   CalendarPlusIcon,
+  MessageSquarePlusIcon,
   CheckIcon,
   LockIcon,
   PencilIcon,
@@ -23,7 +20,7 @@ import {
   XIcon,
 } from 'lucide-react';
 
-import type { FollowUpDto, HistoryEntryDto, OpportunityDetailDto } from '../../../shared/api.js';
+import type { ActivityDto, FollowUpDto, HistoryEntryDto, OpportunityDetailDto } from '../../../shared/api.js';
 import {
   BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
@@ -40,13 +37,17 @@ import { formatBdt, formatBdtShort, isValidMoneyString } from '../../../shared/m
 import { ApiRequestError, newIdempotencyKey } from '../../api/client.js';
 import {
   fetchOpportunity,
+  fetchOpportunityActivities,
+  fetchOpportunityContacts,
+  fetchOpportunityDocuments,
   fetchOpportunityFollowUps,
   fetchOpportunityHistory,
+  fetchOpportunityTenders,
 } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/Feedback';
 import { inputCls } from '../../components/ui/FormFields';
-import { DetailItem, PageContainer, Panel, Tabs, tdCls, thCls } from '../../components/ui/Layout';
+import { DetailItem, PageContainer, Pagination, Panel, Tabs, tdCls, thCls } from '../../components/ui/Layout';
 import { useAuth } from '../AuthContext.js';
 import { useApiResource } from '../useApiResource.js';
 import { ErrorPanel, LoadingPanel } from '../components/Feedback.js';
@@ -58,6 +59,11 @@ import {
 } from '../components/FollowUpDialogs.js';
 import { OpportunityEditDialog } from '../components/OpportunityEditDialog.js';
 import { TransferDialog } from '../components/TransferDialog.js';
+import { ActivityDialog } from '../components/ActivityDialog.js';
+import { ActivityTimeline } from '../components/ActivityTimeline.js';
+import { ContactsTab } from '../components/OpportunityContactsTab.js';
+import { DocumentsTab } from '../components/OpportunityDocumentsTab.js';
+import { TenderTab } from '../components/OpportunityTenderTab.js';
 import { TransitionDialog } from '../components/TransitionDialog.js';
 import {
   needsTransitionDialog,
@@ -68,14 +74,7 @@ import {
 import { DueTag, PriorityBadge, RetainedStageNote, StageBadge } from '../ui/ApiBadges.js';
 import { dhakaToday, formatCalendarDate, formatInstant } from '../ui/dates.js';
 
-type TabId = 'overview' | 'contacts' | 'followups' | 'tender' | 'documents' | 'history';
-
-const UNAVAILABLE_TABS: Partial<Record<TabId, string>> = {
-  contacts:
-    'Contacts and link-scoped relationship notes arrive with the organizations and contacts milestone.',
-  tender: 'Tender cycles arrive with the tender and documents milestone.',
-  documents: 'Private document storage with authenticated download arrives with the same milestone.',
-};
+type TabId = 'overview' | 'contacts' | 'activities' | 'tender' | 'documents' | 'history';
 
 const ACTION_LABELS: Record<string, string> = {
   'opportunity.created': 'Opportunity created',
@@ -89,6 +88,22 @@ const ACTION_LABELS: Record<string, string> = {
   'follow_up.cancelled': 'Follow-up cancelled',
   'follow_up.reassigned': 'Follow-up reassigned',
   'opportunity.transferred': 'Ownership transferred',
+  'contact.linked': 'Contact linked',
+  'contact.unlinked': 'Contact unlinked',
+  'contact.notes_updated': 'Relationship notes updated',
+  'activity.logged': 'Activity logged',
+  'activity.updated': 'Activity edited',
+  'tender.created': 'Tender added',
+  'tender.updated': 'Tender updated',
+  'tender.submitted': 'Bid marked Submitted',
+  'tender.superseded': 'Tender notice superseded',
+  'tender.designated_current': 'Tender made current',
+  'tender.cancelled': 'Tender notice cancelled',
+  'document.uploaded': 'Document uploaded',
+  'document.revised': 'Document revision uploaded',
+  'document.scanned': 'Document scanned',
+  'document.updated': 'Document category changed',
+  'document.archived': 'Document archived',
 };
 
 type TaskAction = { kind: 'complete' | 'reschedule' | 'cancel'; task: FollowUpDto };
@@ -96,6 +111,10 @@ type TaskAction = { kind: 'complete' | 'reschedule' | 'cancel'; task: FollowUpDt
 export function OpportunityDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set by the opportunity list; anything else falls back to the plain list.
+  const requestedReturn = (location.state as { returnTo?: unknown } | null)?.returnTo;
+  const backTo = typeof requestedReturn === 'string' && /^\/opportunities(\?|$)/.test(requestedReturn) ? requestedReturn : '/opportunities';
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [editOpen, setEditOpen] = useState(false);
@@ -106,7 +125,9 @@ export function OpportunityDetailPage() {
   const [transferOpen, setTransferOpen] = useState(false);
   const today = dhakaToday();
 
-  const tab = ((params.get('tab') as TabId) || 'overview') as TabId;
+  // M2 linked follow-ups as ?tab=followups; they now live on the approved Activities tab.
+  const requested = params.get('tab');
+  const tab = (requested === 'followups' ? 'activities' : requested || 'overview') as TabId;
   const setTab = (next: TabId) => {
     const updated = new URLSearchParams(params);
     if (next === 'overview') updated.delete('tab');
@@ -119,19 +140,55 @@ export function OpportunityDetailPage() {
     (signal: AbortSignal) => fetchOpportunityFollowUps(id, { pageSize: 50 }, signal),
     [id],
   );
+  // Change History and the activity log are paged on the server; nothing
+  // beyond the first page is silently dropped.
+  const [historyPage, setHistoryPage] = useState(1);
+  const [activitiesPage, setActivitiesPage] = useState(1);
+  useEffect(() => {
+    setHistoryPage(1);
+    setActivitiesPage(1);
+  }, [id]);
   const historyFetcher = useCallback(
-    (signal: AbortSignal) => fetchOpportunityHistory(id, { pageSize: 50 }, signal),
-    [id],
+    (signal: AbortSignal) => fetchOpportunityHistory(id, { page: historyPage, pageSize: HISTORY_PAGE_SIZE }, signal),
+    [id, historyPage],
   );
 
   const detail = useApiResource(detailFetcher, [id]);
   const followUps = useApiResource(followUpsFetcher, [id]);
-  const history = useApiResource(historyFetcher, [id]);
+  const history = useApiResource(historyFetcher, [id, historyPage]);
+  const contacts = useApiResource(
+    useCallback((signal: AbortSignal) => fetchOpportunityContacts(id, signal), [id]),
+    [id],
+  );
+  const activities = useApiResource(
+    useCallback(
+      (signal: AbortSignal) => fetchOpportunityActivities(id, { page: activitiesPage, pageSize: HISTORY_PAGE_SIZE }, signal),
+      [id, activitiesPage],
+    ),
+    [id, activitiesPage],
+  );
+  const tenders = useApiResource(
+    useCallback((signal: AbortSignal) => fetchOpportunityTenders(id, signal), [id]),
+    [id],
+  );
+  const [showArchived, setShowArchived] = useState(false);
+  const documents = useApiResource(
+    useCallback((signal: AbortSignal) => fetchOpportunityDocuments(id, showArchived, signal), [id, showArchived]),
+    [id, showArchived],
+  );
+  const [activityDialog, setActivityDialog] = useState<{ open: boolean; activity: ActivityDto | null }>({
+    open: false,
+    activity: null,
+  });
 
   const reloadAll = () => {
     detail.reload();
     followUps.reload();
     history.reload();
+    contacts.reload();
+    activities.reload();
+    tenders.reload();
+    documents.reload();
   };
 
   if (detail.loading && !detail.data) {
@@ -145,7 +202,7 @@ export function OpportunityDetailPage() {
   if (detail.error) {
     return (
       <PageContainer>
-        <BackLink onClick={() => navigate('/opportunities')} />
+        <BackLink onClick={() => navigate(backTo)} />
         <ErrorPanel error={detail.error} onRetry={detail.reload} />
       </PageContainer>
     );
@@ -196,7 +253,7 @@ export function OpportunityDetailPage() {
 
   return (
     <PageContainer>
-      <BackLink onClick={() => navigate('/opportunities')} />
+      <BackLink onClick={() => navigate(backTo)} />
 
       <header className="rounded-lg border border-slate-200 bg-white p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -247,6 +304,12 @@ export function OpportunityDetailPage() {
             title={closed ? 'Closed records are read-only. Reopen it, or return it to Active, first.' : undefined}
           >
             Edit
+          </Button>
+          <Button
+            icon={<MessageSquarePlusIcon className="h-4 w-4" />}
+            onClick={() => setActivityDialog({ open: true, activity: null })}
+          >
+            Log Activity
           </Button>
           {!closed && (
             <Button icon={<CalendarPlusIcon className="h-4 w-4" />} onClick={() => setAddFollowUpOpen(true)}>
@@ -313,10 +376,6 @@ export function OpportunityDetailPage() {
               {isManagement ? 'Reassign / Transfer' : 'Reassign'}
             </Button>
           )}
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11.5px] font-medium text-slate-500">
-            <LockIcon className="h-3.5 w-3.5" />
-            Activities arrive in a later milestone
-          </span>
           <span className="ml-auto text-[11px] text-slate-400">Opportunities cannot be deleted.</span>
         </div>
       </header>
@@ -328,10 +387,10 @@ export function OpportunityDetailPage() {
             onChange={setTab}
             tabs={[
               { id: 'overview', label: 'Overview' },
-              { id: 'contacts', label: 'Contacts' },
-              { id: 'followups', label: 'Follow-ups', count: followUps.data?.total },
-              { id: 'tender', label: 'Tender' },
-              { id: 'documents', label: 'Documents' },
+              { id: 'contacts', label: 'Contacts', count: contacts.data?.items.length },
+              { id: 'activities', label: 'Activities', count: activities.data?.total },
+              { id: 'tender', label: 'Tender', count: tenders.data?.items.length },
+              { id: 'documents', label: 'Documents', count: documents.data?.items.length },
               { id: 'history', label: 'Change History', count: history.data?.total },
             ]}
           />
@@ -340,8 +399,41 @@ export function OpportunityDetailPage() {
         <div className="p-4">
           {tab === 'overview' && <OverviewTab opportunity={opportunity} today={today} />}
 
-          {tab === 'followups' && (
-            <FollowUpsTab
+          {tab === 'contacts' && (
+            <ContactsTab
+              resource={contacts}
+              opportunityId={opportunity.id}
+              opportunityName={opportunity.name}
+              onChanged={reloadAll}
+            />
+          )}
+
+          {tab === 'activities' && (
+            <div className="flex flex-col gap-4">
+              <Panel
+                title="Activity log"
+                subtitle="Meetings, calls, emails and visits, newest first. The original author is kept after transfers."
+                action={
+                  <Button size="sm" icon={<MessageSquarePlusIcon className="h-3.5 w-3.5" />} onClick={() => setActivityDialog({ open: true, activity: null })}>
+                    Log Activity
+                  </Button>
+                }
+              >
+                {activities.error ? (
+                  <ErrorPanel error={activities.error} onRetry={activities.reload} />
+                ) : activities.data && activities.data.items.length > 0 ? (
+                  <>
+                    <ActivityTimeline
+                      activities={activities.data.items}
+                      onEdit={(activity) => setActivityDialog({ open: true, activity })}
+                    />
+                    <PageControls page={activities.data} onChange={setActivitiesPage} />
+                  </>
+                ) : (
+                  <EmptyState compact title="No activities logged" description="Log meetings, calls and visits to keep a record." />
+                )}
+              </Panel>
+              <FollowUpsTab
               resource={followUps}
               today={today}
               canAdd={!closed}
@@ -349,16 +441,33 @@ export function OpportunityDetailPage() {
               onAction={setTaskAction}
               onHold={opportunity.status === 'on_hold'}
             />
+            </div>
           )}
 
-          {tab === 'history' && <HistoryTab resource={history} />}
+          {tab === 'history' && <HistoryTab resource={history} onPageChange={setHistoryPage} />}
 
-          {UNAVAILABLE_TABS[tab] && (
-            <EmptyState
-              icon={<LockIcon className="h-8 w-8" />}
-              title="Not available yet"
-              description={UNAVAILABLE_TABS[tab]}
-              compact
+          {tab === 'tender' && (
+            <TenderTab
+              resource={tenders}
+              closed={closed}
+              parent={{
+                id: opportunity.id,
+                name: opportunity.name,
+                organizationId: opportunity.organization.id,
+                organizationName: opportunity.organization.name,
+                ownerName: opportunity.ownerName,
+              }}
+              onChanged={reloadAll}
+            />
+          )}
+
+          {tab === 'documents' && (
+            <DocumentsTab
+              resource={documents}
+              opportunityId={opportunity.id}
+              showArchived={showArchived}
+              onShowArchived={setShowArchived}
+              onChanged={reloadAll}
             />
           )}
         </div>
@@ -391,6 +500,18 @@ export function OpportunityDetailPage() {
         }}
         onReload={() => {
           setTransferOpen(false);
+          reloadAll();
+        }}
+      />
+      <ActivityDialog
+        open={activityDialog.open}
+        opportunityId={opportunity.id}
+        activity={activityDialog.activity}
+        onClose={() => setActivityDialog({ open: false, activity: null })}
+        onDone={() => {
+          // A newly logged activity is on the first page, newest first.
+          if (!activityDialog.activity) setActivitiesPage(1);
+          setActivityDialog({ open: false, activity: null });
           reloadAll();
         }}
       />
@@ -628,10 +749,36 @@ function FollowUpsTab({
   );
 }
 
+const HISTORY_PAGE_SIZE = 25;
+
+/** Shown only when there is more than one page. */
+function PageControls({
+  page,
+  onChange,
+}: {
+  page: { page: number; pageSize: number; total: number };
+  onChange: (page: number) => void;
+}) {
+  if (page.total <= page.pageSize) return null;
+  return (
+    <div className="mt-3">
+      <Pagination
+        page={page.page}
+        pageCount={Math.max(1, Math.ceil(page.total / page.pageSize))}
+        total={page.total}
+        pageSize={page.pageSize}
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
 function HistoryTab({
   resource,
+  onPageChange,
 }: {
   resource: ReturnType<typeof useApiResource<Awaited<ReturnType<typeof fetchOpportunityHistory>>>>;
+  onPageChange: (page: number) => void;
 }) {
   if (resource.loading && !resource.data) return <LoadingPanel label="Loading change history…" />;
   if (resource.error) return <ErrorPanel error={resource.error} onRetry={resource.reload} />;
@@ -640,11 +787,14 @@ function HistoryTab({
   }
 
   return (
-    <ol className="flex flex-col gap-3">
-      {resource.data.items.map((entry) => (
-        <HistoryItem key={entry.id} entry={entry} />
-      ))}
-    </ol>
+    <div>
+      <ol className="flex flex-col gap-3">
+        {resource.data.items.map((entry) => (
+          <HistoryItem key={entry.id} entry={entry} />
+        ))}
+      </ol>
+      <PageControls page={resource.data} onChange={onPageChange} />
+    </div>
   );
 }
 

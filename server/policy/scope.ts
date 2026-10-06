@@ -5,9 +5,9 @@
  * filtering, counting, sorting and pagination all happen inside the database
  * over permitted rows only (SEC-002). Routes never rebuild these rules.
  */
-import { and, eq, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, or, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 
-import { opportunities, users } from '../db/schema.js';
+import { contacts, opportunities, opportunityContacts, users } from '../db/schema.js';
 import type { UserRole } from '../../shared/enums.js';
 import { type Actor, hasCoherentScope } from './actor.js';
 
@@ -172,8 +172,158 @@ export function keepsFollowUpAfterTransfer(
   return assignee.role === 'lead' && assignee.sectionId === transfer.newSectionId;
 }
 
+// ---------------------------------------------------------------------------
+// Directory, contacts and activities (Milestone 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * SEC-004 / BR-020: a contact is visible only through a live link to an
+ * opportunity the actor can see. Management sees every contact. The predicate
+ * reuses `opportunityScope`, so a transfer changes contact visibility on the
+ * next request with no separate bookkeeping.
+ */
+export function contactScope(actor: Actor): SQL {
+  if (!canAccessSalesRecords(actor)) return MATCH_NOTHING;
+  if (actor.role === 'management') return MATCH_EVERYTHING;
+  return sql`EXISTS (
+    SELECT 1 FROM ${opportunityContacts}
+    JOIN ${opportunities} ON ${opportunities.id} = ${opportunityContacts.opportunityId}
+    WHERE ${opportunityContacts.contactId} = ${contacts.id}
+      AND ${opportunityContacts.removedAt} IS NULL
+      AND ${opportunityScope(actor)}
+  )`;
+}
+
+/** FR-033: every sales role may add to and correct the shared directory. */
+export function canEditDirectory(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/** FR-033: archiving an organization or a contact is management's decision. */
+export function canArchiveDirectory(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && actor.role === 'management';
+}
+
+/**
+ * FR-041: a salesperson amends only activities they authored, and only while
+ * the record is still theirs to see; leads and management amend any activity
+ * in scope. Visibility is decided separately, through the opportunity: an
+ * author who has lost access gets a 404 before this is ever asked.
+ */
+export function canEditActivity(actor: Actor, activity: { authorId: string }): boolean {
+  if (!canAccessSalesRecords(actor)) return false;
+  if (actor.role === 'management' || actor.role === 'lead') return true;
+  return activity.authorId === actor.id;
+}
+
+// ---------------------------------------------------------------------------
+// Tenders and documents (Milestone 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tender records follow the "Edit sales records" row: every role that can see
+ * the opportunity may maintain its tenders. Tender ownership is derived from
+ * the opportunity (BR-050), so there is no separate tender owner to check.
+ */
+export function canManageTenders(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/**
+ * FR-060, FR-061: a user may upload a document or a revision only while
+ * authorized to edit the parent opportunity. The opportunity is still located
+ * through `opportunityScope` on every upload, finalize, read and download.
+ */
+export function canUploadDocuments(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/** FR-061: removal is a management soft-archive with a reason. */
+export function canArchiveDocument(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && actor.role === 'management';
+}
+
 export function canAdministerAccounts(actor: Actor): boolean {
   return actor.active && actor.role === 'admin';
+}
+
+// ---------------------------------------------------------------------------
+// Dashboards, reports, exports, search and notifications (Milestone 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Permission matrix "View reports and export": management all, leads their
+ * section, salespeople their own records — always through
+ * `opportunityScope`. Administrators get no commercial dashboard, report,
+ * export, search result or notification (AT-01).
+ */
+export function canViewCommercialReports(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/** FR-082: only management receives cross-section filters. */
+export function canFilterBySection(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && actor.role === 'management';
+}
+
+/** FR-082: salespeople receive no other-user selector. */
+export function canFilterByOwner(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && (actor.role === 'management' || actor.role === 'lead');
+}
+
+/**
+ * The people an owner filter may offer (FR-082). Leads see their own section,
+ * management every section; inactive owners stay listed because their
+ * historical records remain in scope (plan 3.1).
+ */
+export function ownerFilterOptionScope(actor: Actor): SQL {
+  if (!canFilterByOwner(actor)) return MATCH_NOTHING;
+  const owners = sql`${users.role} IN ('sales', 'lead') AND ${users.sectionId} IS NOT NULL`;
+  if (actor.role === 'management') return owners;
+  return actor.sectionId ? (and(owners, eq(users.sectionId, actor.sectionId)) as SQL) : MATCH_NOTHING;
+}
+
+/** FR-091: administrative search covers accounts and sections only. */
+export function canSearchAdministration(actor: Actor): boolean {
+  return canAdministerAccounts(actor);
+}
+
+/**
+ * Whether the account in `user` (any alias of the users table) can currently
+ * see the opportunity row in the same query. This is `opportunityScope`
+ * restated for a person other than the requester — the notification
+ * generator needs it to choose recipients and to retire alerts whose
+ * recipient lost access (BR-070, SEC-005). A test checks the two agree for
+ * every account.
+ */
+export function userSeesOpportunitySql(user: {
+  id: AnyColumn;
+  role: AnyColumn;
+  sectionId: AnyColumn;
+  active: AnyColumn;
+}): SQL {
+  return sql`(${user.active} AND (
+    ${user.role} = 'management'
+    OR (${user.role} = 'lead' AND ${user.sectionId} IS NOT NULL AND ${user.sectionId} = ${opportunities.sectionId})
+    OR (${user.role} = 'sales' AND ${user.sectionId} IS NOT NULL AND ${opportunities.ownerId} = ${user.id})
+  ))`;
+}
+
+/**
+ * FR-090: who is alerted about a record. The person responsible (a task's
+ * assignee, or the owner), the section's lead ("leads see their section
+ * alerts") and management ("all permitted alerts") — each only while they
+ * can see the record, so an alert never grants or outlives access.
+ */
+export function alertRecipientSql(
+  user: { id: AnyColumn; role: AnyColumn; sectionId: AnyColumn; active: AnyColumn },
+  responsibleUserId: SQL | AnyColumn,
+): SQL {
+  return sql`(${userSeesOpportunitySql(user)} AND (
+    ${user.id} = ${responsibleUserId}
+    OR ${user.role} = 'management'
+    OR (${user.role} = 'lead' AND ${user.sectionId} = ${opportunities.sectionId})
+  ))`;
 }
 
 /**

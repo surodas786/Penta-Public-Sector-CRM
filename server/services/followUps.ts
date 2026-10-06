@@ -38,6 +38,9 @@ import type { Actor } from '../policy/actor.js';
 import { canManageFollowUps, followUpAssigneeScope, opportunityScope, scopedWhere } from '../policy/scope.js';
 import { recordAuditEvent } from './audit.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
+import { signalJobsEnqueued } from '../jobs/queue.js';
+import { dueTodayFollowUp, overdueFollowUp } from './metrics.js';
+import { alertsChangedInTransaction } from './notifications.js';
 
 // ---------------------------------------------------------------------------
 // Shaping
@@ -533,9 +536,11 @@ export async function completeFollowUp(options: {
         context: 'replacement',
       });
     }
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'completed', followUpId });
     await completeClaim(tx, followUpId);
   });
 
+  signalJobsEnqueued();
   return readFollowUp(db, followUpId);
 }
 
@@ -574,9 +579,11 @@ export async function rescheduleFollowUp(options: {
       reason: command.reason,
       requestId,
     });
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'rescheduled', followUpId });
     await completeClaim(tx, followUpId);
   });
 
+  signalJobsEnqueued();
   return readFollowUp(db, followUpId);
 }
 
@@ -631,9 +638,11 @@ export async function cancelFollowUp(options: {
         context: 'replacement',
       });
     }
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'cancelled', followUpId });
     await completeClaim(tx, followUpId);
   });
 
+  signalJobsEnqueued();
   return readFollowUp(db, followUpId);
 }
 
@@ -693,6 +702,10 @@ export async function listFollowUps(
   if (query.assignedTo) {
     filters.push(eq(followUps.assignedUserId, query.assignedTo === 'me' ? actor.id : query.assignedTo));
   }
+  if (query.ownerId) filters.push(eq(opportunities.ownerId, query.ownerId));
+  if (query.sectionId) filters.push(eq(opportunities.sectionId, query.sectionId));
+  if (query.hold === 'exclude') filters.push(ne(opportunities.status, 'on_hold'));
+  if (query.hold === 'only') filters.push(eq(opportunities.status, 'on_hold'));
   if (query.q) {
     const term = `%${query.q}%`;
     filters.push(or(ilike(followUps.title, term), ilike(opportunities.name, term), ilike(opportunities.reference, term)));
@@ -702,8 +715,9 @@ export async function listFollowUps(
 
   const bucket: Record<ListFollowUpsQuery['view'], SQL | undefined> = {
     open: eq(followUps.state, 'open'),
-    overdue: and(eq(followUps.state, 'open'), sql`${followUps.dueDate} < ${today}::date`),
-    today: and(eq(followUps.state, 'open'), sql`${followUps.dueDate} = ${today}::date`),
+    // The dashboard's definitions (FR-081): one meaning of "overdue" everywhere.
+    overdue: overdueFollowUp(today),
+    today: dueTodayFollowUp(today),
     upcoming: and(eq(followUps.state, 'open'), sql`${followUps.dueDate} > ${today}::date`),
     completed: eq(followUps.state, 'completed'),
     cancelled: eq(followUps.state, 'cancelled'),

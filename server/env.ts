@@ -19,6 +19,42 @@ export interface ServerConfig {
   sessionAbsoluteMinutes: number;
   /** HTTPS-only cookies. Forced on in production. */
   secureCookies: boolean;
+  documents: DocumentConfig;
+  jobs: JobsConfig;
+  /** REQUEST_LOG: one summary line per request (`all`), per failed or slow request (`errors`, default), or none. */
+  requestLog: 'all' | 'errors' | 'off';
+}
+
+/**
+ * Background work (FR-090, NFR-003): notification scans, queued CSV exports
+ * and housekeeping, all through the durable `background_jobs` queue.
+ */
+export interface JobsConfig {
+  /** Run the worker inside the API process. Off for the integration suite, which drives jobs itself. */
+  enabled: boolean;
+  /** How often the worker looks for due work. */
+  pollSeconds: number;
+  /** A ready export can be downloaded for this long, then it is removed. */
+  exportTtlHours: number;
+  /** An export reaching this many rows is refused rather than truncated (FR-083: all matching rows). */
+  exportMaxRows: number;
+}
+
+/**
+ * SEC-010 document storage and scanning. Production infrastructure has not
+ * been chosen (see ADR 0006): the only storage is a private local directory,
+ * and the only scanner is a deterministic test scanner that is refused in
+ * production. With no scanner, files are stored but stay unavailable.
+ */
+export type DocumentScannerKind = 'none' | 'test';
+
+export interface DocumentConfig {
+  /** Private directory outside anything the web server serves. */
+  storageDir: string;
+  scanner: DocumentScannerKind;
+  maxUploadBytes: number;
+  /** An upload not finalized within this time is abandoned and removed. */
+  uploadTtlMinutes: number;
 }
 
 function required(name: string): string {
@@ -41,10 +77,36 @@ function positiveInt(name: string, fallback: number): number {
   return parsed;
 }
 
+function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`${name} must be true or false, received "${raw}".`);
+}
+
+function readScanner(isProduction: boolean): DocumentScannerKind {
+  const raw = (process.env.DOCUMENT_SCANNER ?? 'none').trim();
+  if (raw !== 'none' && raw !== 'test') {
+    throw new Error(`DOCUMENT_SCANNER must be none or test, received "${raw}".`);
+  }
+  // The test scanner recognises test fixtures only. It is not malware scanning.
+  if (raw === 'test' && isProduction) {
+    throw new Error('DOCUMENT_SCANNER=test is a development scanner and must not be used in production.');
+  }
+  return raw;
+}
+
 function readNodeEnv(): AppEnvironment {
   const raw = (process.env.NODE_ENV ?? 'development').trim();
   if (raw === 'development' || raw === 'test' || raw === 'production') return raw;
   throw new Error(`NODE_ENV must be development, test or production, received "${raw}".`);
+}
+
+function readRequestLog(): ServerConfig['requestLog'] {
+  const raw = (process.env.REQUEST_LOG ?? 'errors').trim();
+  if (raw === 'all' || raw === 'errors' || raw === 'off') return raw;
+  throw new Error(`REQUEST_LOG must be all, errors or off, received "${raw}".`);
 }
 
 /** Obviously-unsafe placeholder secrets must not reach production. */
@@ -98,6 +160,19 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
     sessionIdleMinutes: positiveInt('SESSION_IDLE_MINUTES', 30),
     sessionAbsoluteMinutes: positiveInt('SESSION_ABSOLUTE_MINUTES', 720),
     secureCookies: isProduction || process.env.FORCE_SECURE_COOKIES === 'true',
+    documents: {
+      storageDir: (process.env.DOCUMENT_STORAGE_DIR ?? './var/documents').trim(),
+      scanner: readScanner(isProduction),
+      maxUploadBytes: positiveInt('DOCUMENT_MAX_UPLOAD_MB', 25) * 1024 * 1024,
+      uploadTtlMinutes: positiveInt('DOCUMENT_UPLOAD_TTL_MINUTES', 60),
+    },
+    jobs: {
+      enabled: readBoolean('JOBS_ENABLED', true),
+      pollSeconds: positiveInt('JOBS_POLL_SECONDS', 15),
+      exportTtlHours: positiveInt('REPORT_EXPORT_TTL_HOURS', 24),
+      exportMaxRows: positiveInt('REPORT_EXPORT_MAX_ROWS', 50_000),
+    },
+    requestLog: readRequestLog(),
     ...overrides,
   };
 

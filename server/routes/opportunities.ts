@@ -13,8 +13,10 @@ import {
   boardQuerySchema,
   changeStageSchema,
   changeStatusSchema,
+  createActivitySchema,
   createFollowUpSchema,
   createOpportunitySchema,
+  linkContactSchema,
   listOpportunitiesQuerySchema,
   paginationQuerySchema,
   patchOpportunitySchema,
@@ -29,6 +31,8 @@ import { requireIdempotencyKey } from '../http/idempotencyKey.js';
 import { parseOrThrow, singleValueQuery } from '../http/validate.js';
 import type { Actor } from '../policy/actor.js';
 import { canCreateOpportunity } from '../policy/scope.js';
+import { createActivity, getActivity, listOpportunityActivities } from '../services/activities.js';
+import { linkContact, listOpportunityContacts } from '../services/contacts.js';
 import { createFollowUp, getScopedFollowUp, listAssigneeOptions } from '../services/followUps.js';
 import { runIdempotent, type CompleteClaimInTransaction } from '../services/idempotency.js';
 import {
@@ -294,6 +298,79 @@ export function createOpportunitiesRouter(options: {
     transition('opportunity.transfer', (body) => {
       const command = parseOrThrow(transferOpportunitySchema, body);
       return (args) => transferOpportunity({ db, command, ...args });
+    }),
+  );
+
+  // --- Contacts and activities on one opportunity (M4) ---------------------
+  router.get(
+    '/:id/contacts',
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+      res.json({ items: await listOpportunityContacts(db, actor, readIdParam(req.params.id)) });
+    }),
+  );
+
+  router.post(
+    '/:id/contacts',
+    csrfGuard,
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+      const id = readIdParam(req.params.id);
+      const command = parseOrThrow(linkContactSchema, req.body);
+      const key = requireIdempotencyKey(req);
+      const { result, replayed } = await runIdempotent({
+        db,
+        actorId: actor.id,
+        operation: 'contact.link',
+        key,
+        payload: { id, body: req.body },
+        execute: (completeClaim) =>
+          linkContact({ db, actor, opportunityId: id, command, requestId: req.requestId, completeClaim }),
+        replay: async (linkId) => {
+          const link = (await listOpportunityContacts(db, actor, id)).find((row) => row.linkId === linkId);
+          if (!link) throw notFound('replayed link no longer visible');
+          return link;
+        },
+      });
+      res.status(replayed ? 200 : 201).json(result);
+    }),
+  );
+
+  router.get(
+    '/:id/activities',
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+      const id = readIdParam(req.params.id);
+      const { page, pageSize } = parseOrThrow(paginationQuerySchema, singleValueQuery(req.query));
+      res.json(await listOpportunityActivities(db, actor, id, page, pageSize));
+    }),
+  );
+
+  router.post(
+    '/:id/activities',
+    csrfGuard,
+    handle(async (req, res) => {
+      const actor = req.actor;
+      if (!actor) throw unauthenticated();
+      const id = readIdParam(req.params.id);
+      const command = parseOrThrow(createActivitySchema, req.body);
+      const key = requireIdempotencyKey(req);
+      const { result, replayed } = await runIdempotent({
+        db,
+        actorId: actor.id,
+        operation: 'activity.create',
+        key,
+        payload: { id, body: req.body },
+        execute: (completeClaim) =>
+          createActivity({ db, actor, opportunityId: id, command, requestId: req.requestId, completeClaim }),
+        // A single scoped read: a paged list could miss a back-dated activity
+        // on a busy record and answer a successful retry with 404.
+        replay: (activityId) => getActivity(db, actor, activityId),
+      });
+      res.status(replayed ? 200 : 201).json(result);
     }),
   );
 

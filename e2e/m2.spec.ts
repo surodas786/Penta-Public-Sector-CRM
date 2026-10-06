@@ -34,7 +34,10 @@ async function signIn(page: Page, email: string) {
   await page.getByLabel('Email address').fill(email);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/opportunities$/);
+  // Sales roles land on the dashboard (M6), then open the opportunity list.
+  await page.waitForURL(/\/dashboard$/);
+  await page.goto('/opportunities');
+  await expect(page.getByRole('heading', { name: 'Opportunities' })).toBeVisible();
 }
 
 async function shot(page: Page, name: string) {
@@ -216,7 +219,7 @@ test('review 4a: completing the last open follow-up requires a replacement', asy
   await board();
   await card(lane(page, 'Awaiting Tender'), PORTAL).getByRole('button').click();
   const main = page.locator('#main-content');
-  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+  await main.getByRole('tab', { name: /Activities/ }).click();
 
   await main.getByRole('button', { name: 'Complete' }).first().click();
   const dialog = page.getByRole('dialog');
@@ -247,7 +250,7 @@ test('review 4b: an On Hold record may close its last follow-up without a replac
   await board();
   await card(lane(page, 'On Hold'), DOCUMENTS).getByRole('button').click();
   const main = page.locator('#main-content');
-  await main.getByRole('tab', { name: /Follow-ups/ }).click();
+  await main.getByRole('tab', { name: /Activities/ }).click();
 
   await main.getByRole('button', { name: 'Complete' }).first().click();
   const dialog = page.getByRole('dialog');

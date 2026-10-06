@@ -18,14 +18,32 @@ import { resolveActor } from './auth/sessionGuard.js';
 import { configurePassport } from './auth/passport.js';
 import { createCsrfProtection, createOriginGuard } from './http/csrf.js';
 import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
-import { requestContext } from './http/requestContext.js';
+import { requestContext, requestLog } from './http/requestContext.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createActivitiesRouter, createContactLinksRouter, createContactsRouter } from './routes/contacts.js';
 import { createFollowUpsRouter } from './routes/followUps.js';
 import { createLookupsRouter } from './routes/lookups.js';
 import { createOpportunitiesRouter } from './routes/opportunities.js';
 import { createOrganizationsRouter } from './routes/organizations.js';
 import { createTeamRouter } from './routes/team.js';
+import {
+  createDashboardRouter,
+  createExportsRouter,
+  createNotificationsRouter,
+  createReportsRouter,
+  createSearchRouter,
+} from './routes/reporting.js';
+import { createOpportunityTendersRouter, createTendersRouter } from './routes/tenders.js';
+import {
+  createDocumentRevisionsRouter,
+  createDocumentsRouter,
+  createDocumentUploadsRouter,
+  createOpportunityDocumentsRouter,
+} from './routes/documents.js';
+import { createScanner, type DocumentScanner } from './documents/scanner.js';
+import { LocalDocumentStorage, type DocumentStorage } from './documents/storage.js';
+import type { DocumentServices } from './services/documents.js';
 
 export const SESSION_COOKIE_NAME = 'penta.sid';
 
@@ -39,9 +57,26 @@ export interface CreateAppOptions {
   config: ServerConfig;
   /** Tests raise the limit except in the suite that exercises it. */
   loginRateLimit?: LoginRateLimitOptions;
+  /** Tests substitute a scanner to exercise failure; defaults follow the configuration. */
+  documentScanner?: DocumentScanner;
+  documentStorage?: DocumentStorage;
 }
 
-export function createApp({ database, config, loginRateLimit }: CreateAppOptions): Express {
+export function createDocumentServices(
+  database: DatabaseHandle,
+  config: ServerConfig,
+  overrides: { scanner?: DocumentScanner; storage?: DocumentStorage } = {},
+): DocumentServices {
+  return {
+    db: database.db,
+    storage: overrides.storage ?? new LocalDocumentStorage(config.documents.storageDir),
+    scanner: overrides.scanner ?? createScanner(config.documents.scanner),
+    maxUploadBytes: config.documents.maxUploadBytes,
+    uploadTtlMinutes: config.documents.uploadTtlMinutes,
+  };
+}
+
+export function createApp({ database, config, loginRateLimit, documentScanner, documentStorage }: CreateAppOptions): Express {
   const app = express();
 
   // Behind a reverse proxy in staging/production; needed for secure cookies
@@ -50,6 +85,7 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
   app.disable('x-powered-by');
 
   app.use(requestContext);
+  if (config.requestLog !== 'off') app.use(requestLog(config.requestLog));
   app.use(
     helmet({
       // The SPA is served separately; the API returns JSON only.
@@ -137,8 +173,23 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
   });
 
   app.get('/api/health', (_req, res) => {
-    // No secrets, no configuration, no counts (NFR-003).
+    // Liveness. No secrets, no configuration, no counts (NFR-003).
     res.json({ status: 'ok' });
+  });
+
+  // Readiness (NFR-003): can this instance reach its database? A load
+  // balancer stops routing to it while this is 503. Never says why.
+  app.get('/api/health/ready', (_req, res) => {
+    void (async () => {
+      const ok = await Promise.race([
+        database.pool.query('SELECT 1').then(
+          () => true,
+          () => false,
+        ),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ]);
+      res.status(ok ? 200 : 503).json({ status: ok ? 'ok' : 'unavailable', database: ok ? 'ok' : 'unavailable' });
+    })();
   });
 
   app.use(
@@ -155,11 +206,30 @@ export function createApp({ database, config, loginRateLimit }: CreateAppOptions
     }),
   );
 
+  const documentServices = createDocumentServices(database, config, {
+    ...(documentScanner ? { scanner: documentScanner } : {}),
+    ...(documentStorage ? { storage: documentStorage } : {}),
+  });
+
   app.use('/api/opportunities', createOpportunitiesRouter({ db: database.db, csrfGuard }));
+  app.use('/api/opportunities', createOpportunityTendersRouter({ db: database.db, csrfGuard }));
+  app.use('/api/opportunities', createOpportunityDocumentsRouter({ services: documentServices, csrfGuard }));
+  app.use('/api/tenders', createTendersRouter({ db: database.db, csrfGuard }));
+  app.use('/api/document-uploads', createDocumentUploadsRouter({ services: documentServices, csrfGuard }));
+  app.use('/api/documents', createDocumentsRouter({ services: documentServices, csrfGuard, scanner: config.documents.scanner }));
+  app.use('/api/document-revisions', createDocumentRevisionsRouter({ services: documentServices }));
   app.use('/api/follow-ups', createFollowUpsRouter({ db: database.db, csrfGuard }));
-  app.use('/api/organizations', createOrganizationsRouter({ db: database.db }));
+  app.use('/api/organizations', createOrganizationsRouter({ db: database.db, csrfGuard }));
+  app.use('/api/contacts', createContactsRouter({ db: database.db, csrfGuard }));
+  app.use('/api/contact-links', createContactLinksRouter({ db: database.db, csrfGuard }));
+  app.use('/api/activities', createActivitiesRouter({ db: database.db, csrfGuard }));
   app.use('/api/lookups', createLookupsRouter({ db: database.db }));
   app.use('/api/team', createTeamRouter({ db: database.db }));
+  app.use('/api/dashboard', createDashboardRouter({ db: database.db }));
+  app.use('/api/reports', createReportsRouter({ db: database.db }));
+  app.use('/api/exports', createExportsRouter({ db: database.db, csrfGuard }));
+  app.use('/api/search', createSearchRouter({ db: database.db }));
+  app.use('/api/notifications', createNotificationsRouter({ db: database.db, csrfGuard }));
   app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin }));
 
   // NOTE: no demo, seed or reset endpoint is registered in any environment.
