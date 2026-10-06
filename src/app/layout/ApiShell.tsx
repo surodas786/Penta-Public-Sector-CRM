@@ -71,9 +71,9 @@ export function ApiShell() {
       to: '/activities',
       label: 'Activities & Follow-ups',
       icon: CalendarCheckIcon,
-      available: false,
+      // Follow-ups are live; the Activity Log tab inside says it arrives with M4.
+      available: true,
       show: sales,
-      reason: 'The follow-up lifecycle arrives with the stages and follow-ups milestone.',
     },
     {
       to: '/tenders',
@@ -95,9 +95,8 @@ export function ApiShell() {
       to: '/team',
       label: 'Team Management',
       icon: UsersIcon,
-      available: false,
-      show: user.role === 'management',
-      reason: 'Team structure and workload views arrive with the administration milestone.',
+      available: true,
+      show: user.capabilities.teamView,
     },
     { to: '/administration', label: 'Administration', icon: ShieldCheckIcon, available: true, show: admin },
   ].filter((item) => item.show);

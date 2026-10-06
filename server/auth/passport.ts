@@ -44,7 +44,9 @@ export function configurePassport(db: Database): ConfiguredPassport {
               .where(eq(users.email, normalised))
               .limit(1);
 
-            if (!account) {
+            // An invited account with no password yet fails exactly like an
+            // unknown one, after the same work, so timing reveals neither.
+            if (!account || account.passwordHash === null) {
               // Spend the same work as a real verification so timing does not
               // reveal whether the address exists.
               await verifyAgainstDummy(password);

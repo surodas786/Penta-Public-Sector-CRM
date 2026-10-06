@@ -3,16 +3,38 @@
  * access. This is the production path; the synthetic demo lives in
  * src/demo/DemoApp.tsx and is reachable only through `npm run dev:demo`.
  */
+import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 
 import { AuthProvider, useAuth } from './AuthContext.js';
 import { AccessDeniedPanel } from './components/Feedback.js';
 import { ApiShell } from './layout/ApiShell.js';
 import { UnavailableFeature } from './components/Feedback.js';
-import { AdministrationPage } from './pages/AdministrationPage.js';
+
+import { FollowUpsPage } from './pages/FollowUpsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
 import { OpportunityDetailPage } from './pages/OpportunityDetailPage.js';
+
+// Screens most accounts never open load on demand, keeping them out of the
+// bundle every salesperson downloads.
+const AdministrationPage = lazy(() => import('./pages/AdministrationPage.js').then((m) => ({ default: m.AdministrationPage })));
+const SetPasswordPage = lazy(() => import('./pages/SetPasswordPage.js').then((m) => ({ default: m.SetPasswordPage })));
+const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })));
+
+function Lazy({ children }: { children: ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <p className="p-6 text-sm text-slate-500" role="status">
+          Loading…
+        </p>
+      }
+    >
+      {children}
+    </Suspense>
+  );
+}
 
 export function ApiApp() {
   return (
@@ -40,6 +62,15 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/sign-in" element={<SignInRoute />} />
+      {/* Reached from an invitation or reset link, signed in or not. */}
+      <Route
+        path="/set-password"
+        element={
+          <Lazy>
+            <SetPasswordPage />
+          </Lazy>
+        }
+      />
 
       <Route element={<RequireSession />}>
         <Route element={<ApiShell />}>
@@ -55,7 +86,14 @@ function AppRoutes() {
           </Route>
 
           <Route element={<RequireAdministration />}>
-            <Route path="administration" element={<AdministrationPage />} />
+            <Route
+              path="administration"
+              element={
+                <Lazy>
+                  <AdministrationPage />
+                </Lazy>
+              }
+            />
           </Route>
 
           {/* Approved screens whose server endpoints arrive in later
@@ -82,15 +120,7 @@ function AppRoutes() {
               />
             }
           />
-          <Route
-            path="activities"
-            element={
-              <UnavailableFeature
-                title="Activities & Follow-ups"
-                reason="Logging activities and completing, rescheduling or cancelling follow-ups arrive with the stages and follow-ups milestone."
-              />
-            }
-          />
+          <Route path="activities" element={<FollowUpsPage />} />
           <Route
             path="tenders"
             element={
@@ -109,15 +139,7 @@ function AppRoutes() {
               />
             }
           />
-          <Route
-            path="team"
-            element={
-              <UnavailableFeature
-                title="Team Management"
-                reason="Structure and workload views arrive with the transfers and administration milestone."
-              />
-            }
-          />
+          <Route path="team" element={<RequireTeamView />} />
           </Route>
         </Route>
       </Route>
@@ -174,6 +196,26 @@ function RequireAdministration() {
     );
   }
   return <Outlet />;
+}
+
+function RequireTeamView() {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/sign-in" replace />;
+  if (!user.capabilities.teamView) {
+    return (
+      <AccessDeniedPanel
+        title="Team Management is for management"
+        message="The structure and workload view is available to management. Section leads see their section on the Opportunities and Follow-ups screens."
+        actionLabel="Go to Opportunities"
+        actionTo="/opportunities"
+      />
+    );
+  }
+  return (
+    <Lazy>
+      <TeamPage />
+    </Lazy>
+  );
 }
 
 function HomeRedirect() {

@@ -6,9 +6,11 @@
  * rows only (SEC-002). Every write re-validates the proposed associations
  * against current database state rather than trusting the request (SEC-001).
  */
-import { and, asc, count, desc, eq, gte, ilike, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import type {
+  BoardDto,
+  BoardLaneDto,
   CreateOpportunityResultDto,
   FollowUpDto,
   HistoryEntryDto,
@@ -17,10 +19,23 @@ import type {
   OpportunityListItemDto,
   Paginated,
 } from '../../shared/api.js';
+import {
+  BOARD_LANES,
+  FOLLOW_UP_STATE_LABELS,
+  LOSS_REASON_LABELS,
+  PRIORITY_LABELS,
+  ROLE_LABELS,
+  SOLUTION_CATEGORY_LABELS,
+  STAGE_LABELS,
+  STATUS_LABELS,
+  boardLane,
+  type BoardLane,
+} from '../../shared/enums.js';
 import { canonicalMoney } from '../../shared/money.js';
 import {
   PATCHABLE_OPPORTUNITY_FIELDS,
   type OpportunitySortKey,
+  type boardQuerySchema,
   type listOpportunitiesQuerySchema,
 } from '../../shared/validation.js';
 import type { z } from 'zod';
@@ -32,8 +47,11 @@ import { forbidden, notFound, validationFailed, versionConflict } from '../http/
 import type { Actor } from '../policy/actor.js';
 import { eligibleOwnerScope, opportunityScope, scopedWhere } from '../policy/scope.js';
 import { OPPORTUNITY_FIELD_LABELS, diffRecords, recordAuditEvent } from './audit.js';
+import { getFirstFollowUp, listFollowUpsForOpportunity } from './followUps.js';
+import type { CompleteClaimInTransaction } from './idempotency.js';
 
 type ListQuery = z.output<typeof listOpportunitiesQuerySchema>;
+type BoardQuery = z.output<typeof boardQuerySchema>;
 
 const SORT_COLUMNS: Record<OpportunitySortKey, SQL | ReturnType<typeof sql>> = {
   createdAt: opportunities.createdAt as unknown as SQL,
@@ -122,6 +140,7 @@ const listSelection = {
   sectionId: opportunities.sectionId,
   sectionName: sections.name,
   expectedAwardDate: opportunities.expectedAwardDate,
+  awardedValue: opportunities.awardedValue,
   createdAt: opportunities.createdAt,
   version: opportunities.version,
 } as const;
@@ -153,6 +172,7 @@ function toListItem(row: ListRow, nextAction: NextActionDto | null): Opportunity
     sectionId: row.sectionId,
     sectionName: row.sectionName,
     expectedAwardDate: row.expectedAwardDate,
+    awardedValue: row.awardedValue === null ? null : canonicalMoney(row.awardedValue),
     nextAction,
     createdAt: row.createdAt.toISOString(),
     version: row.version,
@@ -247,6 +267,11 @@ export async function getOpportunityDetail(
       description: opportunities.description,
       fundingSource: opportunities.fundingSource,
       expectedPublicationDate: opportunities.expectedPublicationDate,
+      awardDate: opportunities.awardDate,
+      lossReason: opportunities.lossReason,
+      lossNote: opportunities.lossNote,
+      closedDate: opportunities.closedDate,
+      statusNote: opportunities.statusNote,
       createdById: opportunities.createdBy,
       updatedAt: opportunities.updatedAt,
     })
@@ -275,6 +300,12 @@ export async function getOpportunityDetail(
     description: row.description,
     fundingSource: row.fundingSource,
     expectedPublicationDate: row.expectedPublicationDate,
+    awardDate: row.awardDate,
+    // Constrained to the presets by migration 0002.
+    lossReason: row.lossReason as OpportunityDetailDto['lossReason'],
+    lossNote: row.lossNote,
+    closedDate: row.closedDate,
+    statusNote: row.statusNote,
     createdByName: creatorRow?.fullName ?? 'Unknown',
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -324,8 +355,10 @@ export async function createOpportunity(options: {
   actor: Actor;
   command: CreateOpportunityCommand;
   requestId: string;
+  /** Completes the idempotency claim in the same transaction as the insert. */
+  completeClaim?: CompleteClaimInTransaction;
 }): Promise<CreateOpportunityResultDto> {
-  const { db, actor, command, requestId } = options;
+  const { db, actor, command, requestId, completeClaim } = options;
 
   // --- Validate proposed associations against the database, not the request ---
 
@@ -460,46 +493,30 @@ export async function createOpportunity(options: {
       requestId,
     });
 
-    return { opportunityId: opportunity.id, followUpId: followUp.id };
+    if (completeClaim) await completeClaim(tx, opportunity.id);
+
+    return { opportunityId: opportunity.id };
   });
 
-  const detail = await getOpportunityDetail(db, actor, created.opportunityId);
-  const firstFollowUp = await getFollowUp(db, created.followUpId);
-
-  return { opportunity: detail, firstFollowUp, warnings };
+  return getCreationResult(db, actor, created.opportunityId, warnings);
 }
 
-async function getFollowUp(db: Database, followUpId: string): Promise<FollowUpDto> {
-  const [row] = await db
-    .select({
-      id: followUps.id,
-      opportunityId: followUps.opportunityId,
-      title: followUps.title,
-      dueDate: followUps.dueDate,
-      state: followUps.state,
-      priority: followUps.priority,
-      assignedUserId: followUps.assignedUserId,
-      assigneeName: users.fullName,
-      createdAt: followUps.createdAt,
-    })
-    .from(followUps)
-    .innerJoin(users, eq(users.id, followUps.assignedUserId))
-    .where(eq(followUps.id, followUpId))
-    .limit(1);
-
-  if (!row) throw notFound(`follow-up ${followUpId} not found`);
-
-  return {
-    id: row.id,
-    opportunityId: row.opportunityId,
-    title: row.title,
-    dueDate: row.dueDate,
-    state: row.state,
-    priority: row.priority,
-    assigneeId: row.assignedUserId,
-    assigneeName: row.assigneeName,
-    createdAt: row.createdAt.toISOString(),
-  };
+/**
+ * The canonical creation result, also used to answer a replayed create. Read
+ * through scope, so a replay after access was revoked is a 404. The first
+ * follow-up is found by creation order, not by state: once M2 lets it be
+ * completed, "the earliest open one" would be a different task.
+ */
+export async function getCreationResult(
+  db: Database,
+  actor: Actor,
+  opportunityId: string,
+  warnings: string[] = [],
+): Promise<CreateOpportunityResultDto> {
+  const opportunity = await getOpportunityDetail(db, actor, opportunityId);
+  const firstFollowUp = await getFirstFollowUp(db, opportunityId);
+  if (!firstFollowUp) throw new Error(`Opportunity ${opportunityId} has no first follow-up.`);
+  return { opportunity, firstFollowUp, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -545,11 +562,12 @@ export async function patchOpportunity(options: {
     throw notFound(`opportunity ${opportunityId} absent or outside scope for actor ${actor.id}`);
   }
 
-  // Terminal and cancelled records are read-only until the M2 outcome and
-  // reopening workflows exist (plan 7.4).
+  // Closed records are read-only. To correct one, management reopens it
+  // (BR-012) or a cancelled one is returned to Active first, so every change
+  // to a closed record passes through an audited, reasoned transition.
   if (current.stage === 'awarded' || current.stage === 'lost' || current.status === 'cancelled') {
     throw forbidden(
-      'Awarded, Lost and Cancelled opportunities cannot be edited yet. The outcome and reopening workflow is not available in this release.',
+      'Awarded, Lost and Cancelled opportunities are closed to editing. Reopen it, or return it to Active, first.',
     );
   }
 
@@ -632,48 +650,7 @@ export async function listOpportunityFollowUps(options: {
 }): Promise<Paginated<FollowUpDto>> {
   const { db, actor, opportunityId, page, pageSize } = options;
   await assertOpportunityVisible(db, actor, opportunityId);
-
-  const totalRows = await db
-    .select({ value: count() })
-    .from(followUps)
-    .where(eq(followUps.opportunityId, opportunityId));
-  const total = totalRows[0]?.value ?? 0;
-
-  const rows = await db
-    .select({
-      id: followUps.id,
-      opportunityId: followUps.opportunityId,
-      title: followUps.title,
-      dueDate: followUps.dueDate,
-      state: followUps.state,
-      priority: followUps.priority,
-      assignedUserId: followUps.assignedUserId,
-      assigneeName: users.fullName,
-      createdAt: followUps.createdAt,
-    })
-    .from(followUps)
-    .innerJoin(users, eq(users.id, followUps.assignedUserId))
-    .where(eq(followUps.opportunityId, opportunityId))
-    .orderBy(asc(followUps.state), asc(followUps.dueDate), asc(followUps.createdAt))
-    .limit(pageSize)
-    .offset((page - 1) * pageSize);
-
-  return {
-    items: rows.map((row) => ({
-      id: row.id,
-      opportunityId: row.opportunityId,
-      title: row.title,
-      dueDate: row.dueDate,
-      state: row.state,
-      priority: row.priority,
-      assigneeId: row.assignedUserId,
-      assigneeName: row.assigneeName,
-      createdAt: row.createdAt.toISOString(),
-    })),
-    total,
-    page,
-    pageSize,
-  };
+  return listFollowUpsForOpportunity(db, opportunityId, page, pageSize);
 }
 
 export async function listOpportunityHistory(options: {
@@ -714,40 +691,246 @@ export async function listOpportunityHistory(options: {
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 
+  const names = await resolveHistoryNames(
+    db,
+    rows.flatMap((row) => [row.beforeData, row.afterData]),
+  );
+
   return {
-    items: rows.map((row) => ({
-      id: row.id,
-      action: row.action,
-      entityType: row.entityType,
-      actorName: row.actorName ?? 'System',
-      occurredAt: row.occurredAt.toISOString(),
-      reason: row.reason,
-      changes: toHistoryChanges(row.beforeData, row.afterData),
-    })),
+    items: rows.map((row) => {
+      const before = (row.beforeData ?? {}) as Record<string, unknown>;
+      const after = (row.afterData ?? {}) as Record<string, unknown>;
+      const subject = after.task ?? before.task;
+      return {
+        id: row.id,
+        action: row.action,
+        entityType: row.entityType,
+        actorName: row.actorName ?? 'System',
+        occurredAt: row.occurredAt.toISOString(),
+        reason: row.reason,
+        subject: typeof subject === 'string' ? subject : null,
+        changes: toHistoryChanges(before, after, names),
+      };
+    }),
     total,
     page,
     pageSize,
   };
 }
 
-function toHistoryChanges(before: unknown, after: unknown): HistoryEntryDto['changes'] {
-  const beforeMap = (before ?? {}) as Record<string, unknown>;
-  const afterMap = (after ?? {}) as Record<string, unknown>;
-  const keys = new Set([...Object.keys(beforeMap), ...Object.keys(afterMap)]);
+// ---------------------------------------------------------------------------
+// History presentation
+// ---------------------------------------------------------------------------
+
+/** Keys kept in audit data for context, not shown as field changes. */
+const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context']);
+
+const ID_FIELDS = {
+  user: ['ownerId', 'assignedUserId', 'managerId', 'leadUserId'],
+  organization: ['organizationId'],
+  section: ['sectionId'],
+} as const;
+
+type HistoryNames = Map<string, string>;
+
+/**
+ * Audit rows store identifiers and enum values, as they should. History shows
+ * people names, organization names and labels instead. Only ids already present
+ * in an accessible opportunity's own history are resolved, so this reveals
+ * nothing outside the record's scope.
+ */
+async function resolveHistoryNames(db: Database, payloads: unknown[]): Promise<HistoryNames> {
+  const collect = (fields: readonly string[]) => {
+    const found = new Set<string>();
+    for (const payload of payloads) {
+      if (!payload || typeof payload !== 'object') continue;
+      for (const field of fields) {
+        const value = (payload as Record<string, unknown>)[field];
+        if (typeof value === 'string') found.add(value);
+      }
+    }
+    return [...found];
+  };
+
+  const names: HistoryNames = new Map();
+  const userIds = collect(ID_FIELDS.user);
+  const organizationIds = collect(ID_FIELDS.organization);
+  const sectionIds = collect(ID_FIELDS.section);
+
+  if (userIds.length > 0) {
+    const rows = await db
+      .select({ id: users.id, name: users.fullName })
+      .from(users)
+      .where(inArray(users.id, userIds));
+    for (const row of rows) names.set(row.id, row.name);
+  }
+  if (organizationIds.length > 0) {
+    const rows = await db
+      .select({ id: organizations.id, name: organizations.name })
+      .from(organizations)
+      .where(inArray(organizations.id, organizationIds));
+    for (const row of rows) names.set(row.id, row.name);
+  }
+  if (sectionIds.length > 0) {
+    const rows = await db
+      .select({ id: sections.id, name: sections.name })
+      .from(sections)
+      .where(inArray(sections.id, sectionIds));
+    for (const row of rows) names.set(row.id, row.name);
+  }
+  return names;
+}
+
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+  stage: STAGE_LABELS,
+  status: STATUS_LABELS,
+  priority: PRIORITY_LABELS,
+  solutionCategory: SOLUTION_CATEGORY_LABELS,
+  lossReason: LOSS_REASON_LABELS,
+  state: FOLLOW_UP_STATE_LABELS,
+  role: ROLE_LABELS,
+};
+
+/**
+ * Before/after values made readable: ids become names, enum values become
+ * labels. Used by both the commercial and the administrative history views.
+ */
+export async function presentChanges(
+  db: Database,
+  entries: { before: unknown; after: unknown }[],
+): Promise<HistoryEntryDto['changes'][]> {
+  const names = await resolveHistoryNames(
+    db,
+    entries.flatMap((entry) => [entry.before, entry.after]),
+  );
+  return entries.map((entry) =>
+    toHistoryChanges(
+      (entry.before ?? {}) as Record<string, unknown>,
+      (entry.after ?? {}) as Record<string, unknown>,
+      names,
+    ),
+  );
+}
+
+function toHistoryChanges(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  names: HistoryNames,
+): HistoryEntryDto['changes'] {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
 
   return [...keys]
-    .filter((key) => key !== 'firstFollowUp')
+    .filter((key) => !HISTORY_CONTEXT_KEYS.has(key))
+    // A field that was empty before and after (e.g. the loss fields when an
+    // Awarded record is reopened) is not a change worth showing.
+    .filter((key) => (before[key] ?? null) !== null || (after[key] ?? null) !== null)
     .map((key) => ({
       field: key,
       label: OPPORTUNITY_FIELD_LABELS[key] ?? key,
-      before: stringifyValue(beforeMap[key]),
-      after: stringifyValue(afterMap[key]),
+      before: displayValue(key, before[key], names),
+      after: displayValue(key, after[key], names),
     }));
 }
 
-function stringifyValue(value: unknown): string | null {
+function displayValue(field: string, value: unknown, names: HistoryNames): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'string') {
+    return VALUE_LABELS[field]?.[value] ?? names.get(value) ?? value;
+  }
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') return String(value);
   return JSON.stringify(value);
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline board (FR-021, D-001, D-006)
+// ---------------------------------------------------------------------------
+
+/** Cards returned per lane. The table view pages through anything beyond. */
+export const BOARD_LANE_LIMIT = 50;
+
+/** The lane expression, matching `boardLane` in shared/enums.ts. */
+const laneExpression = sql<BoardLane>`CASE
+  WHEN ${opportunities.status} IN ('on_hold', 'cancelled') THEN ${opportunities.status}::text
+  ELSE ${opportunities.stage}::text END`;
+
+/**
+ * The board is bounded per lane rather than downloaded whole (plan 4.2). Lane
+ * totals and values are computed in SQL over the permitted rows, so a lane's
+ * header counts records the card list may not show, never records outside
+ * scope. The Awarded lane sums actual awarded value; every other lane sums
+ * estimates, each labelled as such (D-006).
+ */
+export async function getBoard(db: Database, actor: Actor, query: BoardQuery): Promise<BoardDto> {
+  const filters: (SQL | undefined)[] = [];
+  if (query.q) {
+    const term = `%${query.q}%`;
+    filters.push(
+      or(ilike(opportunities.name, term), ilike(opportunities.reference, term), ilike(organizations.name, term)),
+    );
+  }
+  if (query.priority) filters.push(eq(opportunities.priority, query.priority));
+  if (query.solutionCategory) filters.push(eq(opportunities.solutionCategory, query.solutionCategory));
+  if (query.organizationId) filters.push(eq(opportunities.organizationId, query.organizationId));
+  if (query.ownerId) filters.push(eq(opportunities.ownerId, query.ownerId));
+  if (query.sectionId) filters.push(eq(opportunities.sectionId, query.sectionId));
+
+  const where = scopedWhere(actor, ...filters);
+
+  const aggregates = await db
+    .select({
+      lane: laneExpression,
+      total: sql<number>`count(*)::int`,
+      value: sql<string>`coalesce(sum(CASE WHEN ${opportunities.stage} = 'awarded'
+        THEN ${opportunities.awardedValue} ELSE ${opportunities.estimatedValue} END), 0)::numeric(16,2)::text`,
+    })
+    .from(opportunities)
+    .innerJoin(organizations, eq(organizations.id, opportunities.organizationId))
+    .where(where)
+    .groupBy(laneExpression);
+
+  // Newest first within each lane, at most BOARD_LANE_LIMIT per lane.
+  const ranked = db
+    .select({
+      id: opportunities.id,
+      rank: sql<number>`row_number() OVER (PARTITION BY ${laneExpression} ORDER BY ${opportunities.createdAt} DESC, ${opportunities.id})`.as(
+        'lane_rank',
+      ),
+    })
+    .from(opportunities)
+    .innerJoin(organizations, eq(organizations.id, opportunities.organizationId))
+    .where(where)
+    .as('ranked');
+
+  const pageIds = (
+    await db.select({ id: ranked.id }).from(ranked).where(sql`${ranked.rank} <= ${BOARD_LANE_LIMIT}`)
+  ).map((row) => row.id);
+
+  const rows =
+    pageIds.length === 0
+      ? []
+      : ((await baseQuery(db)
+          .where(inArray(opportunities.id, pageIds))
+          .orderBy(desc(opportunities.createdAt), asc(opportunities.id))) as ListRow[]);
+
+  const nextActions = await loadNextActions(db, rows.map((row) => row.id));
+  const byLane = new Map<BoardLane, OpportunityListItemDto[]>();
+  for (const row of rows) {
+    const item = toListItem(row, nextActions.get(row.id) ?? null);
+    const lane = boardLane(item.stage, item.status);
+    byLane.set(lane, [...(byLane.get(lane) ?? []), item]);
+  }
+
+  const lanes: BoardLaneDto[] = BOARD_LANES.map((lane) => {
+    const aggregate = aggregates.find((row) => row.lane === lane);
+    return {
+      lane,
+      total: aggregate?.total ?? 0,
+      value: aggregate?.value ?? '0.00',
+      valueBasis: lane === 'awarded' ? 'awarded' : 'estimated',
+      items: byLane.get(lane) ?? [],
+    };
+  });
+
+  return { lanes, laneLimit: BOARD_LANE_LIMIT };
 }

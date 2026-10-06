@@ -82,7 +82,7 @@ test('sign in, create, persist across reload, sign out', async ({ page }) => {
   expect(stored.sessionStorageKeys).toHaveLength(0);
 
   // --- It appears in the scoped list --------------------------------------
-  await page.goto('/opportunities');
+  await page.goto('/opportunities?view=table');
   await expect(main.getByRole('button', { name: projectName })).toBeVisible();
 
   // --- Sign out clears access ---------------------------------------------
@@ -102,6 +102,9 @@ test('another section cannot open the record by URL', async ({ page }) => {
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/opportunities$/);
 
+  // The approved default view is the Pipeline board; the table names each
+  // record by its own button, which is what this test addresses.
+  await page.goto('/opportunities?view=table');
   await page.locator('#main-content').getByRole('button', { name: /^Municipal Service Portal$/ }).click();
   await expect(page).toHaveURL(/\/opportunities\/[0-9a-f-]{36}/);
   const ownedUrl = page.url();

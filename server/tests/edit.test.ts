@@ -183,14 +183,14 @@ describe('opportunity basic edit', () => {
       expect(response.body.fieldErrors).toHaveProperty('version');
     });
 
-    it('refuses to edit a terminal record until the outcome workflow exists', async () => {
+    it('refuses to edit a terminal record; changes go through reopening', async () => {
       const client = await signIn(ctx.app, emails.salesGA1);
       const version = await currentVersion(ids.oppRafiqAwarded);
 
       const response = await patch(client, ids.oppRafiqAwarded, { version, priority: 'low' });
 
       expect(response.status).toBe(403);
-      expect(response.body.message).toMatch(/not available in this release/i);
+      expect(response.body.message).toMatch(/Reopen it, or return it to Active, first/);
     });
 
     it('refuses to edit a cancelled record', async () => {

@@ -91,7 +91,7 @@ export function errorHandler(
   }
 
   // Anything unexpected: log server-side, return an opaque body.
-  console.error(`[${requestId}] Unhandled error:`, error);
+  console.error(`[${requestId}] Unhandled error: ${describeForLog(error)}`);
   const body: ApiErrorBody = {
     code: 'internal_error',
     message: 'Something went wrong. Try again, and contact support if it continues.',
@@ -108,4 +108,24 @@ export function notFoundHandler(req: Request, res: Response): void {
     requestId: req.requestId ?? 'unknown',
   };
   res.status(404).json(body);
+}
+
+/**
+ * A log line for an unexpected error that carries no request data (SEC-032).
+ *
+ * A failed database query's message and properties include its bound
+ * parameters — business notes, email addresses, password and token hashes.
+ * Only the error type, the PostgreSQL code and constraint, and the statement's
+ * opening are logged; the request id links the line to the request.
+ */
+export function describeForLog(error: unknown): string {
+  if (!(error instanceof Error)) return 'a non-Error value was thrown';
+  const cause = (error as { cause?: { code?: unknown; constraint?: unknown } }).cause;
+  const isQueryError = 'params' in error || error.message.startsWith('Failed query:');
+  if (!isQueryError) return error.stack ?? `${error.name}: ${error.message}`;
+
+  const statement = (error.message.split('\n')[0] ?? '').replace(/^Failed query:\s*/, '').slice(0, 80);
+  const code = typeof cause?.code === 'string' ? cause.code : 'unknown';
+  const constraint = typeof cause?.constraint === 'string' ? ` on ${cause.constraint}` : '';
+  return `${error.name}: database query failed (SQLSTATE ${code}${constraint}): ${statement}…`;
 }

@@ -6,15 +6,24 @@
  * reassembles one (plan 4.2).
  */
 import type {
+  AccountLinkDto,
+  AdminAuditEntryDto,
+  AdminSectionDto,
+  AdminUserDto,
+  AssigneeOptionDto,
+  BoardDto,
   CreateOpportunityResultDto,
+  CreateUserResultDto,
   CurrentUserDto,
   FollowUpDto,
+  FollowUpListDto,
   HistoryEntryDto,
   OpportunityDetailDto,
   OpportunityListItemDto,
   OrganizationSummaryDto,
   OwnerOptionDto,
   Paginated,
+  TeamDto,
 } from '../../shared/api.js';
 import { apiRequest, setCsrfToken, toQuery } from './client.js';
 
@@ -112,6 +121,99 @@ export function updateOpportunity(
   return apiRequest(`/api/opportunities/${id}`, { method: 'PATCH', body });
 }
 
+// --- Pipeline board, stage and status (M2) ---------------------------------
+
+export interface BoardParams {
+  [key: string]: string | undefined;
+  q?: string;
+  priority?: string;
+  solutionCategory?: string;
+  ownerId?: string;
+}
+
+export function fetchBoard(params: BoardParams, signal?: AbortSignal): Promise<BoardDto> {
+  return apiRequest(`/api/opportunities/board${toQuery(params)}`, { signal });
+}
+
+/** Every transition carries the version it was read at and a retry-stable key. */
+export function changeStage(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/stage`, { method: 'POST', body, idempotencyKey });
+}
+
+export function changeStatus(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/status`, { method: 'POST', body, idempotencyKey });
+}
+
+export function reopenOpportunity(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/reopen`, { method: 'POST', body, idempotencyKey });
+}
+
+// --- Follow-ups (M2) ----------------------------------------------------------
+
+export interface FollowUpListParams {
+  [key: string]: string | number | undefined;
+  view?: string;
+  assignedTo?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export function fetchFollowUps(params: FollowUpListParams, signal?: AbortSignal): Promise<FollowUpListDto> {
+  return apiRequest(`/api/follow-ups${toQuery(params)}`, { signal });
+}
+
+export function fetchFollowUpAssignees(
+  opportunityId: string,
+  signal?: AbortSignal,
+): Promise<{ items: AssigneeOptionDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/follow-up-assignees`, { signal });
+}
+
+export function createFollowUp(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/follow-ups`, { method: 'POST', body, idempotencyKey });
+}
+
+export function completeFollowUp(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/follow-ups/${id}/complete`, { method: 'POST', body, idempotencyKey });
+}
+
+export function rescheduleFollowUp(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/follow-ups/${id}/reschedule`, { method: 'POST', body, idempotencyKey });
+}
+
+export function cancelFollowUp(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<FollowUpDto> {
+  return apiRequest(`/api/follow-ups/${id}/cancel`, { method: 'POST', body, idempotencyKey });
+}
+
 // --- Lookups ----------------------------------------------------------------
 
 export function fetchOrganizations(
@@ -123,4 +225,82 @@ export function fetchOrganizations(
 
 export function fetchOpportunityOwners(signal?: AbortSignal): Promise<{ items: OwnerOptionDto[] }> {
   return apiRequest('/api/lookups/opportunity-owners', { signal });
+}
+
+// --- Ownership transfer and team view (M3) -----------------------------------
+
+export function transferOpportunity(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<OpportunityDetailDto> {
+  return apiRequest(`/api/opportunities/${id}/transfer`, { method: 'POST', body, idempotencyKey });
+}
+
+export function fetchTeam(signal?: AbortSignal): Promise<TeamDto> {
+  return apiRequest('/api/team', { signal });
+}
+
+// --- Administration (M3) -------------------------------------------------------
+
+export function fetchAdminUsers(
+  params: { q?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<Paginated<AdminUserDto>> {
+  return apiRequest(`/api/admin/users${toQuery(params)}`, { signal });
+}
+
+export function createAdminUser(body: Record<string, unknown>, idempotencyKey: string): Promise<CreateUserResultDto> {
+  return apiRequest('/api/admin/users', { method: 'POST', body, idempotencyKey });
+}
+
+export function updateAdminUser(id: string, body: Record<string, unknown>): Promise<AdminUserDto> {
+  return apiRequest(`/api/admin/users/${id}`, { method: 'PATCH', body });
+}
+
+export function setAdminUserActive(id: string, active: boolean, body: Record<string, unknown>): Promise<AdminUserDto> {
+  return apiRequest(`/api/admin/users/${id}/${active ? 'reactivate' : 'deactivate'}`, { method: 'POST', body });
+}
+
+export function issueAccountLink(id: string): Promise<AccountLinkDto> {
+  return apiRequest(`/api/admin/users/${id}/link`, { method: 'POST', body: {} });
+}
+
+export function fetchAdminSections(signal?: AbortSignal): Promise<{ items: AdminSectionDto[] }> {
+  return apiRequest('/api/admin/sections', { signal });
+}
+
+export function createAdminSection(body: Record<string, unknown>, idempotencyKey: string): Promise<AdminSectionDto> {
+  return apiRequest('/api/admin/sections', { method: 'POST', body, idempotencyKey });
+}
+
+export function renameAdminSection(id: string, body: Record<string, unknown>): Promise<AdminSectionDto> {
+  return apiRequest(`/api/admin/sections/${id}`, { method: 'PATCH', body });
+}
+
+export function replaceSectionLead(id: string, body: Record<string, unknown>): Promise<AdminSectionDto> {
+  return apiRequest(`/api/admin/sections/${id}/replace-lead`, { method: 'POST', body });
+}
+
+export function setAdminSectionActive(id: string, active: boolean, body: Record<string, unknown>): Promise<AdminSectionDto> {
+  return apiRequest(`/api/admin/sections/${id}/${active ? 'reactivate' : 'deactivate'}`, { method: 'POST', body });
+}
+
+export function fetchAdminAudit(
+  params: { page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<Paginated<AdminAuditEntryDto>> {
+  return apiRequest(`/api/admin/audit${toQuery(params)}`, { signal });
+}
+
+// --- Invitations and password reset (M3) ---------------------------------------
+
+/** Public: redeems a single-use link. The caller signs in normally afterwards. */
+export async function setPasswordWithLink(token: string, password: string): Promise<void> {
+  await fetchCsrfToken();
+  await apiRequest<void>('/api/auth/set-password', {
+    method: 'POST',
+    body: { token, password },
+    suppressUnauthenticatedNotice: true,
+  });
 }

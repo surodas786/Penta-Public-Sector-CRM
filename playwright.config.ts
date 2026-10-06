@@ -35,7 +35,13 @@ export default defineConfig({
   testDir: './e2e',
   // Screenshot capture is run on demand (`npm run evidence`), not as part of
   // the smoke gate.
-  testIgnore: process.env.CAPTURE_EVIDENCE === 'true' ? [] : ['**/evidence.spec.ts'],
+  // `npm run evidence` names the spec on the command line, which is enough to
+  // include it; without that, the spec was ignored and the documented script
+  // found no tests.
+  testIgnore:
+    process.env.CAPTURE_EVIDENCE === 'true' || process.argv.some((arg) => /evidence(-\w+)?\.spec/.test(arg))
+      ? []
+      : ['**/evidence*.spec.ts'],
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,

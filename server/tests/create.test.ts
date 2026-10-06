@@ -389,6 +389,50 @@ describe('opportunity creation', () => {
       }
     });
 
+    it('keeps request data out of the server log when a query fails (SEC-032)', async () => {
+      await runAsMigrator(`
+        CREATE OR REPLACE FUNCTION test_fail_follow_up_insert() RETURNS trigger AS $$
+        BEGIN RAISE EXCEPTION 'induced failure for integration test'; END;
+        $$ LANGUAGE plpgsql;
+        CREATE TRIGGER test_fail_follow_up
+          BEFORE INSERT ON follow_ups
+          FOR EACH ROW EXECUTE FUNCTION test_fail_follow_up_insert();
+      `);
+
+      const logged: string[] = [];
+      const original = console.error;
+      console.error = (...parts: unknown[]) => {
+        logged.push(parts.map((part) => (part instanceof Error ? `${part.message} ${part.stack}` : String(part))).join(' '));
+      };
+      try {
+        const client = await signIn(ctx.app, emails.salesGA1);
+        const response = await postCreate(
+          client,
+          createOpportunityPayload({
+            name: 'Log Leak Probe',
+            description: 'Confidential note: minister prefers vendor X',
+            initialFollowUpTitle: 'Private follow-up wording 7731',
+          }),
+        );
+        expect(response.status).toBe(500);
+        // The response is opaque, and so is the log.
+        expect(JSON.stringify(response.body)).not.toContain('Confidential');
+
+        const text = logged.join('\n');
+        for (const secret of ['Confidential note', 'Private follow-up wording 7731', ids.salesGA1]) {
+          expect(text).not.toContain(secret);
+        }
+        expect(text).toContain(response.body.requestId);
+        expect(text).toMatch(/database query failed \(SQLSTATE P0001\)/);
+      } finally {
+        console.error = original;
+        await runAsMigrator(`
+          DROP TRIGGER IF EXISTS test_fail_follow_up ON follow_ups;
+          DROP FUNCTION IF EXISTS test_fail_follow_up_insert();
+        `);
+      }
+    });
+
     it('frees the idempotency key after a failed attempt so a corrected retry works', async () => {
       const client = await signIn(ctx.app, emails.salesGA1);
       const key = nextIdempotencyKey('retry-after-failure');

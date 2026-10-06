@@ -49,6 +49,12 @@ export const ids = {
   oppTasnia: legacyUuid('p2'),
   oppNadia: legacyUuid('p7'),
   oppRafiqAwarded: legacyUuid('p5'),
+  /** Rafiq, Tender Published, one open follow-up. */
+  oppRafiqTender: legacyUuid('p3'),
+  /** Tasnia, Lost (price). */
+  oppTasniaLost: legacyUuid('p6'),
+  /** Tasnia, On Hold with Requirements Discussion retained, one open follow-up. */
+  oppTasniaOnHold: legacyUuid('p9'),
   oppInactiveOwner: legacyUuid('p22'),
   oppNoManagerOwner: legacyUuid('p23'),
   oppImran: legacyUuid('p11'),
@@ -213,6 +219,24 @@ export function createOpportunityPayload(overrides: Record<string, unknown> = {}
     initialFollowUpDueDate: '2027-01-15',
     ...overrides,
   };
+}
+
+/**
+ * A browser-shaped mutation: trusted origin, CSRF token and an idempotency
+ * key (a fresh one unless the test is exercising a retry).
+ */
+export function send(
+  client: SignedInClient,
+  path: string,
+  body: unknown,
+  key: string | null = nextIdempotencyKey('m2'),
+) {
+  const request = client.agent
+    .post(path)
+    .set('Origin', TEST_ORIGIN)
+    .set(CSRF_HEADER, client.csrfToken);
+  if (key !== null) request.set(IDEMPOTENCY_HEADER, key);
+  return request.send(body as object);
 }
 
 let idempotencyCounter = 0;

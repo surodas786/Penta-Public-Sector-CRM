@@ -5,7 +5,9 @@
  * session data and any private account field (plan 7.3).
  */
 import type {
+  BoardLane,
   FollowUpState,
+  LossReason,
   OpportunityStage,
   OpportunityStatus,
   OrganizationType,
@@ -30,6 +32,7 @@ export type ApiErrorCode =
   | 'version_conflict'
   | 'idempotency_key_reuse'
   | 'idempotency_in_progress'
+  | 'invalid_transition'
   | 'validation_failed'
   | 'rate_limited'
   | 'invalid_csrf'
@@ -60,6 +63,8 @@ export interface CurrentUserDto {
     salesRecords: boolean;
     createOpportunity: boolean;
     accountAdministration: boolean;
+    transferOpportunities: boolean;
+    teamView: boolean;
   };
 }
 
@@ -94,6 +99,8 @@ export interface OpportunityListItemDto {
   sectionId: string;
   sectionName: string;
   expectedAwardDate: string | null;
+  /** Decimal string; set only while the stage is Awarded (D-006 shows it on the board). */
+  awardedValue: string | null;
   nextAction: NextActionDto | null;
   createdAt: string;
   version: number;
@@ -114,6 +121,14 @@ export interface OpportunityDetailDto extends OpportunityListItemDto {
   description: string | null;
   fundingSource: string | null;
   expectedPublicationDate: string | null;
+  /** BR-011 outcome fields. Cleared on reopening; the previous outcome stays in history. */
+  awardDate: string | null;
+  lossReason: LossReason | null;
+  lossNote: string | null;
+  /** Lost date, or the date a record was cancelled. */
+  closedDate: string | null;
+  /** The explanation recorded when the record was put On Hold or Cancelled. */
+  statusNote: string | null;
   createdByName: string;
   updatedAt: string;
 }
@@ -127,7 +142,58 @@ export interface FollowUpDto {
   priority: Priority;
   assigneeId: string;
   assigneeName: string;
+  createdByName: string;
   createdAt: string;
+  completedAt: string | null;
+  completedByName: string | null;
+  completionNote: string | null;
+  cancelledAt: string | null;
+  cancelledByName: string | null;
+  cancellationReason: string | null;
+  version: number;
+}
+
+/** A follow-up in the cross-opportunity list, with the parent it belongs to. */
+export interface FollowUpListItemDto extends FollowUpDto {
+  opportunity: {
+    id: string;
+    reference: string;
+    name: string;
+    stage: OpportunityStage;
+    status: OpportunityStatus;
+    ownerName: string;
+    sectionName: string;
+  };
+}
+
+export interface FollowUpListDto extends Paginated<FollowUpListItemDto> {
+  /** Today's Dhaka date, the basis every bucket below was computed against (FR-043). */
+  today: string;
+  /** Per-view totals over the same scoped, filtered population. */
+  counts: Record<'open' | 'overdue' | 'today' | 'upcoming' | 'completed' | 'cancelled' | 'all', number>;
+}
+
+/** Minimal assignee option (FR-042). No email, no private account field. */
+export interface AssigneeOptionDto {
+  id: string;
+  fullName: string;
+  relation: 'owner' | 'section_lead' | 'management';
+}
+
+export interface BoardLaneDto {
+  lane: BoardLane;
+  /** Permitted records in this lane, which may exceed `items.length`. */
+  total: number;
+  /** Decimal string. Awarded sums actual awarded value; every other lane sums estimates (D-006). */
+  value: string;
+  valueBasis: 'awarded' | 'estimated';
+  items: OpportunityListItemDto[];
+}
+
+export interface BoardDto {
+  lanes: BoardLaneDto[];
+  /** Cards returned per lane at most; the table view pages through the rest. */
+  laneLimit: number;
 }
 
 export interface HistoryEntryDto {
@@ -137,6 +203,8 @@ export interface HistoryEntryDto {
   actorName: string;
   occurredAt: string;
   reason: string | null;
+  /** For follow-up events, the task the event concerns. */
+  subject: string | null;
   changes: HistoryChangeDto[];
 }
 
@@ -159,3 +227,88 @@ export const IDEMPOTENCY_HEADER = 'idempotency-key';
 
 /** Header carrying the double-submit CSRF token. */
 export const CSRF_HEADER = 'x-csrf-token';
+
+// ---------------------------------------------------------------------------
+// Milestone 3: administration, invitations and the management team view
+// ---------------------------------------------------------------------------
+
+/**
+ * An account as the System Administrator sees it (FR-071). Carries no
+ * commercial data: no owned-opportunity counts or values, which belong to
+ * management's team view. No password hash, token or session field.
+ */
+export interface AdminUserDto {
+  id: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  sectionId: string | null;
+  sectionName: string | null;
+  managerId: string | null;
+  managerName: string | null;
+  active: boolean;
+  /** True until an invited account sets its password. */
+  invitationPending: boolean;
+  version: number;
+}
+
+export interface AdminSectionDto {
+  id: string;
+  name: string;
+  active: boolean;
+  leadId: string | null;
+  leadName: string | null;
+  activeMembers: number;
+  version: number;
+}
+
+/**
+ * A single-use link, shown once to the administrator who issued it and never
+ * stored in readable form. Delivered to the person out of band: release one
+ * sends no email (requirements §1.3).
+ */
+export interface AccountLinkDto {
+  purpose: 'invitation' | 'password_reset';
+  url: string;
+  expiresAt: string;
+}
+
+export interface CreateUserResultDto {
+  user: AdminUserDto;
+  /** Null when the request was a replay: the link is never shown twice. */
+  link: AccountLinkDto | null;
+}
+
+export interface AdminAuditEntryDto {
+  id: string;
+  action: string;
+  actorName: string;
+  subject: string | null;
+  occurredAt: string;
+  reason: string | null;
+  changes: HistoryChangeDto[];
+}
+
+/** Management's read-only structure and workload view (FR-071). No emails, no account fields. */
+export interface TeamDto {
+  management: { id: string; fullName: string }[];
+  sections: {
+    id: string;
+    name: string;
+    lead: { id: string; fullName: string } | null;
+    members: { id: string; fullName: string; active: boolean; reportsToLead: boolean }[];
+  }[];
+  workload: {
+    userId: string;
+    fullName: string;
+    role: UserRole;
+    sectionName: string;
+    /** Active pipeline population: status Active, stage neither Awarded nor Lost. */
+    activeOpportunities: number;
+    /** Decimal string; estimated value of the same population. */
+    estimatedPipeline: string;
+    openTasks: number;
+    overdueTasks: number;
+  }[];
+  today: string;
+}

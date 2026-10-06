@@ -46,6 +46,7 @@ export const solutionCategoryEnum = pgEnum('solution_category', SOLUTION_CATEGOR
 export const organizationTypeEnum = pgEnum('organization_type', ORGANIZATION_TYPES);
 export const followUpStateEnum = pgEnum('follow_up_state', FOLLOW_UP_STATES);
 export const idempotencyStateEnum = pgEnum('idempotency_state', ['in_progress', 'completed']);
+export const accountTokenPurposeEnum = pgEnum('account_token_purpose', ['invitation', 'password_reset']);
 
 // ---------------------------------------------------------------------------
 // Sections and users
@@ -73,7 +74,11 @@ export const users = pgTable(
     fullName: text('full_name').notNull(),
     /** Stored already normalised to lower case; uniqueness is case-insensitive. */
     email: text('email').notNull(),
-    passwordHash: text('password_hash').notNull(),
+    /**
+     * Null until an invited account sets its password (migration 0003). A null
+     * hash never authenticates: sign-in spends the same work and fails.
+     */
+    passwordHash: text('password_hash'),
     role: userRoleEnum('role').notNull(),
     sectionId: uuid('section_id').references(() => sections.id, { onDelete: 'restrict' }),
     managerId: uuid('manager_id').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
@@ -184,6 +189,45 @@ export const opportunities = pgTable(
       'opportunities_awarded_value_nonnegative',
       sql`${table.awardedValue} IS NULL OR ${table.awardedValue} >= 0`,
     ),
+    // --- Migration 0002: outcome consistency (BR-010, BR-011, BR-012) -------
+    // These make an inconsistent outcome unrepresentable even if a future
+    // code path bypasses the transition service.
+    check(
+      'opportunities_awarded_requires_outcome',
+      // IS NOT NULL first: a bare `awarded_value > 0` is NULL for a missing
+      // value, and a CHECK that evaluates to NULL passes.
+      sql`${table.stage} <> 'awarded' OR (${table.awardedValue} IS NOT NULL AND ${table.awardedValue} > 0 AND ${table.awardDate} IS NOT NULL)`,
+    ),
+    check(
+      'opportunities_lost_requires_outcome',
+      sql`${table.stage} <> 'lost' OR (${table.lossReason} IS NOT NULL AND ${table.closedDate} IS NOT NULL)`,
+    ),
+    check(
+      'opportunities_loss_reason_preset',
+      sql`${table.lossReason} IS NULL OR ${table.lossReason} IN ('price', 'technical_eligibility', 'competitor_selected', 'budget_unavailable', 'no_bid', 'other')`,
+    ),
+    check(
+      'opportunities_loss_other_explained',
+      sql`${table.lossReason} IS DISTINCT FROM 'other' OR ${table.lossNote} IS NOT NULL`,
+    ),
+    // Reopening clears the outcome; the previous one is kept in audit history.
+    check(
+      'opportunities_award_only_when_awarded',
+      sql`${table.stage} = 'awarded' OR (${table.awardedValue} IS NULL AND ${table.awardDate} IS NULL)`,
+    ),
+    check(
+      'opportunities_loss_only_when_lost',
+      sql`${table.stage} = 'lost' OR (${table.lossReason} IS NULL AND ${table.lossNote} IS NULL)`,
+    ),
+    // BR-010: On Hold and Cancelled are never applied to a terminal record.
+    check(
+      'opportunities_terminal_status_active',
+      sql`${table.stage} NOT IN ('awarded', 'lost') OR ${table.status} = 'active'`,
+    ),
+    check(
+      'opportunities_held_or_cancelled_explained',
+      sql`${table.status} = 'active' OR ${table.statusNote} IS NOT NULL`,
+    ),
   ],
 );
 
@@ -210,6 +254,7 @@ export const followUps = pgTable(
     completedBy: uuid('completed_by').references(() => users.id, { onDelete: 'restrict' }),
     completionNote: text('completion_note'),
     cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledBy: uuid('cancelled_by').references(() => users.id, { onDelete: 'restrict' }),
     cancellationReason: text('cancellation_reason'),
     createdBy: uuid('created_by')
       .notNull()
@@ -224,6 +269,17 @@ export const followUps = pgTable(
     index('follow_ups_state_due_idx').on(table.state, table.dueDate),
     // Supports the "earliest due open follow-up, creation-time tie-breaker" lookup.
     index('follow_ups_next_action_idx').on(table.opportunityId, table.dueDate, table.createdAt),
+    // --- Migration 0002: state consistency (FR-042, BR-014) ------------------
+    // A completed task records who and when; a cancelled one records why. A
+    // task can never be both, so a cancellation cannot pose as a completion.
+    check(
+      'follow_ups_completed_consistent',
+      sql`(${table.state} = 'completed') = (${table.completedAt} IS NOT NULL AND ${table.completedBy} IS NOT NULL)`,
+    ),
+    check(
+      'follow_ups_cancelled_consistent',
+      sql`(${table.state} = 'cancelled') = (${table.cancelledAt} IS NOT NULL AND ${table.cancelledBy} IS NOT NULL AND ${table.cancellationReason} IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -292,6 +348,38 @@ export const idempotencyRecords = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Invitation and password-reset tokens (SEC-030, migration 0003)
+// ---------------------------------------------------------------------------
+
+/**
+ * Single-use, expiring tokens. Only a SHA-256 hash is stored; the token itself
+ * is shown once to the administrator who issued it and never again. A token
+ * is spent by setting `used_at`, and issuing a new one for the same purpose
+ * spends any earlier ones.
+ */
+export const accountTokens = pgTable(
+  'account_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    purpose: accountTokenPurposeEnum('purpose').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('account_tokens_hash_unique').on(table.tokenHash),
+    index('account_tokens_user_idx').on(table.userId, table.purpose),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Session store (connect-pg-simple)
 // ---------------------------------------------------------------------------
 
@@ -315,3 +403,4 @@ export type OrganizationRow = typeof organizations.$inferSelect;
 export type OpportunityRow = typeof opportunities.$inferSelect;
 export type FollowUpRow = typeof followUps.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
+export type AccountTokenRow = typeof accountTokens.$inferSelect;

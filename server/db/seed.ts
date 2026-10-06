@@ -108,7 +108,7 @@ export async function seedDatabase(
       // unexpected foreign key surfaces instead of being silently cleared.
       await tx.execute(sql`
         TRUNCATE TABLE
-          audit_events, idempotency_records, follow_ups, opportunities,
+          account_tokens, audit_events, idempotency_records, follow_ups, opportunities,
           organizations, users, sections, session
         RESTART IDENTITY CASCADE
       `);
