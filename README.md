@@ -151,6 +151,8 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as five Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
+| `npm run test:browsers` | The Milestone 8 interface checks (1440/768/360 px, keyboard, errors, Bangla/BDT, network failure, back navigation) in Chromium, Edge and Firefox, one run each. Firefox needs `npx playwright install firefox` |
+| `npm run check:production-server` | Starts the compiled server (`npm run build:server` first) with `NODE_ENV=production` and checks the refused test scanner, security headers, secure cookies, absent demo/reset endpoints and the readiness probe |
 
 `npm test` applies the committed migrations first and refuses to run if
 `TEST_DATABASE_URL` is missing, points at the development database, or
@@ -167,6 +169,20 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run db:reset` | Truncate and reload the fixtures |
 | `npm run documents:maintain` | Remove abandoned uploads and orphaned files; retry pending scans |
 | `npm run jobs:run` | Run due background jobs once (notifications, exports, housekeeping) |
+| `npm run jobs:run -- --check` | Monitoring check: exit 1 if a job failed in the last 24 h or due work waited over an hour |
+
+### Release and operations (Milestone 8)
+
+| Command | What it does |
+| --- | --- |
+| `npm run capacity:seed` | Creates and fills `penta_crm_capacity` with the NFR-010 envelope (100 users, 10 000 opportunities, 100 000 activities and follow-ups); local only |
+| `npm run capacity:load` | 30 concurrent synthetic users against the real app; writes `docs/evidence/capacity/` |
+| `npm run capacity:pages` | First-usable-page timings of the production build (run `npm run build:web` first) |
+| `npm run ops:backup` / `npm run ops:restore` | Consistent, encrypted backup of database and documents, and verified restore into a new database (needs `BACKUP_ENCRYPTION_KEY`) |
+| `npm run ops:restore-drill` | The whole backup → restore → run-the-app-on-the-copy drill on the isolated test database |
+| `npm run ops:create-first-administrator` | Creates the first System Administrator of an empty deployment and prints a single-use invitation link |
+
+Runbooks: `docs/operations/`. Release evidence: `docs/release/`.
 
 Creating databases and roles is an administrator action, done once by
 `npm run db:up`. The application itself always connects as the restricted

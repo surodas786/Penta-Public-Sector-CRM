@@ -1,14 +1,166 @@
 # Implementation progress
 
-**Current state (06 October 2026):** Milestone 7 complete on branch
-`m7-audit-mutation-controls`, stacked on `m6-dashboards-reports-notifications`,
-`m5-tenders-documents` and `m4-organizations-contacts-activities` (committed
-locally, not pushed) and `m3-transfers-administration` (PR #2, CI green, not
-yet reviewed). Nothing is merged or deployed. **Production document storage
-and malware scanning are unresolved** (Milestone 5, §8). Milestone 8 has not
-been started. Sections, newest first: Milestone 7 · Milestone 6 · Milestone 5 ·
-Milestone 4 · Milestone 3 · Milestone 2 · Milestone 1 handover review ·
-Milestone 1.
+**Current state (06 October 2026):** Milestone 8 (release preparation)
+complete on branch `m8-release-preparation`, stacked on
+`m7-audit-mutation-controls` and the earlier milestone branches (committed
+locally, not pushed; PR #2 for Milestone 3 still unreviewed). Nothing is
+merged or deployed. **Not production-ready:** production document storage and
+malware scanning, the identity provider and MFA, and a staging environment
+are unresolved release blockers (Milestone 8, §8). Sections, newest first:
+Milestone 8 · 7 · 6 · 5 · 4 · 3 · 2 · Milestone 1 handover review · 1.
+
+---
+
+## Milestone 8 — release preparation
+
+**Branch:** `m8-release-preparation`, created from `m7-audit-mutation-controls` at `1ce9c79`
+**Commit:** the Milestone 8 commit that contains this section
+**Date:** 06 October 2026
+**Status:** Complete as release *preparation*. **Not production-ready**: three
+release blockers need Penta (§8). Nothing merged, pushed or deployed; no live
+infrastructure touched, no paid service created, no real data used.
+
+Release documents: `docs/release/` — [acceptance matrix](release/acceptance-matrix.md),
+[security review](release/security-review.md),
+[capacity and performance](release/capacity-and-performance.md),
+[interface quality](release/interface-quality.md),
+[pilot handover](release/pilot-handover.md). Runbooks: `docs/operations/`.
+Decisions: ADR 0009.
+
+### 1. Milestone 7 check before starting
+
+| Handover claim | Finding |
+| --- | --- |
+| `1ce9c79` on `m7-audit-mutation-controls`, clean tree | **Confirmed** |
+| Migration `0007` applied | **Confirmed**; repeat run no-op |
+| typecheck, lint | **Pass**; lint 0 errors, 5 pre-existing warnings |
+| `npm test` 632 passed | **Rerun on the M8 branch: 632 passed**, 21 files |
+| `npm run test:smoke` 25 passed in six runs | **Rerun: 25 passed** (12 + 2 + 3 + 3 + 4 + 1) |
+| `npm run build` | **Pass** |
+
+No M7 blocker. M7's open items (follow-up edit/reassign; who sees directory
+and export audit) are product decisions and stay recorded (§8).
+
+### 2. What was done, by area
+
+| Area | Work | Evidence |
+| --- | --- | --- |
+| 1. Requirements and regression | Requirement-to-evidence matrix for **all 95** identifiers (checked by script against the requirements): **76 complete, 18 partial, 1 unresolved**, each with its test evidence and gap. Full regression across all roles (§5) | `docs/release/acceptance-matrix.md` |
+| 2. Security | Review of authentication, sessions, CSRF, permissions, uploads/downloads, exports, secrets, logging; dependency audit and fixes; Git-history secret scan; **the compiled server started in production mode** and probed (19 checks); bundle scanned for seed/demo content; storage/scanning behaviour and MFA readiness written down; items for independent review listed | `docs/release/security-review.md`, `scripts/check-production-server.ts` |
+| 3. Interface quality | `e2e/m8.spec.ts` in **Chromium, Microsoft Edge and Firefox**: 5 screens × 1440/768/360 px without page-level horizontal scroll, navigation reachable, keyboard-only sign-in, visible focus, dialog focus and Escape, readable sign-in and field errors, Bangla, BDT grouping, network failure, uncertain-failure retry with the same idempotency key, back navigation keeping filters; screenshots | `docs/release/interface-quality.md`, `docs/evidence/m8/` |
+| 4. Capacity and performance | Synthetic envelope generator (100 users, 10 000 opportunities, 60 000 activities + 40 000 follow-ups, 110 000 audit events), 30-user load test (paced and saturation), first-usable-page timing of the production build with emulated office broadband; one bottleneck found by query profiling and fixed; controlled before/after | `docs/release/capacity-and-performance.md`, `docs/evidence/capacity/` |
+| 5. Operations | Readiness probe; request log; job health check for monitoring; environment, deployment/migration/rollback, monitoring and backup/restore runbooks; **consistent encrypted backup and verified restore, drilled end to end** (the application run on the restored copy); first-administrator bootstrap | `docs/operations/`, `docs/evidence/operations/restore-drill.md` |
+| 6. Pilot handover | Local and staging startup, synthetic accounts, role-based UAT scenarios, known limitations, blockers with owners, release checklist | `docs/release/pilot-handover.md` |
+
+### 3. Defects found and fixed
+
+| # | Defect | Fix | Evidence |
+| --- | --- | --- | --- |
+| 1 | **High-severity runtime advisory** in React Router (`@remix-run/router` open redirect → XSS) | `react-router-dom` 6.30.2 → 6.30.6 (patch); also `postcss` 8.5.29 and `@typescript-eslint` 8.71.1 | `npm audit --omit=dev`: high → 2 moderate (not reachable; see security review §2) |
+| 2 | **Dashboard team workload rescanned every open follow-up per person** — 269 of 332 ms of a management dashboard at the envelope; dashboard requests over 2 s under load | Aggregated once per owner using the shared metric fragments | Query 269 → 16 ms; saturation dashboard p95 1 758 → 872 ms, max 2 527 → 1 854 ms (controlled before/after) |
+| 3 | **The workload's task columns were untested**: a deliberately broken variant (counting closed tasks as open) passed every test, because the fixtures have no closed tasks | New test completes a task first and reconciles open/overdue per owner with the follow-up lists | Mutation now detected |
+| 4 | **No way to create the first administrator** of an empty deployment (FR-001; the seed rightly refuses production) — a deployment blocker | `npm run ops:create-first-administrator`: only while no active administrator exists, invitation link once, audited | `m8Operations.test.ts` (refused when one exists; creates, link works once, second run refused) |
+| 5 | **"Back to Opportunities" dropped the list filters** (FR-013) | The list passes its own address to the record page | `m8.spec.ts` in three browsers |
+| 6 | **Edit dialog said stage/status/ownership changes were "not available in this release"** — untrue since M2/M3 | Accurate wording | `m8.spec.ts` snapshot |
+| 7 | **The navigation landmark was unnamed** (the label sat on the surrounding panel) | `aria-label` on the `<nav>` | `m8.spec.ts` |
+| 8 | No readiness probe or failure log for monitoring (NFR-003) | `/api/health/ready`, `REQUEST_LOG`, `jobs:run -- --check` | `m8Operations.test.ts`, `check:production-server` |
+
+Tooling defects of my own, found and fixed during the work: the page-load
+script waited forever on Vite's coloured URL and on a Windows-reserved port
+(4173); a regular expression in my first M8 browser test matched the page's
+"Last updated" label; Sonner keeps a success toast while focused, so the test
+now dismisses it before asserting none.
+
+### 4. Database
+
+No application migration in M8. New local databases created by tooling only:
+`penta_crm_capacity` (capacity dataset) and scratch `penta_crm_restore_*`
+databases that the drill drops again.
+
+### 5. Commands run and results (final run, on the commit's code)
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | **Pass** (web, server and scripts, e2e) |
+| `npm run lint` | **Pass** — 0 errors, the same 5 pre-existing warnings |
+| `npm run check:env` | **Pass** — 28 variables |
+| `npm test` | **640 passed, 0 failed**, 22 files (632 after M7 + 7 in `m8Operations.test.ts` + 1 dashboard reconciliation) |
+| `npm run test:smoke` | **25 passed** in six isolated runs (12 + 2 + 3 + 3 + 4 + 1) |
+| `npm run test:browsers` | **5 passed in each of Chromium, Microsoft Edge and Firefox** (the Edge run took 18 min end to end, almost all of it browser start-up; its tests took about a minute) |
+| `npm run build` | **Pass**, demo-exclusion before and after bundling |
+| `npm run check:production-server` | **19 passed, 0 failed** |
+| `npm audit --omit=dev` | 2 moderate (React Router 6; not reachable from user input; fix needs v7) |
+| `npm run capacity:seed`, `capacity:load`, `capacity:pages` | As in §6 and `docs/release/capacity-and-performance.md` |
+| `npm run ops:restore-drill` | **Pass**: every verification, the app on the restored copy, tampering refused |
+| `npm run jobs:run -- --check` | `OK` on the development database |
+
+Capacity, page-load and restore-drill results are in their reports
+(numbers summarised in §6). New test files: `server/tests/m8Operations.test.ts`
+(7 tests: readiness 200/503, job health verdicts, request log content and
+quiet mode, first-administrator bootstrap) and `e2e/m8.spec.ts` (5 tests × 3
+browsers); `server/tests/dashboard.test.ts` gained the workload reconciliation
+test.
+
+### 6. Key measurements (laptop: i5-8365U, 16 GB, Docker Desktop; not staging)
+
+| Measure | Result | Proposed target |
+| --- | --- | --- |
+| API p95, 30 users at reading pace | 160 ms (0 errors in 2 575 requests) | < 2 s |
+| API p95, 30 requests always in flight | 626 ms; no request over 2 s (0 errors in 8 736) | < 2 s |
+| First usable page, medians (loopback / emulated office broadband) | 0.3–1.2 s / 0.4–1.5 s; one cold-start outlier 4.7 s | < 3 s |
+| Notification scan of the whole dataset | 2.8–5.9 s | hourly job |
+| Backup / verified restore (fixtures + files) | 1.1 s / 2.3 s | — |
+| Capacity database dump / restore (≈100 MB) | 4.9 s / 7.9 s | RTO 4 h (unconfirmed) |
+
+### 7. Requirement and acceptance coverage
+
+See the matrix. Changes in M8: FR-001 (bootstrap), FR-013 (back
+navigation), NFR-003 (probes, request log, job check), NFR-002 (backup,
+restore, drill), NFR-010/011 (measured, laptop), NFR-012 (three browsers),
+SEC-032 (request log never records query strings) — each still **partial**
+where it depends on staging or a Penta decision. AT-16 partial (restore drilled
+locally, not on staging); AT-17 unresolved (needs Penta's people).
+
+### 8. Remaining blockers and limitations
+
+**Release blockers (Penta decisions):**
+
+1. **Production document storage and malware scanning** (SEC-010, AT-13). Only
+   a local directory and a development TEST scanner exist; production refuses
+   the TEST scanner and, with none, keeps every upload unavailable.
+2. **Identity provider and MFA for privileged roles** (SEC-030/031). No MFA
+   exists.
+3. **Hosting and a staging environment**, on which capacity, restore,
+   monitoring and UAT must be repeated.
+
+**Also before production:** independent security review / penetration test;
+UAT and visual sign-off (AT-17); operational targets, retention and support
+ownership confirmed; the tooling upgrades (Vite, Vitest, Tailwind,
+drizzle-kit majors) and React Router 7.
+
+**Product decisions (not blocking a synthetic pilot):** follow-up
+edit/reassign (FR-042); Activities & Follow-ups calendar (FR-043); owner,
+section and organization selectors on the list (FR-022); who sees directory
+and export audit; alert recipients and business-day start (FR-090).
+
+**Limits of the evidence:** a laptop, not staging; one API process; emulated
+bandwidth; Chromium/Edge/Firefox on Windows only, no real mobile devices; no
+screen-reader or contrast audit; the security review is a developer
+self-review.
+
+### 9. Readiness recommendation
+
+- **Synthetic-data pilot and UAT: ready**, locally or on a staging
+  environment Penta provides, following `docs/release/pilot-handover.md`.
+- **Production deployment and real sales data: not ready, and not
+  recommended** until blockers 1–3 are resolved and the release checklist
+  (pilot handover §7) is complete with evidence from staging.
+
+### 10. Next task
+
+Development stops at the end of Milestone 8. Next, in order and only when
+instructed: Penta's decisions on the blockers and product questions in §8; a
+staging environment; then the staging items of the release checklist.
 
 ---
 

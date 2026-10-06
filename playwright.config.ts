@@ -55,7 +55,18 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
 
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // NFR-012: Edge (the installed browser, `channel: 'msedge'`) and Firefox
+  // (Playwright's build: `npx playwright install firefox`) are opt-in, used by
+  // `npm run test:browsers`; the smoke gate stays on Chromium.
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    ...(process.env.CROSS_BROWSER === 'true'
+      ? [
+          { name: 'msedge', use: { ...devices['Desktop Edge'], channel: 'msedge' } },
+          { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+        ]
+      : []),
+  ],
 
   webServer: [
     {

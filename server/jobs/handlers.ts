@@ -94,3 +94,23 @@ export async function jobStatus(db: Database) {
     .limit(10);
   return { counts, failures };
 }
+
+/**
+ * The monitoring verdict (NFR-003) behind `npm run jobs:run -- --check`:
+ * unhealthy when a job failed for good in the last 24 hours, or when due work
+ * has waited more than an hour (no worker is running). Counts only — never
+ * job payloads.
+ */
+export async function jobHealth(db: Database, at: Date = now()) {
+  const [row] = await db
+    .select({
+      recentFailures: sql<number>`count(*) FILTER (WHERE ${backgroundJobs.status} = 'failed'
+        AND ${backgroundJobs.finishedAt} > ${at.toISOString()}::timestamptz - interval '24 hours')::int`,
+      overdue: sql<number>`count(*) FILTER (WHERE ${backgroundJobs.status} = 'queued'
+        AND ${backgroundJobs.runAfter} < ${at.toISOString()}::timestamptz - interval '1 hour')::int`,
+    })
+    .from(backgroundJobs);
+  const recentFailures = row?.recentFailures ?? 0;
+  const overdue = row?.overdue ?? 0;
+  return { healthy: recentFailures === 0 && overdue === 0, recentFailures, overdue };
+}

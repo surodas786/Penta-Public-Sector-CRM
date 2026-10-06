@@ -1,0 +1,491 @@
+{
+  "measuredAt": "2026-10-06T08:53:56.939Z",
+  "machine": {
+    "cpu": "Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz",
+    "logicalCpus": 8,
+    "memoryGb": 16,
+    "os": "Windows_NT 10.0.26200",
+    "node": "v24.13.0",
+    "note": "API, PostgreSQL (Docker Desktop) and the load generator on the same laptop; loopback network."
+  },
+  "dataset": {
+    "users": 100,
+    "opportunities": 10000,
+    "activities": 60351,
+    "follow_ups": 40000,
+    "audit_events": 110524,
+    "postgres": "PostgreSQL 18.6 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit"
+  },
+  "users": {
+    "total": 30,
+    "management": 3,
+    "leads": 6,
+    "salespeople": 21
+  },
+  "targetP95Ms": 2000,
+  "notificationScan": {
+    "ms": 5904,
+    "retired": 0,
+    "created": 11767,
+    "alerts": 11767,
+    "recipients": 92
+  },
+  "signIn": {
+    "count": 30,
+    "p50": 94,
+    "p95": 106,
+    "max": 379
+  },
+  "phases": [
+    {
+      "phase": "paced",
+      "seconds": 180,
+      "requests": 2575,
+      "throughputPerSecond": 14.3,
+      "errors": 0,
+      "overall": {
+        "p50": 61,
+        "p95": 160,
+        "p99": 267,
+        "max": 435
+      },
+      "endpoints": [
+        {
+          "label": "GET /api/dashboard",
+          "count": 240,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 115,
+          "p95": 214,
+          "p99": 275,
+          "max": 435
+        },
+        {
+          "label": "GET /api/search",
+          "count": 101,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 98,
+          "p95": 208,
+          "p99": 375,
+          "max": 408
+        },
+        {
+          "label": "GET /api/contacts",
+          "count": 55,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 47,
+          "p95": 199,
+          "p99": 290,
+          "max": 290
+        },
+        {
+          "label": "GET /api/follow-ups",
+          "count": 161,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 89,
+          "p95": 187,
+          "p99": 333,
+          "max": 413
+        },
+        {
+          "label": "GET /api/opportunities/board",
+          "count": 110,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 92,
+          "p95": 184,
+          "p99": 373,
+          "max": 382
+        },
+        {
+          "label": "GET /api/opportunities?q=",
+          "count": 145,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 63,
+          "p95": 178,
+          "p99": 232,
+          "max": 267
+        },
+        {
+          "label": "POST …/:id/activities",
+          "count": 86,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 74,
+          "p95": 147,
+          "p99": 174,
+          "max": 174
+        },
+        {
+          "label": "GET /api/reports/:report",
+          "count": 100,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 54,
+          "p95": 142,
+          "p99": 195,
+          "max": 363
+        },
+        {
+          "label": "GET /api/notifications/unread-count",
+          "count": 136,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 43,
+          "p95": 127,
+          "p99": 236,
+          "max": 262
+        },
+        {
+          "label": "GET /api/activities",
+          "count": 91,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 70,
+          "p95": 120,
+          "p99": 307,
+          "max": 307
+        },
+        {
+          "label": "GET /api/tenders",
+          "count": 102,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 47,
+          "p95": 116,
+          "p99": 141,
+          "max": 149
+        },
+        {
+          "label": "GET /api/opportunities (page, filter, sort)",
+          "count": 380,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 51,
+          "p95": 115,
+          "p99": 311,
+          "max": 352
+        },
+        {
+          "label": "PATCH /api/opportunities/:id",
+          "count": 49,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 60,
+          "p95": 106,
+          "p99": 112,
+          "max": 112
+        },
+        {
+          "label": "GET …/:id/documents",
+          "count": 57,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 42,
+          "p95": 104,
+          "p99": 149,
+          "max": 149
+        },
+        {
+          "label": "GET /api/organizations",
+          "count": 50,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 43,
+          "p95": 98,
+          "p99": 253,
+          "max": 253
+        },
+        {
+          "label": "GET …/:id/follow-ups",
+          "count": 96,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 46,
+          "p95": 98,
+          "p99": 319,
+          "max": 319
+        },
+        {
+          "label": "GET /api/opportunities/:id",
+          "count": 304,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 44,
+          "p95": 92,
+          "p99": 105,
+          "max": 324
+        },
+        {
+          "label": "GET …/:id/activities",
+          "count": 92,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 43,
+          "p95": 90,
+          "p99": 354,
+          "max": 354
+        },
+        {
+          "label": "GET …/:id/tenders",
+          "count": 61,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 39,
+          "p95": 88,
+          "p99": 133,
+          "max": 133
+        },
+        {
+          "label": "GET …/:id/history",
+          "count": 93,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 39,
+          "p95": 87,
+          "p99": 348,
+          "max": 348
+        },
+        {
+          "label": "GET …/:id/contacts",
+          "count": 66,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 32,
+          "p95": 81,
+          "p99": 162,
+          "max": 162
+        }
+      ]
+    },
+    {
+      "phase": "saturation",
+      "seconds": 90,
+      "requests": 8736,
+      "throughputPerSecond": 97.1,
+      "errors": 0,
+      "overall": {
+        "p50": 257,
+        "p95": 626,
+        "p99": 811,
+        "max": 1854
+      },
+      "endpoints": [
+        {
+          "label": "GET /api/dashboard",
+          "count": 839,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 606,
+          "p95": 872,
+          "p99": 1251,
+          "max": 1854
+        },
+        {
+          "label": "GET /api/search",
+          "count": 345,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 382,
+          "p95": 601,
+          "p99": 844,
+          "max": 1067
+        },
+        {
+          "label": "GET /api/opportunities/board",
+          "count": 358,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 324,
+          "p95": 491,
+          "p99": 745,
+          "max": 861
+        },
+        {
+          "label": "GET /api/opportunities?q=",
+          "count": 402,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 261,
+          "p95": 460,
+          "p99": 651,
+          "max": 915
+        },
+        {
+          "label": "POST …/:id/activities",
+          "count": 265,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 307,
+          "p95": 454,
+          "p99": 769,
+          "max": 914
+        },
+        {
+          "label": "PATCH /api/opportunities/:id",
+          "count": 124,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 333,
+          "p95": 445,
+          "p99": 589,
+          "max": 706
+        },
+        {
+          "label": "GET /api/follow-ups",
+          "count": 583,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 276,
+          "p95": 427,
+          "p99": 729,
+          "max": 1074
+        },
+        {
+          "label": "GET …/:id/history",
+          "count": 351,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 247,
+          "p95": 388,
+          "p99": 679,
+          "max": 833
+        },
+        {
+          "label": "GET /api/reports/:report",
+          "count": 317,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 262,
+          "p95": 355,
+          "p99": 558,
+          "max": 654
+        },
+        {
+          "label": "GET /api/opportunities/:id",
+          "count": 1015,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 246,
+          "p95": 353,
+          "p99": 570,
+          "max": 745
+        },
+        {
+          "label": "GET /api/opportunities (page, filter, sort)",
+          "count": 1401,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 243,
+          "p95": 351,
+          "p99": 588,
+          "max": 900
+        },
+        {
+          "label": "GET /api/organizations",
+          "count": 172,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 209,
+          "p95": 348,
+          "p99": 575,
+          "max": 703
+        },
+        {
+          "label": "GET …/:id/activities",
+          "count": 333,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 247,
+          "p95": 344,
+          "p99": 601,
+          "max": 886
+        },
+        {
+          "label": "GET …/:id/follow-ups",
+          "count": 334,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 251,
+          "p95": 343,
+          "p99": 446,
+          "max": 585
+        },
+        {
+          "label": "GET /api/activities",
+          "count": 365,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 240,
+          "p95": 333,
+          "p99": 605,
+          "max": 800
+        },
+        {
+          "label": "GET /api/tenders",
+          "count": 306,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 223,
+          "p95": 329,
+          "p99": 487,
+          "max": 846
+        },
+        {
+          "label": "GET …/:id/documents",
+          "count": 176,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 210,
+          "p95": 320,
+          "p99": 442,
+          "max": 819
+        },
+        {
+          "label": "GET …/:id/contacts",
+          "count": 283,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 207,
+          "p95": 308,
+          "p99": 583,
+          "max": 712
+        },
+        {
+          "label": "GET /api/contacts",
+          "count": 147,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 221,
+          "p95": 302,
+          "p99": 497,
+          "max": 570
+        },
+        {
+          "label": "GET …/:id/tenders",
+          "count": 160,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 204,
+          "p95": 290,
+          "p99": 354,
+          "max": 377
+        },
+        {
+          "label": "GET /api/notifications/unread-count",
+          "count": 460,
+          "errors": 0,
+          "unexpected4xx": 0,
+          "p50": 178,
+          "p95": 266,
+          "p99": 378,
+          "max": 505
+        }
+      ]
+    }
+  ]
+}

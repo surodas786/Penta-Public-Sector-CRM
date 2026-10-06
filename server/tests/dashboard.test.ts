@@ -231,6 +231,13 @@ describe('dashboard (M6)', () => {
           );
           expect(sumMoney(board.workload.map((row) => row.estimatedPipeline))).toBe(board.kpis.estimatedActivePipeline);
           expect(board.workload.reduce((total, row) => total + row.tendersDueSoon, 0)).toBe(board.kpis.tendersDueNext7Days);
+          // Open and overdue tasks per owner add up to the follow-up lists
+          // (On Hold included: workload counts every open task in scope).
+          const open = (await client.agent.get('/api/follow-ups?view=open').expect(200)).body;
+          expect(board.workload.reduce((total, row) => total + row.openTasks, 0)).toBe(open.total);
+          expect(board.workload.reduce((total, row) => total + row.overdueTasks, 0)).toBe(
+            board.kpis.overdueFollowUps + board.kpis.overdueFollowUpsOnHold,
+          );
         }
 
         // The overdue card's drill-down lists exactly its follow-ups.
@@ -253,6 +260,38 @@ describe('dashboard (M6)', () => {
         expect(sumMoney(awarded.items.map((item) => item.awardedValue ?? '0'))).toBe(board.kpis.awardedValueThisQuarter);
       });
     }
+
+    it('counts only open tasks in workload, once closed tasks exist (M8 aggregate rewrite)', async () => {
+      const rafiq = await as(emails.salesGA1);
+      const [task] = await ctx.database.pool
+        .query<{ id: string; version: number }>(
+          `SELECT id, version FROM follow_ups WHERE opportunity_id = $1 AND state = 'open' ORDER BY created_at LIMIT 1`,
+          [ids.oppRafiq],
+        )
+        .then((result) => result.rows);
+      // Completed, with a replacement, so the record keeps its next action.
+      await send(rafiq, `/api/follow-ups/${task!.id}/complete`, {
+        version: task!.version,
+        replacement: { title: 'Replacement step', dueDate: '2026-09-20' },
+      }).expect(200);
+
+      for (const email of [emails.management, emails.leadGA]) {
+        const client = await as(email);
+        const board = await dashboard(client);
+        const open = (await client.agent.get('/api/follow-ups?view=open').expect(200)).body;
+        expect(board.workload!.reduce((total, row) => total + row.openTasks, 0)).toBe(open.total);
+        expect(board.workload!.reduce((total, row) => total + row.overdueTasks, 0)).toBe(
+          board.kpis.overdueFollowUps + board.kpis.overdueFollowUpsOnHold,
+        );
+        const rafiqRow = board.workload!.find((row) => row.userId === ids.salesGA1);
+        const rafiqOpen = await ctx.database.pool.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM follow_ups f JOIN opportunities o ON o.id = f.opportunity_id
+            WHERE o.owner_id = $1 AND f.state = 'open'`,
+          [ids.salesGA1],
+        );
+        expect(rafiqRow?.openTasks).toBe(rafiqOpen.rows[0]!.n);
+      }
+    });
 
     it('uses actual awarded value for the Awarded column and quarter card, estimates elsewhere (D-006)', async () => {
       const management = await dashboard(await as(emails.management));

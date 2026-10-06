@@ -1,7 +1,7 @@
 # Penta Public Sector Sales CRM — project instructions
 
 A sales CRM for public sector project opportunities in Bangladesh, built from an
-approved MagicPatterns prototype. Currently at the end of **Milestone 7**.
+approved MagicPatterns prototype. Currently at the end of **Milestone 8** (release preparation).
 
 ## Read before changing anything
 
@@ -69,6 +69,10 @@ npm run lint
 npm test               # backend integration suite (the milestone gate)
 npm run test:smoke     # Playwright browser checks (six isolated runs)
 npm run build          # web (with demo-exclusion checks) + server
+npm run test:browsers  # M8 interface checks in Chromium, Edge, Firefox
+npm run check:production-server   # compiled server in production mode
+npm run capacity:seed && npm run capacity:load   # NFR-010 envelope (local)
+npm run ops:restore-drill          # backup → restore → verify (needs BACKUP_ENCRYPTION_KEY)
 ```
 
 ## Conventions
@@ -84,7 +88,7 @@ npm run build          # web (with demo-exclusion checks) + server
 
 ## Current state
 
-Milestones 1–6 are complete: persistence, authentication, server-side
+Milestones 1–7 are complete: persistence, authentication, server-side
 permissions, opportunity create / list / detail / basic edit, stage and status
 transitions (board and dropdown), Awarded/Lost outcomes, management-only
 reopening, the follow-up lifecycle, ownership transfers, management's team
@@ -124,4 +128,11 @@ drill-downs and exports must compose them, inside `scopedWhere`, never
 restate them (FR-081). Services that make an alert obsolete call
 `alertsChangedInTransaction` inside their transaction; alert *generation*
 stays in background jobs (ADR 0007). Export delivery re-checks access to
-every exported record. See `docs/progress.md` before starting Milestone 8.
+every exported record.
+
+Milestone 8 added release evidence, not features: `docs/release/` (acceptance
+matrix, security review, capacity, interface quality, pilot handover) and
+`docs/operations/` (runbooks). Three release blockers remain open and must
+never be presented as solved: production document storage and scanning,
+identity provider and MFA, and a staging environment. No production
+deployment or real data without explicit written authorization.

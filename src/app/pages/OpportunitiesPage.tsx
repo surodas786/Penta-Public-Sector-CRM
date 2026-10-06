@@ -66,6 +66,10 @@ export function OpportunitiesPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  // The detail page's "Back to Opportunities" returns to this exact list,
+  // filters, sort and page included (FR-013).
+  const openRecord = (id: string) =>
+    navigate(`/opportunities/${id}`, { state: { returnTo: `/opportunities${params.toString() ? `?${params}` : ''}` } });
   const [createOpen, setCreateOpen] = useState(false);
   const today = dhakaToday();
 
@@ -407,7 +411,7 @@ export function OpportunitiesPage() {
               today={today}
               pending={pending}
               dragRefusal={dragRefusal}
-              onOpen={(id) => navigate(`/opportunities/${id}`)}
+              onOpen={(id) => openRecord(id)}
               onMove={(item, to) => void handleMove(item, to)}
             />
           </>
@@ -455,7 +459,7 @@ export function OpportunitiesPage() {
                     <tr
                       key={item.id}
                       className="cursor-pointer hover:bg-slate-50"
-                      onClick={() => navigate(`/opportunities/${item.id}`)}
+                      onClick={() => openRecord(item.id)}
                     >
                       <td className={`${tdCls} pl-4`}>
                         <button
@@ -463,7 +467,7 @@ export function OpportunitiesPage() {
                           className="text-left font-semibold text-brand-dark hover:underline"
                           onClick={(event) => {
                             event.stopPropagation();
-                            navigate(`/opportunities/${item.id}`);
+                            openRecord(item.id);
                           }}
                         >
                           {item.name}
@@ -557,7 +561,7 @@ export function OpportunitiesPage() {
         onClose={() => setCreateOpen(false)}
         onCreated={(id) => {
           setCreateOpen(false);
-          navigate(`/opportunities/${id}`);
+          openRecord(id);
         }}
       />
     </PageContainer>

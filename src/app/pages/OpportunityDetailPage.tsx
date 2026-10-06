@@ -4,7 +4,7 @@
  * (with follow-ups), Tender and Documents (M5), and Change History.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   ArrowLeftIcon,
@@ -111,6 +111,10 @@ type TaskAction = { kind: 'complete' | 'reschedule' | 'cancel'; task: FollowUpDt
 export function OpportunityDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set by the opportunity list; anything else falls back to the plain list.
+  const requestedReturn = (location.state as { returnTo?: unknown } | null)?.returnTo;
+  const backTo = typeof requestedReturn === 'string' && /^\/opportunities(\?|$)/.test(requestedReturn) ? requestedReturn : '/opportunities';
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [editOpen, setEditOpen] = useState(false);
@@ -198,7 +202,7 @@ export function OpportunityDetailPage() {
   if (detail.error) {
     return (
       <PageContainer>
-        <BackLink onClick={() => navigate('/opportunities')} />
+        <BackLink onClick={() => navigate(backTo)} />
         <ErrorPanel error={detail.error} onRetry={detail.reload} />
       </PageContainer>
     );
@@ -249,7 +253,7 @@ export function OpportunityDetailPage() {
 
   return (
     <PageContainer>
-      <BackLink onClick={() => navigate('/opportunities')} />
+      <BackLink onClick={() => navigate(backTo)} />
 
       <header className="rounded-lg border border-slate-200 bg-white p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

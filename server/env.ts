@@ -21,6 +21,8 @@ export interface ServerConfig {
   secureCookies: boolean;
   documents: DocumentConfig;
   jobs: JobsConfig;
+  /** REQUEST_LOG: one summary line per request (`all`), per failed or slow request (`errors`, default), or none. */
+  requestLog: 'all' | 'errors' | 'off';
 }
 
 /**
@@ -101,6 +103,12 @@ function readNodeEnv(): AppEnvironment {
   throw new Error(`NODE_ENV must be development, test or production, received "${raw}".`);
 }
 
+function readRequestLog(): ServerConfig['requestLog'] {
+  const raw = (process.env.REQUEST_LOG ?? 'errors').trim();
+  if (raw === 'all' || raw === 'errors' || raw === 'off') return raw;
+  throw new Error(`REQUEST_LOG must be all, errors or off, received "${raw}".`);
+}
+
 /** Obviously-unsafe placeholder secrets must not reach production. */
 const PLACEHOLDER_SECRETS = new Set([
   'replace-me-with-a-32-byte-random-hex-value',
@@ -164,6 +172,7 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
       exportTtlHours: positiveInt('REPORT_EXPORT_TTL_HOURS', 24),
       exportMaxRows: positiveInt('REPORT_EXPORT_MAX_ROWS', 50_000),
     },
+    requestLog: readRequestLog(),
     ...overrides,
   };
 

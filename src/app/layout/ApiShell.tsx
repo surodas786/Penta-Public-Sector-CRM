@@ -105,7 +105,6 @@ export function ApiShell() {
         className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col bg-navy text-slate-300 transition-transform duration-200 ease-out lg:static lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
-        aria-label="Main navigation"
       >
         <div className="flex items-start justify-between border-b border-white/10 px-5 pb-4 pt-5">
           <div className="flex flex-col">
@@ -122,7 +121,8 @@ export function ApiShell() {
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-2.5 py-3">
+        {/* The named landmark is the navigation itself, not the surrounding panel. */}
+        <nav className="flex-1 overflow-y-auto px-2.5 py-3" aria-label="Main navigation">
           <ul className="flex flex-col gap-0.5">
             {items.map(({ to, label, icon: Icon, available, reason }) => (
               <li key={to}>

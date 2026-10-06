@@ -18,7 +18,7 @@ import { resolveActor } from './auth/sessionGuard.js';
 import { configurePassport } from './auth/passport.js';
 import { createCsrfProtection, createOriginGuard } from './http/csrf.js';
 import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
-import { requestContext } from './http/requestContext.js';
+import { requestContext, requestLog } from './http/requestContext.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createActivitiesRouter, createContactLinksRouter, createContactsRouter } from './routes/contacts.js';
@@ -85,6 +85,7 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   app.disable('x-powered-by');
 
   app.use(requestContext);
+  if (config.requestLog !== 'off') app.use(requestLog(config.requestLog));
   app.use(
     helmet({
       // The SPA is served separately; the API returns JSON only.
@@ -172,8 +173,23 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   });
 
   app.get('/api/health', (_req, res) => {
-    // No secrets, no configuration, no counts (NFR-003).
+    // Liveness. No secrets, no configuration, no counts (NFR-003).
     res.json({ status: 'ok' });
+  });
+
+  // Readiness (NFR-003): can this instance reach its database? A load
+  // balancer stops routing to it while this is 503. Never says why.
+  app.get('/api/health/ready', (_req, res) => {
+    void (async () => {
+      const ok = await Promise.race([
+        database.pool.query('SELECT 1').then(
+          () => true,
+          () => false,
+        ),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
+      ]);
+      res.status(ok ? 200 : 503).json({ status: ok ? 'ok' : 'unavailable', database: ok ? 'ok' : 'unavailable' });
+    })();
   });
 
   app.use(

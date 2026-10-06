@@ -36,6 +36,7 @@ import {
   awardedInQuarter,
   dashboardRangeBounds,
   dateWithin,
+  opportunityOpen,
   overdueFollowUp,
   participatingCurrentNotice,
   SEVEN_DAYS_HOURS,
@@ -346,7 +347,48 @@ async function loadWorkload(
   at: Date,
 ): Promise<DashboardWorkloadRowDto[]> {
   const scope = opportunityScope(actor);
-  const owned = sql`${opportunities.ownerId} = ${users.id} AND ${scope}`;
+
+  // Each figure is aggregated once per owner over the scoped rows, then
+  // joined to the people. (Measured at the NFR-010 envelope, per-person
+  // correlated subqueries rescanned every open follow-up for each person:
+  // ~300 ms of a management dashboard's ~330 ms.) The definitions are the
+  // shared metric fragments, so the rows still add up to the totals.
+  const byOwner = db
+    .select({
+      ownerId: opportunities.ownerId,
+      activeOpportunities: sql<number>`count(*) FILTER (WHERE ${activePipeline()})::int`.as('active_opportunities'),
+      estimatedPipeline: sql<string>`coalesce(sum(${opportunities.estimatedValue}) FILTER (WHERE ${activePipeline()}), 0)::numeric(18,2)::text`.as(
+        'estimated_pipeline',
+      ),
+      openRecords: sql<boolean>`bool_or(${opportunityOpen()})`.as('open_records'),
+    })
+    .from(opportunities)
+    .where(scope)
+    .groupBy(opportunities.ownerId)
+    .as('owner_totals');
+
+  const tasksByOwner = db
+    .select({
+      ownerId: opportunities.ownerId,
+      openTasks: sql<number>`count(*)::int`.as('open_tasks'),
+      overdueTasks: sql<number>`count(*) FILTER (WHERE ${overdueFollowUp(today)})::int`.as('overdue_tasks'),
+    })
+    .from(followUps)
+    .innerJoin(opportunities, eq(opportunities.id, followUps.opportunityId))
+    .where(and(scope, eq(followUps.state, 'open')))
+    .groupBy(opportunities.ownerId)
+    .as('task_totals');
+
+  const tendersByOwner = db
+    .select({
+      ownerId: opportunities.ownerId,
+      tendersDueSoon: sql<number>`count(*)::int`.as('tenders_due_soon'),
+    })
+    .from(tenders)
+    .innerJoin(opportunities, eq(opportunities.id, tenders.opportunityId))
+    .where(and(scope, tenderDueWithin(at, SEVEN_DAYS_HOURS)))
+    .groupBy(opportunities.ownerId)
+    .as('tender_totals');
 
   const rows = await db
     .select({
@@ -356,23 +398,18 @@ async function loadWorkload(
       sectionId: users.sectionId,
       sectionName: sections.name,
       active: users.active,
-      activeOpportunities: sql<number>`(SELECT count(*)::int FROM ${opportunities} WHERE ${owned} AND ${activePipeline()})`,
-      estimatedPipeline: sql<string>`(SELECT coalesce(sum(${opportunities.estimatedValue}), 0)::numeric(18,2)::text
-        FROM ${opportunities} WHERE ${owned} AND ${activePipeline()})`,
-      openTasks: sql<number>`(SELECT count(*)::int FROM ${followUps}
-        JOIN ${opportunities} ON ${opportunities.id} = ${followUps.opportunityId}
-        WHERE ${owned} AND ${followUps.state} = 'open')`,
-      overdueTasks: sql<number>`(SELECT count(*)::int FROM ${followUps}
-        JOIN ${opportunities} ON ${opportunities.id} = ${followUps.opportunityId}
-        WHERE ${owned} AND ${overdueFollowUp(today)})`,
-      tendersDueSoon: sql<number>`(SELECT count(*)::int FROM ${tenders}
-        JOIN ${opportunities} ON ${opportunities.id} = ${tenders.opportunityId}
-        WHERE ${owned} AND ${tenderDueWithin(at, SEVEN_DAYS_HOURS)})`,
-      openRecords: sql<boolean>`EXISTS (SELECT 1 FROM ${opportunities} WHERE ${owned}
-        AND ${opportunities.status} <> 'cancelled' AND ${opportunities.stage} NOT IN ('awarded', 'lost'))`,
+      activeOpportunities: sql<number>`coalesce(${byOwner.activeOpportunities}, 0)::int`,
+      estimatedPipeline: sql<string>`coalesce(${byOwner.estimatedPipeline}, '0.00')`,
+      openTasks: sql<number>`coalesce(${tasksByOwner.openTasks}, 0)::int`,
+      overdueTasks: sql<number>`coalesce(${tasksByOwner.overdueTasks}, 0)::int`,
+      tendersDueSoon: sql<number>`coalesce(${tendersByOwner.tendersDueSoon}, 0)::int`,
+      openRecords: sql<boolean>`coalesce(${byOwner.openRecords}, false)`,
     })
     .from(users)
     .leftJoin(sections, eq(sections.id, users.sectionId))
+    .leftJoin(byOwner, eq(byOwner.ownerId, users.id))
+    .leftJoin(tasksByOwner, eq(tasksByOwner.ownerId, users.id))
+    .leftJoin(tendersByOwner, eq(tendersByOwner.ownerId, users.id))
     .where(
       and(
         ownerFilterOptionScope(actor),
