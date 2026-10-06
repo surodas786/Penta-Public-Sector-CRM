@@ -26,6 +26,9 @@ import {
 import { DueTag, PriorityBadge } from '../ui/ApiBadges.js';
 import { formatCalendarDate, formatInstant } from '../ui/dates.js';
 import { useApiResource } from '../useApiResource.js';
+import { FilterChips, type FilterChip } from '../components/FilterChips.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type View = 'open' | 'overdue' | 'today' | 'upcoming' | 'completed' | 'cancelled' | 'all';
 const VIEWS: { id: View; label: string }[] = [
@@ -48,7 +51,15 @@ export function FollowUpsPage() {
   const read = (key: string, fallback = '') => params.get(key) ?? fallback;
   const tab = read('tab') === 'log' ? 'log' : 'followups';
   const view = (VIEWS.some((item) => item.id === read('filter')) ? read('filter') : 'open') as View;
-  const assignedTo = read('assignee') === 'me' ? 'me' : '';
+  // `me`, or a person's id from a dashboard drill-down; the server only ever
+  // narrows within scope with it.
+  const assigneeParam = read('assignee');
+  const assignedTo = assigneeParam === 'me' || UUID.test(assigneeParam) ? assigneeParam : '';
+  // Dashboard drill-downs (FR-014, §20): the opportunity owner, section and
+  // On Hold filters are independent of the assignee filter.
+  const owner = UUID.test(read('owner')) ? read('owner') : '';
+  const section = UUID.test(read('section')) ? read('section') : '';
+  const hold = read('hold') === 'exclude' || read('hold') === 'only' ? read('hold') : '';
   const q = read('q');
   const page = Math.max(1, Number(read('page', '1')) || 1);
 
@@ -63,11 +74,29 @@ export function FollowUpsPage() {
   };
 
   const query = useMemo(
-    () => ({ view, assignedTo: assignedTo || undefined, q: q || undefined, page, pageSize: PAGE_SIZE }),
-    [view, assignedTo, q, page],
+    () => ({
+      view,
+      assignedTo: assignedTo || undefined,
+      ownerId: owner || undefined,
+      sectionId: section || undefined,
+      hold: hold || undefined,
+      q: q || undefined,
+      page,
+      pageSize: PAGE_SIZE,
+    }),
+    [view, assignedTo, owner, section, hold, q, page],
   );
   const fetcher = useCallback((signal: AbortSignal) => fetchFollowUps(query, signal), [query]);
   const { data, error, loading, reload } = useApiResource(fetcher, [query]);
+
+  const chips: FilterChip[] = [];
+  if (owner) chips.push({ key: 'owner', label: 'Opportunities of one owner', onRemove: () => update({ owner: '' }) });
+  if (section) chips.push({ key: 'section', label: 'One section', onRemove: () => update({ section: '' }) });
+  if (assignedTo && assignedTo !== 'me') {
+    chips.push({ key: 'assignee', label: 'Assigned to one person', onRemove: () => update({ assignee: '' }) });
+  }
+  if (hold === 'exclude') chips.push({ key: 'hold', label: 'Not On Hold records', onRemove: () => update({ hold: '' }) });
+  if (hold === 'only') chips.push({ key: 'hold', label: 'On Hold records only', onRemove: () => update({ hold: '' }) });
 
   const done = () => {
     setAction(null);
@@ -118,7 +147,11 @@ export function FollowUpsPage() {
               >
                 <option value="">Everyone in scope</option>
                 <option value="me">Me</option>
+                {assignedTo && assignedTo !== 'me' && <option value={assignedTo}>One person (from the dashboard)</option>}
               </FilterSelect>
+              <div className="basis-full">
+                <FilterChips chips={chips} />
+              </div>
             </div>
 
             <div

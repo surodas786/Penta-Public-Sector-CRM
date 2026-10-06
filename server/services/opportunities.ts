@@ -16,6 +16,7 @@ import type {
   HistoryEntryDto,
   NextActionDto,
   OpportunityDetailDto,
+  OpportunityListDto,
   OpportunityListItemDto,
   Paginated,
 } from '../../shared/api.js';
@@ -52,6 +53,7 @@ import type { Actor } from '../policy/actor.js';
 import { eligibleOwnerScope, opportunityScope, scopedWhere } from '../policy/scope.js';
 import { OPPORTUNITY_FIELD_LABELS, diffRecords, recordAuditEvent } from './audit.js';
 import { getFirstFollowUp, listFollowUpsForOpportunity } from './followUps.js';
+import { activePipeline } from './metrics.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
 
 type ListQuery = z.output<typeof listOpportunitiesQuerySchema>;
@@ -196,11 +198,14 @@ function baseQuery(db: Database) {
 // List
 // ---------------------------------------------------------------------------
 
-export async function listOpportunities(
-  db: Database,
-  actor: Actor,
-  query: ListQuery,
-): Promise<Paginated<OpportunityListItemDto>> {
+export type OpportunityListFilters = Omit<ListQuery, 'page' | 'pageSize' | 'sort' | 'dir'>;
+
+/**
+ * The list's filters as SQL. Shared by the list, its CSV export and the
+ * dashboard drill-downs, so a card, its list and its export count the same
+ * records (FR-081, FR-083). Applied inside `scopedWhere`, never instead of it.
+ */
+export function opportunityListFilters(query: OpportunityListFilters): (SQL | undefined)[] {
   const filters: (SQL | undefined)[] = [];
 
   if (query.q) {
@@ -224,7 +229,21 @@ export async function listOpportunities(
   if (query.sectionId) filters.push(eq(opportunities.sectionId, query.sectionId));
   if (query.expectedAwardFrom) filters.push(gte(opportunities.expectedAwardDate, query.expectedAwardFrom));
   if (query.expectedAwardTo) filters.push(lte(opportunities.expectedAwardDate, query.expectedAwardTo));
+  if (query.expectedAward === 'undated') filters.push(isNull(opportunities.expectedAwardDate));
+  if (query.pipeline === 'active') filters.push(activePipeline());
+  if (query.awardDateFrom) filters.push(gte(opportunities.awardDate, query.awardDateFrom));
+  if (query.awardDateTo) filters.push(lte(opportunities.awardDate, query.awardDateTo));
+  if (query.closedDateFrom) filters.push(gte(opportunities.closedDate, query.closedDateFrom));
+  if (query.closedDateTo) filters.push(lte(opportunities.closedDate, query.closedDateTo));
+  return filters;
+}
 
+export async function listOpportunities(
+  db: Database,
+  actor: Actor,
+  query: ListQuery,
+): Promise<OpportunityListDto> {
+  const filters = opportunityListFilters(query);
   const where = scopedWhere(actor, ...filters);
 
   // The total counts permitted rows only; an inaccessible record can never
@@ -247,12 +266,53 @@ export async function listOpportunities(
 
   const nextActions = await loadNextActions(db, rows.map((row) => row.id));
 
+  // BR-060: an expected-award range hides records that have no expected award
+  // date. Count them, under the same scope and other filters, so the screen
+  // can say so and offer them instead of letting them disappear.
+  let undatedExpectedAward: number | null = null;
+  if (query.expectedAwardFrom || query.expectedAwardTo) {
+    const withoutRange = opportunityListFilters({
+      ...query,
+      expectedAwardFrom: undefined,
+      expectedAwardTo: undefined,
+      expectedAward: 'undated',
+    });
+    const [undated] = await db
+      .select({ value: count() })
+      .from(opportunities)
+      .innerJoin(organizations, eq(organizations.id, opportunities.organizationId))
+      .where(scopedWhere(actor, ...withoutRange));
+    undatedExpectedAward = undated?.value ?? 0;
+  }
+
   return {
     items: rows.map((row) => toListItem(row, nextActions.get(row.id) ?? null)),
     total,
     page: query.page,
     pageSize: query.pageSize,
+    undatedExpectedAward,
   };
+}
+
+/**
+ * Every matching row for the CSV export (FR-083): the list's own filters and
+ * scope, in the list's order, without paging. `limit` bounds memory; the
+ * caller refuses an export that reaches it rather than truncating silently.
+ */
+export async function listOpportunitiesForExport(
+  db: Database,
+  actor: Actor,
+  query: OpportunityListFilters & { sort: OpportunitySortKey; dir: 'asc' | 'desc' },
+  limit: number,
+): Promise<OpportunityListItemDto[]> {
+  const where = scopedWhere(actor, ...opportunityListFilters(query));
+  const direction = query.dir === 'asc' ? asc : desc;
+  const rows = (await baseQuery(db)
+    .where(where)
+    .orderBy(direction(SORT_COLUMNS[query.sort]), desc(opportunities.createdAt), asc(opportunities.id))
+    .limit(limit)) as ListRow[];
+  const nextActions = await loadNextActions(db, rows.map((row) => row.id));
+  return rows.map((row) => toListItem(row, nextActions.get(row.id) ?? null));
 }
 
 // ---------------------------------------------------------------------------

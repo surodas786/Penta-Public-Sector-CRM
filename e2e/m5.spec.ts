@@ -21,7 +21,10 @@ async function signIn(page: Page, email: string) {
   await page.getByLabel('Email address').fill(email);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/opportunities$/);
+  // Sales roles land on the dashboard (M6), then open the opportunity list.
+  await page.waitForURL(/\/dashboard$/);
+  await page.goto('/opportunities');
+  await expect(page.getByRole('heading', { name: 'Opportunities' })).toBeVisible();
 }
 
 test('a salesperson tracks tenders, records a submission without moving the stage, and works with private documents', async ({ page }) => {

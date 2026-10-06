@@ -53,6 +53,8 @@ import {
   type TransitionRequest,
 } from '../transitions.js';
 import { DueTag, PriorityBadge, StageBadge } from '../ui/ApiBadges.js';
+import { ExportButton } from '../components/ExportButton.js';
+import { FilterChips, type FilterChip } from '../components/FilterChips.js';
 import { dhakaToday, formatCalendarDate } from '../ui/dates.js';
 
 const PAGE_SIZE = 25;
@@ -78,6 +80,17 @@ export function OpportunitiesPage() {
   // Set by the Team Management workload drill-down. The server applies it
   // inside scope, so it can only narrow what the account already sees.
   const ownerId = read('ownerId');
+  // Dashboard drill-downs (FR-014): the card's own population, named below.
+  const sectionId = read('sectionId');
+  const pipeline = read('pipeline') === 'active' ? 'active' : '';
+  const awardFrom = read('awardFrom');
+  const awardTo = read('awardTo');
+  const closedFrom = read('closedFrom');
+  const closedTo = read('closedTo');
+  // BR-060: the expected-award filter is its own, separately labelled basis.
+  const expectedFrom = read('expectedFrom');
+  const expectedTo = read('expectedTo');
+  const expectedUndated = read('expectedAward') === 'undated' ? 'undated' : '';
   const sort = (read('sort', 'createdAt') as SortKey) ?? 'createdAt';
   const dir = read('dir', 'desc') === 'asc' ? 'asc' : 'desc';
 
@@ -91,10 +104,29 @@ export function OpportunitiesPage() {
     setParams(next, { replace: true });
   };
 
-  const query = useMemo(
-    () => ({ page, pageSize: PAGE_SIZE, q, stage, status, priority, solutionCategory, ownerId, sort, dir }),
-    [page, q, stage, status, priority, solutionCategory, ownerId, sort, dir],
+  const listFilters = useMemo(
+    () => ({
+      q,
+      stage,
+      status,
+      priority,
+      solutionCategory,
+      ownerId,
+      sectionId,
+      pipeline,
+      awardDateFrom: awardFrom,
+      awardDateTo: awardTo,
+      closedDateFrom: closedFrom,
+      closedDateTo: closedTo,
+      expectedAwardFrom: expectedUndated ? '' : expectedFrom,
+      expectedAwardTo: expectedUndated ? '' : expectedTo,
+      expectedAward: expectedUndated,
+      sort,
+      dir,
+    }),
+    [q, stage, status, priority, solutionCategory, ownerId, sectionId, pipeline, awardFrom, awardTo, closedFrom, closedTo, expectedFrom, expectedTo, expectedUndated, sort, dir],
   );
+  const query = useMemo(() => ({ page, pageSize: PAGE_SIZE, ...listFilters }), [page, listFilters]);
 
   const fetcher = useCallback(
     (signal: AbortSignal) => fetchOpportunities(query, signal),
@@ -107,8 +139,8 @@ export function OpportunitiesPage() {
   );
 
   const boardQuery = useMemo(
-    () => ({ q, priority, solutionCategory, ownerId }),
-    [q, priority, solutionCategory, ownerId],
+    () => ({ q, priority, solutionCategory, ownerId, sectionId }),
+    [q, priority, solutionCategory, ownerId, sectionId],
   );
   const board = useApiResource(
     useCallback(
@@ -166,7 +198,25 @@ export function OpportunitiesPage() {
     }
   };
 
-  const activeFilterCount = [q, stage, status, priority, solutionCategory, ownerId].filter(Boolean).length;
+  const chips: FilterChip[] = [];
+  const chip = (key: string, label: string, clear: Record<string, string>) =>
+    chips.push({ key, label, onRemove: () => update(clear) });
+  if (pipeline) chip('pipeline', 'Active pipeline: Active status, not Awarded or Lost', { pipeline: '' });
+  if (sectionId) chip('sectionId', 'One section (from the dashboard)', { sectionId: '' });
+  if (ownerId) chip('ownerId', 'One owner (from the dashboard)', { ownerId: '' });
+  if (awardFrom || awardTo) {
+    chip('award', `Award date ${formatCalendarDate(awardFrom)} – ${formatCalendarDate(awardTo)}`, { awardFrom: '', awardTo: '' });
+  }
+  if (closedFrom || closedTo) {
+    chip('closed', `Lost / closed date ${formatCalendarDate(closedFrom)} – ${formatCalendarDate(closedTo)}`, {
+      closedFrom: '',
+      closedTo: '',
+    });
+  }
+  if (expectedUndated) chip('undated', 'No expected award date', { expectedAward: '' });
+
+  const activeFilterCount =
+    [q, stage, status, priority, solutionCategory, expectedFrom, expectedTo].filter(Boolean).length + chips.length;
   const pageCount = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
 
   const scopeNote =
@@ -206,6 +256,14 @@ export function OpportunitiesPage() {
                 { id: 'table', label: 'Table', icon: <TableIcon className="h-3.5 w-3.5" /> },
               ]}
             />
+            {view === 'table' && (
+              <ExportButton
+                kind="opportunities"
+                filters={listFilters}
+                disabled={!data || data.total === 0}
+                scopeLabel={scopeNote}
+              />
+            )}
             {user?.capabilities.createOpportunity ? (
               <Button variant="primary" icon={<PlusIcon className="h-4 w-4" />} onClick={() => setCreateOpen(true)}>
                 Add Opportunity
@@ -275,6 +333,47 @@ export function OpportunitiesPage() {
             ))}
           </FilterSelect>
         </div>
+
+        {view === 'table' && (
+          <fieldset className="mt-2 flex flex-wrap items-end gap-2">
+            <legend className="sr-only">Expected award date</legend>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold text-slate-500">Expected award date from</span>
+              <input
+                type="date"
+                value={expectedFrom}
+                disabled={Boolean(expectedUndated)}
+                onChange={(event) => update({ expectedFrom: event.target.value })}
+                className={inputCls(undefined, 'h-9 w-40 py-1.5 text-[13px]')}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold text-slate-500">to</span>
+              <input
+                type="date"
+                value={expectedTo}
+                disabled={Boolean(expectedUndated)}
+                onChange={(event) => update({ expectedTo: event.target.value })}
+                className={inputCls(undefined, 'h-9 w-40 py-1.5 text-[13px]')}
+              />
+            </label>
+            {data && data.undatedExpectedAward !== null && data.undatedExpectedAward > 0 && (
+              <p className="pb-2 text-[12px] text-slate-600" role="status">
+                {data.undatedExpectedAward} matching {data.undatedExpectedAward === 1 ? 'opportunity has' : 'opportunities have'} no
+                expected award date and {data.undatedExpectedAward === 1 ? 'is' : 'are'} not shown.{' '}
+                <button
+                  type="button"
+                  className="font-semibold text-brand hover:text-brand-dark"
+                  onClick={() => update({ expectedFrom: '', expectedTo: '', expectedAward: 'undated' })}
+                >
+                  Show undated
+                </button>
+              </p>
+            )}
+          </fieldset>
+        )}
+
+        <FilterChips chips={chips} />
 
         {activeFilterCount > 0 && (
           <div className="mt-2">

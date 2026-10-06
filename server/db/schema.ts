@@ -1,8 +1,7 @@
 /**
  * Drizzle schema (plan section 5).
  *
- * Deliberately absent until their milestone: notifications. Tables are
- * introduced with the feature that uses them, not in advance.
+ * Tables are introduced with the feature that uses them, not in advance.
  */
 import { sql } from 'drizzle-orm';
 import {
@@ -37,6 +36,7 @@ import {
   SOLUTION_CATEGORIES,
   USER_ROLES,
 } from '../../shared/enums.js';
+import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/reporting.js';
 
 // ---------------------------------------------------------------------------
 // Enum types
@@ -56,6 +56,10 @@ export const bidStatusEnum = pgEnum('bid_status', BID_STATUSES);
 export const noticeStateEnum = pgEnum('notice_state', NOTICE_STATES);
 export const documentCategoryEnum = pgEnum('document_category', DOCUMENT_CATEGORIES);
 export const scanStateEnum = pgEnum('scan_state', SCAN_STATES);
+export const notificationTypeEnum = pgEnum('notification_type', NOTIFICATION_TYPES);
+export const reportExportStatusEnum = pgEnum('report_export_status', EXPORT_STATUSES);
+export const reportExportKindEnum = pgEnum('report_export_kind', EXPORT_KINDS);
+export const backgroundJobStatusEnum = pgEnum('background_job_status', ['queued', 'running', 'succeeded', 'failed']);
 
 // ---------------------------------------------------------------------------
 // Sections and users
@@ -193,6 +197,9 @@ export const opportunities = pgTable(
     index('opportunities_organization_idx').on(table.organizationId),
     index('opportunities_expected_award_idx').on(table.expectedAwardDate),
     index('opportunities_created_at_idx').on(table.createdAt),
+    // Outcome report and quarterly awarded value (Milestone 6).
+    index('opportunities_award_date_idx').on(table.awardDate),
+    index('opportunities_closed_date_idx').on(table.closedDate),
     check('opportunities_estimated_value_nonnegative', sql`${table.estimatedValue} >= 0`),
     check(
       'opportunities_awarded_value_nonnegative',
@@ -461,6 +468,8 @@ export const activities = pgTable(
   },
   (table) => [
     index('activities_opportunity_time_idx').on(table.opportunityId, table.occurredAt),
+    // Dashboard recent activity across the scope (Milestone 6).
+    index('activities_occurred_at_idx').on(table.occurredAt),
     index('activities_contact_idx').on(table.contactId),
     index('activities_author_idx').on(table.authorId),
   ],
@@ -693,6 +702,131 @@ export const accountTokens = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Notifications, exports and background jobs (Milestone 6, migration 0006)
+// ---------------------------------------------------------------------------
+
+/**
+ * In-app alerts (FR-090, BR-070). `trigger_key` deduplicates by recipient,
+ * related record, alert type and the deadline or date the alert is about, so
+ * a job that runs twice creates one alert. The wording is built when the
+ * alert is read, from records the reader can still see; nothing commercial is
+ * frozen into the row. An alert is retired (`resolved_at`) when its task is
+ * closed or rescheduled, its notice changes, or its recipient loses access —
+ * and reads re-check all of that too, so an obsolete alert never shows even
+ * before the retirement is written. Reading never touches the task.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    recipientId: uuid('recipient_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    followUpId: uuid('follow_up_id').references(() => followUps.id, { onDelete: 'restrict' }),
+    tenderId: uuid('tender_id').references(() => tenders.id, { onDelete: 'restrict' }),
+    type: notificationTypeEnum('type').notNull(),
+    triggerKey: text('trigger_key').notNull(),
+    /** The task due date the alert is about. */
+    triggerDate: date('trigger_date'),
+    /** The submission deadline the alert is about. */
+    triggerAt: timestamp('trigger_at', { withTimezone: true }),
+    /** For ownership alerts, the owner the record was transferred to. */
+    subjectUserId: uuid('subject_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolution: text('resolution'),
+  },
+  (table) => [
+    uniqueIndex('notifications_trigger_key_unique').on(table.triggerKey),
+    index('notifications_recipient_idx').on(table.recipientId, table.resolvedAt, table.createdAt),
+    index('notifications_follow_up_idx').on(table.followUpId),
+    index('notifications_tender_idx').on(table.tenderId),
+    index('notifications_opportunity_idx').on(table.opportunityId),
+    check(
+      'notifications_subject_present',
+      sql`(${table.type} IN ('follow_up_due_today', 'follow_up_overdue') AND ${table.followUpId} IS NOT NULL AND ${table.triggerDate} IS NOT NULL)
+        OR (${table.type} = 'tender_deadline' AND ${table.tenderId} IS NOT NULL AND ${table.triggerAt} IS NOT NULL)
+        OR (${table.type} = 'ownership_changed' AND ${table.subjectUserId} IS NOT NULL)`,
+    ),
+    check('notifications_resolution_recorded', sql`(${table.resolvedAt} IS NULL) = (${table.resolution} IS NULL)`),
+  ],
+);
+
+/**
+ * Queued CSV exports (FR-083, NFR-011). The file is generated by a background
+ * job under the requester's current scope and kept until `expires_at`.
+ * Delivery re-checks that the requester may still see every record in it
+ * (SEC-005); `opportunity_ids` is what makes that check possible.
+ */
+export const reportExports = pgTable(
+  'report_exports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestedBy: uuid('requested_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    kind: reportExportKindEnum('kind').notNull(),
+    /** The validated filters, exactly as the visible report applied them. */
+    filters: jsonb('filters').notNull(),
+    status: reportExportStatusEnum('status').notNull().default('queued'),
+    rowCount: integer('row_count'),
+    fileName: text('file_name'),
+    content: text('content'),
+    opportunityIds: uuid('opportunity_ids').array(),
+    failureReason: text('failure_reason'),
+    requestId: text('request_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('report_exports_requester_idx').on(table.requestedBy, table.createdAt),
+    index('report_exports_expiry_idx').on(table.expiresAt),
+    check(
+      'report_exports_ready_complete',
+      sql`${table.status} <> 'ready' OR (${table.content} IS NOT NULL AND ${table.rowCount} IS NOT NULL AND ${table.opportunityIds} IS NOT NULL AND ${table.expiresAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Durable, retryable background work (NFR-003): notification scans, queued
+ * exports and housekeeping. Workers claim with `FOR UPDATE SKIP LOCKED`, so
+ * several API instances can share the queue; a failure is retried with
+ * backoff until `max_attempts`, then left `failed` for monitoring.
+ * `dedupe_key` makes a scheduled run idempotent across instances.
+ */
+export const backgroundJobs = pgTable(
+  'background_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').notNull(),
+    payload: jsonb('payload').notNull().default({}),
+    status: backgroundJobStatusEnum('status').notNull().default('queued'),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(5),
+    runAfter: timestamp('run_after', { withTimezone: true }).notNull().defaultNow(),
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    lockedBy: text('locked_by'),
+    /** A summary safe to log: never request data or record content (SEC-032). */
+    lastError: text('last_error'),
+    dedupeKey: text('dedupe_key'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('background_jobs_dedupe_unique').on(table.dedupeKey),
+    index('background_jobs_due_idx').on(table.status, table.runAfter),
+    check('background_jobs_attempts_bounded', sql`${table.attempts} >= 0 AND ${table.attempts} <= ${table.maxAttempts}`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Session store (connect-pg-simple)
 // ---------------------------------------------------------------------------
 
@@ -721,3 +855,6 @@ export type ContactRow = typeof contacts.$inferSelect;
 export type ActivityRow = typeof activities.$inferSelect;
 export type TenderRow = typeof tenders.$inferSelect;
 export type DocumentRevisionRow = typeof documentRevisions.$inferSelect;
+export type NotificationRow = typeof notifications.$inferSelect;
+export type ReportExportRow = typeof reportExports.$inferSelect;
+export type BackgroundJobRow = typeof backgroundJobs.$inferSelect;

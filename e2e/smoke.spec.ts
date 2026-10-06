@@ -24,7 +24,10 @@ test('sign in, create, persist across reload, sign out', async ({ page }) => {
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  // A salesperson's landing route resolves to the opportunity list.
+  // A salesperson lands on the approved dashboard (M6), then opens the list.
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  await page.getByRole('link', { name: 'Opportunities', exact: true }).click();
   await expect(page).toHaveURL(/\/opportunities$/);
   await expect(page.getByRole('heading', { name: 'Opportunities' })).toBeVisible();
   // The list is scoped by the server to records this salesperson owns.
@@ -100,7 +103,7 @@ test('another section cannot open the record by URL', async ({ page }) => {
   await page.getByLabel('Email address').fill(SALESPERSON_EMAIL);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/opportunities$/);
+  await expect(page).toHaveURL(/\/dashboard$/);
 
   // The approved default view is the Pipeline board; the table names each
   // record by its own button, which is what this test addresses.
@@ -116,7 +119,7 @@ test('another section cannot open the record by URL', async ({ page }) => {
   await page.getByLabel('Email address').fill('imran.hossain@example.com');
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/opportunities$/);
+  await expect(page).toHaveURL(/\/dashboard$/);
 
   await page.goto(ownedUrl);
   // The server answers 404; the UI shows the "not available" state and never

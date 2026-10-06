@@ -120,7 +120,7 @@ describe('operational guards', () => {
       await expect(runMigrations(migrationUrl)).resolves.toBeUndefined();
     });
 
-    it('creates every table up to the current milestone and none from a later one', async () => {
+    it('creates every table the implemented milestones use', async () => {
       const result = await ctx.database.db.execute<{ table_name: string }>(sql`
         SELECT table_name FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -141,14 +141,15 @@ describe('operational guards', () => {
         'documents',
         'document_revisions',
         'document_uploads',
+        // Milestone 6
+        'notifications',
+        'report_exports',
+        'background_jobs',
       ]) {
         expect(tables).toContain(expected);
       }
-
-      // Tables arrive with the feature that uses them (plan section 5).
-      for (const deferred of ['notifications']) {
-        expect(tables).not.toContain(deferred);
-      }
+      // Tables arrive with the feature that uses them (plan section 5); every
+      // table in the logical data model (§12) now has its feature.
     });
 
     it('refuses to seed when NODE_ENV is production', () => {

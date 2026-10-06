@@ -14,7 +14,7 @@ async function signIn(page: Page, email: string) {
   await page.getByLabel('Email address').fill(email);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.waitForURL(/\/(opportunities|administration)$/);
+  await page.waitForURL(/\/(dashboard|administration)$/);
 }
 
 test('capture Milestone 3 screens', async ({ page }) => {

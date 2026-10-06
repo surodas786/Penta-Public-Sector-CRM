@@ -42,6 +42,9 @@ import { canManageTenders, opportunityScope, scopedWhere } from '../policy/scope
 import { diffRecords, recordAuditEvent } from './audit.js';
 import { lockOpportunity, type LockedOpportunity } from './followUps.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
+import { SEVEN_DAYS_HOURS, tenderDueWithin } from './metrics.js';
+import { alertsChangedInTransaction } from './notifications.js';
+import { signalJobsEnqueued } from '../jobs/queue.js';
 import { assertOpportunityVisible } from './opportunities.js';
 
 type CreateCommand = z.output<typeof createTenderSchema>;
@@ -204,6 +207,8 @@ export async function listTenders(
   if (query.bidStatus) filters.push(eq(tenders.bidStatus, query.bidStatus));
   if (query.deadlineFrom) filters.push(sql`${dhakaDeadline} >= ${query.deadlineFrom}::date`);
   if (query.deadlineTo) filters.push(sql`${dhakaDeadline} <= ${query.deadlineTo}::date`);
+  // The dashboard card's own definition, so its drill-down lists the same notices (FR-081).
+  if (query.window === '7d') filters.push(tenderDueWithin(now(), SEVEN_DAYS_HOURS));
   if (query.q) {
     const term = `%${query.q}%`;
     filters.push(or(ilike(tenders.title, term), ilike(tenders.reference, term), ilike(opportunities.name, term)));
@@ -434,10 +439,12 @@ export async function createTender(options: {
       after: { about: created.reference, ...auditable(created), noticeState: 'current' },
       requestId,
     });
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
     await completeClaim(tx, created.id);
     return created.id;
   });
 
+  signalJobsEnqueued();
   return getTender(db, actor, id);
 }
 
@@ -514,8 +521,10 @@ export async function updateTender(options: {
       after: { about: merged.reference, ...diff.after },
       requestId,
     });
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
   });
 
+  signalJobsEnqueued();
   return getTender(db, actor, tenderId);
 }
 
@@ -614,10 +623,12 @@ export async function submitTender(options: {
       });
     }
 
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
     await completeClaim(tx, tenderId);
     return command.moveOpportunityToBidSubmitted;
   });
 
+  signalJobsEnqueued();
   return { tender: await getTender(db, actor, tenderId), stageChanged };
 }
 
@@ -694,8 +705,10 @@ export async function designateCurrentTender(options: {
       after: { about: tender.reference, noticeState: 'current' },
       requestId,
     });
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
   });
 
+  signalJobsEnqueued();
   return getTender(db, actor, tenderId);
 }
 
@@ -731,7 +744,9 @@ export async function cancelTenderNotice(options: {
       reason: command.reason,
       requestId,
     });
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
   });
 
+  signalJobsEnqueued();
   return getTender(db, actor, tenderId);
 }

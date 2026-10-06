@@ -3,7 +3,7 @@
 A CRM for tracking public sector project opportunities in Bangladesh: pipeline
 stages, follow-ups, tender cycles and section-based ownership.
 
-**Status: Milestone 5.** Persistent accounts and sessions, server-enforced
+**Status: Milestone 6.** Persistent accounts and sessions, server-enforced
 access control, opportunity creation and editing, persistent stage and status
 changes (Pipeline board and dropdown), Awarded/Lost outcomes with
 management-only reopening, the complete follow-up lifecycle, ownership
@@ -12,9 +12,10 @@ single-use invitation and reset links, the shared organization directory,
 contacts with opportunity-specific relationship notes, activities, tender
 cycles with the Tender Tracker, and private opportunity documents with
 revisions and scanning before download (development storage and a test
-scanner only — production infrastructure is undecided).
-Later features are deliberately unavailable rather than mocked — see
-[`docs/progress.md`](docs/progress.md).
+scanner only — production infrastructure is undecided), server-computed
+dashboards and reports with scoped totals, audited CSV exports, scoped
+search, and persistent in-app notifications from retryable background jobs.
+See [`docs/progress.md`](docs/progress.md) for what remains.
 
 > All data in this repository is synthetic. No real Penta contract or
 > government procurement is represented, and the application has not been
@@ -85,6 +86,25 @@ minutes; `npm run documents:maintain` does it once and retries pending scans.
 Production storage and scanning have **not** been chosen — see
 [`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
 
+### Background jobs: notifications and exports
+
+Notifications (follow-ups due today and overdue, tender deadlines within 72
+hours, ownership changes), queued CSV exports and daily housekeeping run from
+a durable job table. By default the API process runs the worker
+(`JOBS_ENABLED=true`, polling every `JOBS_POLL_SECONDS`, default 15): it
+queues one notification scan per Bangladesh clock hour and one housekeeping
+run per day, and starts work immediately when a request queues an export or
+changes an alert. Failed jobs are retried with backoff and then left `failed`.
+
+| Command | What it does |
+| --- | --- |
+| `npm run jobs:run` | Queue the scheduled jobs and run everything due, once (for `JOBS_ENABLED=false` deployments, run it from a scheduler) |
+| `npm run jobs:run -- --status` | Job counts by state and the latest failures |
+
+`REPORT_EXPORT_TTL_HOURS` (default 24) and `REPORT_EXPORT_MAX_ROWS` (default
+50 000) bound exports. See
+[`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
+
 > **Windows note.** Hyper-V, WSL and Docker Desktop reserve blocks of TCP
 > ports, and binding one fails with `EACCES` even though it looks free. The
 > default `PORT=4800` sits outside the usual blocks; if it still fails, run
@@ -127,8 +147,8 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run typecheck` | TypeScript for the web, server and e2e projects |
 | `npm run lint` | ESLint across all source |
 | `npm test` | Backend integration suite against the test database — **the milestone gate** |
-| `npm run test:smoke` | Playwright browser checks, as four isolated runs (smoke + M2, M3, M4, M5), each starting its own servers on freshly seeded test data |
-| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as four Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
+| `npm run test:smoke` | Playwright browser checks, as five isolated runs (smoke + M2, M3, M4, M5, M6), each starting its own servers on freshly seeded test data |
+| `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as five Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
 
@@ -146,6 +166,7 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run db:seed` / `npm run db:seed:test` | Load synthetic fixtures |
 | `npm run db:reset` | Truncate and reload the fixtures |
 | `npm run documents:maintain` | Remove abandoned uploads and orphaned files; retry pending scans |
+| `npm run jobs:run` | Run due background jobs once (notifications, exports, housekeeping) |
 
 Creating databases and roles is an administrator action, done once by
 `npm run db:up`. The application itself always connects as the restricted
@@ -165,6 +186,7 @@ server/   Express API
   routes/   thin HTTP adapters
   auth/     passport + express-session, argon2id, PostgreSQL session store
   http/     error model, CSRF, request context, validation
+  jobs/     durable background job queue, schedule and worker
 src/      React app — app/ is API mode, demo/ is the approved prototype
 e2e/      Playwright
 docs/     requirements, progress, ADRs, screenshot evidence
@@ -176,12 +198,12 @@ Access control is enforced in the database query, not in the browser. See
 [`docs/adr/0003-stage-status-and-follow-up-lifecycle.md`](docs/adr/0003-stage-status-and-follow-up-lifecycle.md) and
 [`docs/adr/0004-transfers-and-administration.md`](docs/adr/0004-transfers-and-administration.md) and
 [`docs/adr/0005-directory-contacts-and-activities.md`](docs/adr/0005-directory-contacts-and-activities.md) and
-[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
+[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md) and
+[`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
 
 ## Not in this milestone
 
-Dashboards, reports, CSV export, search and notifications. Production
-document storage and malware scanning are undecided. Each unavailable feature
-is visibly unavailable in the application with the reason
-stated.
+The complete audit and mutation-control sweep (M7) and release preparation
+(M8). Production document storage and malware scanning are undecided. The
+Activities & Follow-ups calendar view is still visibly unavailable.
 [`docs/progress.md`](docs/progress.md) has the full list and the next task.

@@ -28,6 +28,8 @@ import { ROLE_LABELS } from '../../../shared/enums.js';
 import { useAuth } from '../AuthContext.js';
 import { Avatar } from '../ui/ApiBadges.js';
 import { BUSINESS_TIME_LABEL } from '../ui/dates.js';
+import { GlobalSearch } from './GlobalSearch.js';
+import { NotificationsMenu } from './NotificationsMenu.js';
 
 interface NavItem {
   to: string;
@@ -50,14 +52,7 @@ export function ApiShell() {
   const admin = user.capabilities.accountAdministration;
 
   const items: NavItem[] = [
-    {
-      to: '/dashboard',
-      label: 'Dashboard',
-      icon: LayoutDashboardIcon,
-      available: false,
-      show: sales,
-      reason: 'Dashboards are calculated by server-side aggregates, which arrive in a later milestone.',
-    },
+    { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboardIcon, available: true, show: sales },
     { to: '/opportunities', label: 'Opportunities', icon: KanbanSquareIcon, available: true, show: sales },
     {
       to: '/organizations',
@@ -80,14 +75,7 @@ export function ApiShell() {
       available: true,
       show: sales,
     },
-    {
-      to: '/reports',
-      label: 'Reports',
-      icon: BarChart3Icon,
-      available: false,
-      show: sales,
-      reason: 'Reports and CSV export need the shared server query definitions, which arrive later.',
-    },
+    { to: '/reports', label: 'Reports', icon: BarChart3Icon, available: true, show: sales },
     {
       to: '/team',
       label: 'Team Management',
@@ -169,8 +157,8 @@ export function ApiShell() {
         </nav>
 
         <div className="border-t border-white/10 px-5 py-3 text-[10.5px] leading-relaxed text-[#7489A8]">
-          Access is enforced by the server on every request. Items marked with a lock have no server
-          endpoint yet and are deliberately unavailable.
+          Access is enforced by the server on every request, including dashboards, reports, search,
+          exports and notifications.
         </div>
       </aside>
 
@@ -184,10 +172,13 @@ export function ApiShell() {
           >
             <MenuIcon className="h-5 w-5" />
           </button>
+          <GlobalSearch />
           <div className="flex-1" />
           <span className="hidden whitespace-nowrap text-[11.5px] text-slate-500 xl:inline">
             Times shown in {BUSINESS_TIME_LABEL}
           </span>
+          {/* Commercial alerts only: an administrator has none (AT-01). */}
+          {sales && <NotificationsMenu />}
           <div className="hidden items-center gap-2 rounded-full border border-slate-200 py-1 pl-1 pr-3 lg:flex">
             <Avatar name={user.fullName} size="md" tone="navy" />
             <div className="leading-tight">

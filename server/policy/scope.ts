@@ -5,7 +5,7 @@
  * filtering, counting, sorting and pagination all happen inside the database
  * over permitted rows only (SEC-002). Routes never rebuild these rules.
  */
-import { and, eq, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, or, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 
 import { contacts, opportunities, opportunityContacts, users } from '../db/schema.js';
 import type { UserRole } from '../../shared/enums.js';
@@ -245,6 +245,85 @@ export function canArchiveDocument(actor: Actor): boolean {
 
 export function canAdministerAccounts(actor: Actor): boolean {
   return actor.active && actor.role === 'admin';
+}
+
+// ---------------------------------------------------------------------------
+// Dashboards, reports, exports, search and notifications (Milestone 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Permission matrix "View reports and export": management all, leads their
+ * section, salespeople their own records — always through
+ * `opportunityScope`. Administrators get no commercial dashboard, report,
+ * export, search result or notification (AT-01).
+ */
+export function canViewCommercialReports(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/** FR-082: only management receives cross-section filters. */
+export function canFilterBySection(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && actor.role === 'management';
+}
+
+/** FR-082: salespeople receive no other-user selector. */
+export function canFilterByOwner(actor: Actor): boolean {
+  return canAccessSalesRecords(actor) && (actor.role === 'management' || actor.role === 'lead');
+}
+
+/**
+ * The people an owner filter may offer (FR-082). Leads see their own section,
+ * management every section; inactive owners stay listed because their
+ * historical records remain in scope (plan 3.1).
+ */
+export function ownerFilterOptionScope(actor: Actor): SQL {
+  if (!canFilterByOwner(actor)) return MATCH_NOTHING;
+  const owners = sql`${users.role} IN ('sales', 'lead') AND ${users.sectionId} IS NOT NULL`;
+  if (actor.role === 'management') return owners;
+  return actor.sectionId ? (and(owners, eq(users.sectionId, actor.sectionId)) as SQL) : MATCH_NOTHING;
+}
+
+/** FR-091: administrative search covers accounts and sections only. */
+export function canSearchAdministration(actor: Actor): boolean {
+  return canAdministerAccounts(actor);
+}
+
+/**
+ * Whether the account in `user` (any alias of the users table) can currently
+ * see the opportunity row in the same query. This is `opportunityScope`
+ * restated for a person other than the requester — the notification
+ * generator needs it to choose recipients and to retire alerts whose
+ * recipient lost access (BR-070, SEC-005). A test checks the two agree for
+ * every account.
+ */
+export function userSeesOpportunitySql(user: {
+  id: AnyColumn;
+  role: AnyColumn;
+  sectionId: AnyColumn;
+  active: AnyColumn;
+}): SQL {
+  return sql`(${user.active} AND (
+    ${user.role} = 'management'
+    OR (${user.role} = 'lead' AND ${user.sectionId} IS NOT NULL AND ${user.sectionId} = ${opportunities.sectionId})
+    OR (${user.role} = 'sales' AND ${user.sectionId} IS NOT NULL AND ${opportunities.ownerId} = ${user.id})
+  ))`;
+}
+
+/**
+ * FR-090: who is alerted about a record. The person responsible (a task's
+ * assignee, or the owner), the section's lead ("leads see their section
+ * alerts") and management ("all permitted alerts") — each only while they
+ * can see the record, so an alert never grants or outlives access.
+ */
+export function alertRecipientSql(
+  user: { id: AnyColumn; role: AnyColumn; sectionId: AnyColumn; active: AnyColumn },
+  responsibleUserId: SQL | AnyColumn,
+): SQL {
+  return sql`(${userSeesOpportunitySql(user)} AND (
+    ${user.id} = ${responsibleUserId}
+    OR ${user.role} = 'management'
+    OR (${user.role} = 'lead' AND ${user.sectionId} = ${opportunities.sectionId})
+  ))`;
 }
 
 /**

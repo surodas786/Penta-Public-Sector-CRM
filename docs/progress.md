@@ -1,13 +1,265 @@
 # Implementation progress
 
-**Current state (05 October 2026):** Milestone 5 complete on branch
-`m5-tenders-documents`, stacked on `m4-organizations-contacts-activities`
-(committed locally, not pushed) and `m3-transfers-administration` (PR #2,
-CI green, not yet reviewed). Nothing is merged or deployed. **Production
-document storage and malware scanning are unresolved** (Milestone 5, §8).
-Milestone 6 has not been started. Sections, newest first: Milestone 5 ·
-Milestone 4 · Milestone 3 · Milestone 2 · Milestone 1 handover review ·
-Milestone 1.
+**Current state (06 October 2026):** Milestone 6 complete on branch
+`m6-dashboards-reports-notifications`, stacked on `m5-tenders-documents`
+and `m4-organizations-contacts-activities` (committed locally, not pushed)
+and `m3-transfers-administration` (PR #2, CI green, not yet reviewed).
+Nothing is merged or deployed. **Production document storage and malware
+scanning are unresolved** (Milestone 5, §8). Milestone 7 has not been
+started. Sections, newest first: Milestone 6 · Milestone 5 · Milestone 4 ·
+Milestone 3 · Milestone 2 · Milestone 1 handover review · Milestone 1.
+
+---
+
+## Milestone 6 — dashboards, reports, CSV export, search and notifications
+
+**Branch:** `m6-dashboards-reports-notifications`, created from `m5-tenders-documents` at `f656f7e`
+**Commit:** the Milestone 6 commit that contains this section
+**Date:** 06 October 2026
+**Status:** Complete for development and ready for review. Not merged, not
+pushed, not deployed. **Production document storage and malware scanning
+remain unresolved** (Milestone 5, §8; ADR 0006). Milestone 7 not started.
+
+### 1. Milestone 5 handover review
+
+Checked against the repository before any change:
+
+| Handover claim | Finding |
+| --- | --- |
+| Branch `m5-tenders-documents`, commits `1e6fe5a` + `f656f7e`, clean tree | **Confirmed**; nothing uncommitted or unrelated to preserve |
+| Migration `0005` applied to both databases | **Confirmed**; `npm run db:migrate` / `:test` are no-ops |
+| `npm run typecheck`, `npm run lint` | **Pass**; lint 0 errors, the same 5 pre-existing warnings |
+| `npm test` — 412 passed | **Rerun: 412 passed, 0 failed**, 16 files |
+| `npm run test:smoke` — 20 passed in four runs | **Rerun: 20 passed** (12 + 2 + 3 + 3) |
+| `npm run build` with demo exclusion | **Rerun: pass** |
+| Production storage and scanning unresolved | Still true; nothing in M6 depends on them, and they stay recorded as unresolved below |
+
+No blocker for Milestone 6. One handover item became M6 work: idempotency
+records had no scheduled cleanup; the new housekeeping job now prunes them.
+
+### 2. What was built
+
+| Requirement | Where | What it does |
+| --- | --- | --- |
+| §10.1, FR-081 | `server/services/metrics.ts` | Each metric defined **once** as an SQL fragment: active pipeline (status Active, stage neither Awarded nor Lost), overdue (open, due before today's Dhaka date), the seven-day tender window (current, Reviewing/Preparing, record open, deadline ≥ now and < now + 7 days), awarded this quarter (Awarded, award date in the Dhaka calendar quarter, actual value). Dashboard, reports, list drill-downs and exports compose them inside `scopedWhere` |
+| FR-080, FR-081, D-002, D-006 | `server/services/dashboard.ts`; `GET /api/dashboard` | One scoped aggregate: KPI cards, stage chart (working stages: active records and estimates; Awarded: actual awarded value; Lost: estimate), On Hold and Cancelled shown separately, team workload by current owner (leads, management), pipeline by section (management), next actions, open tender deadlines, recent activity. Real clock; Dhaka dates; date-range filter on Awarded/Lost and activity |
+| FR-082 | dashboard + reports | Section filter for management only, owner filter for leads and management; anything else is **403**; permitted filters only narrow scope |
+| FR-082, BR-060, D-005 | `server/services/reports.ts`; `GET /api/reports/:report` | The six approved reports: pipeline by stage and by section/owner (opportunity created date), overdue follow-ups (due date), upcoming tender submissions (submission deadline), awarded and lost (award / lost date), lost reasons (lost date). Scope first; server-side filters, allowlisted sorting, pagination (≤ 100); summaries over all matching rows; each names its date basis; undated records counted and stated |
+| BR-060 | `server/services/opportunities.ts` | The Opportunities screen keeps a separately labelled **expected award date** filter; when a range is set the response says how many otherwise-matching records have no expected award date, and "Show undated" lists them |
+| FR-083, SEC-005, NFR-011 | `server/services/exports.ts`, `csv.ts`; `/api/exports` | **Queued, audited CSV exports** of every matching row (reports and the opportunity list), validated with the source screen's own schema and filter rules, idempotent. The job re-reads the requester and runs under their **current** scope. Download re-checks the filters and that **every** exported record is still visible (else 409); requester only (else 404). UTF-8 BOM, unformatted decimals, ISO instants with +06:00, **formula injection neutralized**, row limit refused rather than truncated. Audit: `report.export_requested`, `report.exported` (with record count), `report.export_downloaded` |
+| FR-091, SEC-002 | `server/services/search.ts`; `GET /api/search` | Scoped search over accessible opportunities, permitted tender references, permitted contacts and organization basics; 2–100 characters; literal matching; five per type with true accessible totals, or one paged type; safe summaries (no email, phone or notes). Administrators: accounts and sections only |
+| FR-090, BR-070 | `server/services/notifications.ts`; `/api/notifications` | Persistent alerts: follow-up due today, overdue follow-up, tender deadline within 72 hours, ownership change. Recipients: responsible person, section lead, management — each only while in scope (`alertRecipientSql`). Deduplicated by a unique trigger key (recipient, record, type, date/deadline). Read state persists; **reading never touches the task**. Obsolete or no-longer-permitted alerts are excluded by a read-time check and retired (`resolved_at`) by the services that change them; unread counts follow at once |
+| NFR-003, FR-090 | `server/jobs/`; migration `0006` | Durable, retryable job queue: `FOR UPDATE SKIP LOCKED` claims, exponential backoff, max attempts, lease recovery, log-safe errors, final-failure handling. Hourly notification scan per Dhaka hour, daily housekeeping (expired exports, expired idempotency records, old jobs); in-process worker or `npm run jobs:run` |
+| SEC-031 | `server/auth/sessionGuard.ts` | The notification-count poll is marked as a background request and **does not extend the idle window** (found during M6: a polling tab would otherwise never idle out) |
+| §20 | API-mode UI | Dashboard is live and is the sales landing page; Reports live; the top bar has scoped search and the notification bell; Opportunities has Export CSV |
+
+**Interface.** The approved Dashboard (`DashboardPage`, widgets in
+`src/app/components/dashboard/` — same markup as `src/components/dashboard`,
+fed by the server), Reports (`ReportsPage`), the top-bar search
+(`GlobalSearch`) and bell (`NotificationsMenu`) are live. Every card, stage
+column, workload figure and section bar drills into the matching list, which
+shows the applied population as removable chips. Nothing in `src/demo`,
+`src/components` or `src/pages` was changed.
+
+**Interface deviations, for product sign-off.**
+
+| Change | Reason |
+| --- | --- |
+| The pipeline card says "excludes On Hold / Cancelled / Awarded / Lost" (prototype: "Awarded / Lost / Cancelled") | D-002: On Hold is out of the active pipeline |
+| Overdue card counts records not On Hold and shows "+N on On Hold records" | §10.1 "show On Hold separately" |
+| "Awarded value this quarter" shows the real current Dhaka quarter (prototype: fixed "Q4 2026") | FR-080 |
+| Tender card note "From now, current open bids"; the 7-day window is an instant window, listed by the tracker under a "dashboard card" chip | §10.1 exclusive seven-day window |
+| Team workload groups open tasks by **opportunity owner** (prototype: by assignee); the overdue count opens that owner's overdue tasks | §10.1 "grouped by current owner" |
+| Next Actions lists only open follow-ups (the prototype also listed separate "next action" fields) | BR-013, D-003 |
+| Stage chart subtitle states the value basis of each column; columns have accessible names with the basis | D-006 |
+| Reports: Section and Owner filters by role, sortable column headers, server pagination, a sentence naming the date basis and undated records, exact value on hover | FR-082, BR-060 |
+| Pipeline report lists the On Hold and Cancelled lanes and estimated values for every lane, Awarded included | D-001, D-006 |
+| Export CSV shows "Preparing CSV…" while the server builds the file | FR-083, NFR-011 (queued) |
+| Notification menu adds "Reading an alert does not complete its task." | BR-070 |
+| Opportunities table adds the expected award date range and "Show undated" | BR-060 |
+| Search results show "n of N" when a type has more matches | FR-091 bounded results |
+
+### 3. Implementation decisions
+
+In `docs/adr/0007-dashboards-reports-search-notifications.md`, with reasons.
+**For review with Penta:**
+
+- **Management receives every alert** in the organization, implementing
+  FR-090's "management sees all permitted alerts" literally. Noisy; a narrower
+  rule would be a requirements change.
+- **Start of the Dhaka business day = 00:00 Asia/Dhaka.** Task alerts come
+  from the first hourly scan of the day. A later start (e.g. 09:00) is a
+  one-line change.
+- Seven-day tender window, overdue and workload definitions as in §2 and the
+  ADR; tenders on Cancelled/Awarded/Lost records never count (as in M5's
+  tracker indicator); On Hold keeps its deadlines.
+- Forbidden report filters are refused (403), not ignored.
+- Exports are kept for 24 hours and capped at 50 000 rows (configurable).
+- Alert *generation* runs only in background jobs; business transactions
+  only *retire* alerts (avoids a lock cycle between a scan and a transfer).
+
+### 4. Database
+
+| Migration | Contents |
+| --- | --- |
+| `0006_reports_exports_notifications_jobs.sql` | `notifications` (unique trigger key; CHECK tying each type to its record and date; resolution recorded with resolved time), `report_exports` (CHECK: a ready export has content, row count, covered opportunity ids and expiry), `background_jobs` (unique dedupe key, bounded attempts); enums `notification_type`, `report_export_kind`, `report_export_status`, `background_job_status`; indexes on award date, closed date and activity time. Runtime role: SELECT/INSERT/UPDATE on notifications (**no DELETE**, tested); SELECT/INSERT/UPDATE/DELETE on exports and jobs (housekeeping) |
+
+Additive; rollback in the header. The seed clears the three tables and seeds
+no notifications or jobs (they are generated). Applied to the development and
+test databases; a repeat run is a no-op.
+
+### 5. Commands run and results
+
+| Command | Result |
+| --- | --- |
+| `npm run db:migrate` / `:test` | `0006` applied to both; repeat run no-op |
+| `npm run typecheck` | **Pass** (web, server, e2e) |
+| `npm run lint` | **Pass** — 0 errors, the same 5 pre-existing warnings |
+| `npm run check:env` | **Pass** — 24 variables (4 new) |
+| `npm test` | **479 passed, 0 failed**, 20 files (412 after M5 + 67 new) |
+| `npm run test:smoke` | **24 passed** in five isolated runs: 12 (smoke + M2), 2 (M3), 3 (M4), 3 (M5), 4 (M6). The first attempt failed in the M1 smoke spec: a second sign-in in one test still expected the old Opportunities landing page; corrected and rerun |
+| `npm run build` | **Pass**, demo-exclusion before and after bundling; main chunk 444 kB; Dashboard and Reports load on demand |
+| `npm run evidence` | **Pass**, five runs; 12 new screenshots `37`–`47` (dashboard at 1440/768/360, active-pipeline drill-down, pipeline and outcome reports, export done, lead dashboard, scoped search, notifications, overdue drill-down, administrator search). The earlier screenshots were recaptured and now show the top-bar search and bell. The M2 capture needed one change for the new landing page |
+| `npm run jobs:run`, `-- --status` | Ran against the development database: second run finds nothing due (deduplicated schedule); status lists succeeded scans and housekeeping |
+
+`npm run test:smoke` is now **five** isolated Playwright runs (smoke + M2,
+M3, M4, M5, M6). The earlier specs' sign-in helpers now expect the Dashboard
+landing page and then open Opportunities; nothing else in them changed.
+
+| New test file | Tests | Covers |
+| --- | --- | --- |
+| `dashboard.test.ts` | 20 | Dhaka quarter/day helpers; per-role totals, section totals add up; D-002 (GA: 9 active / 275 750 000.50 = the demo's corrected 8 / BDT 25.85 crore plus the M1 fixture; On Hold 14 500 000.00 shown separately); administrator 403 with no figures; 401; FR-082 filter rules; **policy agreement: `userSeesOpportunitySql` equals `opportunityScope` for every account**; **AT-12 for management, both leads and a salesperson: card = `pipeline=active` list (all pages, summed) = stage columns = workload rows; overdue card = overdue list; tender card = `window=7d` list; awarded card = awarded list for the quarter, actual values**; D-006 values; date-range scope; **Dhaka midnight (23:59:59 → 00:00:00 overdue 1 → 2), exclusive seven-day window (now + 7 days excluded, +1 s included, deadline instant included, +1 s after excluded), quarter switch at Dhaka not UTC midnight (Q3 56 500 000.00 → Q4 23 500 000.00)**; On Hold overdue separate; On Hold leaves the pipeline; transfer reflected next request; undated expected-award records counted and listable |
+| `reports.test.ts` | 19 | Named date bases; scope before counts and sums for four roles (sections partition the organization; no cross-section names); pipeline summary = dashboard; D-006 in the outcome report; filtering on each basis; server paging/sorting and 422s; FR-082 403s; administrator 403; **CSV: every row not one page, AT-12 population and value equal to the dashboard, headers, ISO +06:00, decimals, Bangla; report CSV = screen columns; no inaccessible data; formula injection neutralized (unit cases and a real `=cmd…` opportunity name); audit trail with record count; delivery refused after a transfer (SEC-005); export failed when the requester lost access; requester-only (404 identical to missing); filter validation and CSRF with nothing written; idempotent retry (one export, one audit); row limit refused; expiry** |
+| `notifications.test.ts` | 19 | Recipients per role within scope; **one alert per trigger across repeated and concurrent scans**; runtime role cannot delete alerts; due-today → overdue at Dhaka midnight (stale alert hidden before the scan); no alert for cancelled/submitted notices with a positive control; **read persists, first read time kept, task untouched**; mark-all per reader; 404 for others' and missing alerts, identical; administrator 403/404, no recipient endpoint; **reschedule and completion retire alerts and counts, refresh adds the new date; transfer removes the old team's alerts at once and writes the retirement, alerts the new owner and lead, not the actor; read-time check hides alerts after an out-of-band access change; tender deadline change**; **jobs: retry with backoff then success, max attempts → failed with a log-safe error and final handler, lease recovery, two workers never run a job twice, housekeeping prunes idempotency records**; **the background poll does not extend the idle window (control included)** |
+| `search.test.ts` | 9 | Accessible totals per role; bounded preview; another salesperson's and section's names and tender references never returned; contact search limited by links, safe summary; transfer removes results; directory; Bangla; literal `%`/`_`; type paging; validation and 401; administrator accounts/sections only, commercial type 403 |
+| `operations.test.ts` (updated) | — | Expects the three M6 tables |
+| `e2e/m6.spec.ts` | 4 | Management: dashboard, Active card → identical list count, section filter, reports with named bases, CSV download content. Lead: section-only dashboard and workload, scoped search (own found, other section not, 2-character minimum), overdue card → list. Salesperson: no owner filter, bell count from the job worker, opening an alert lowers the count and the task stays open, no other salesperson's record in search, no selectors on reports. Administrator: no Dashboard/Reports/bell, direct URLs refused, search finds accounts only |
+
+**Mutation checks** — each protection was removed and its tests re-run; all
+were detected: seven-day window end made inclusive (1 failed); overdue made
+`<= today` (1 — after strengthening the midnight test to absolute counts);
+On Hold counted as active (5); report scope dropped (5); export delivery
+re-check skipped (1); formula neutralization disabled (1); alert validity
+ignoring recipient access (1 — after adding the retirement assertion); a
+non-deterministic trigger key (1); no job retry (2); search contact scope
+dropped (2); background poll extending the idle window (1). All restored.
+
+### 6. Defects found and fixed
+
+1. **A polling tab would never idle out (SEC-031).** Every authenticated
+   request slid the 30-minute idle window, so the new 60-second unread-count
+   poll would have kept an unattended session alive indefinitely. The poll is
+   now marked as a background request and does not slide the window; tested
+   with a control.
+2. **Three tests did not discriminate** (found by the mutation checks): the
+   Dhaka-midnight test compared before/after only, the transfer test did not
+   assert the retirement was written, and the first dedupe mutation was too
+   weak. Strengthened as described above.
+3. **An export with an unknown sort column was accepted and failed later in
+   the job.** It is now refused at request time (422).
+4. A flaky assertion in my own administrator test matched digits in the
+   random request id; it now inspects the body without it.
+5. Presentation, from the screenshots: report header crowded with the role
+   filters; "has a award date (awarded)…" wording; notification dates said
+   "Sept" instead of the app's "Sep"; a long stage-chart subtitle at 360 px.
+6. Tooling: the tool input decoded `\u` escapes into literal invisible
+   characters (a BOM and full-width forms) in `csv.ts`; restored as escapes
+   and the source tree was checked for invisible characters.
+
+### 7. Acceptance coverage
+
+| Test | Status |
+| --- | --- |
+| AT-11 | **Covered**: Dhaka-midnight overdue (follow-ups and alerts), 72-hour tender boundary (M5), exclusive seven-day window, quarter boundary — all with the injected clock |
+| AT-12 | **Covered** for every role: dashboard active count and value = filtered list = export population; quarterly awarded totals use actual values and Dhaka quarter dates; CSV includes all pages, excludes inaccessible data, neutralizes formulas |
+| AT-14 | **Covered**: repeated jobs create one alert per trigger; read status persists; rescheduling and transfers remove obsolete alerts and counts; search never reveals unauthorized names or contacts |
+| AT-01 | **Covered**: the administrator has no commercial dashboard, report, export, search result or notification, by API and in the browser |
+| AT-02 | **Covered** across all listed channels: URL, API id, search, contacts, totals, CSV, notification, document download |
+| AT-16 | Job-retry portion covered (a failed reminder job is retried and recorded). Monitoring and restore remain M8 |
+| AT-15 | Partial: concurrent scans and concurrent job workers added |
+
+### 8. Remaining issues and limitations
+
+**Unresolved production decisions — not claimed ready:**
+
+- **Document storage and malware scanning** (unchanged from M5): only a
+  private local directory and a development TEST scanner exist; production
+  uploads with `DOCUMENT_SCANNER=none` would never become downloadable.
+- **Job execution in production**: in-process by default; a separate worker
+  or scheduler running `npm run jobs:run` is supported. Monitoring and
+  alerting on failed jobs (NFR-003) is M8.
+
+**Other limitations:**
+
+- For review: management receives every alert; the business day starts at
+  00:00 Dhaka (§3).
+- Notifications are in-app only; email/SMS are excluded from release one.
+- Export audit events (`reporting` domain) are recorded but not shown in any
+  screen yet (M7 audit views).
+- The Reports owner filter lists active owners (from the owner lookup);
+  inactive historical owners appear in workload rows and the
+  section/owner report but cannot be chosen as a filter there.
+- On the Pipeline (board) view the `pipeline=active` chip does not change the
+  lanes; the drill-down opens the Table view, where it applies.
+- Dashboard and report query times are not yet measured against the NFR-010
+  envelope (M8).
+- From earlier milestones, unchanged: PATCH routes have no idempotency key;
+  account-link token cleanup is unscheduled; the Activities & Follow-ups
+  calendar view is unavailable; five pre-existing fast-refresh lint
+  warnings; identity provider and MFA undecided.
+- Local note: the developer's own `npm run dev:server` and `npm run dev` were
+  running during this session; tsx watch reloaded the new code and its
+  in-process worker ran notification scans on the development database.
+  They were not stopped.
+
+### 9. Configuration and local startup
+
+New environment variables (in `.env.example`; `npm run check:env` passes):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `JOBS_ENABLED` | `true` | Run the job worker in the API process; `false` to run `npm run jobs:run` from a scheduler instead |
+| `JOBS_POLL_SECONDS` | `15` | Worker poll interval (requests that queue work wake it immediately) |
+| `REPORT_EXPORT_TTL_HOURS` | `24` | How long a prepared CSV can be downloaded |
+| `REPORT_EXPORT_MAX_ROWS` | `50000` | Exports reaching this are refused, never truncated |
+
+An existing `.env` needs nothing new: the defaults apply.
+
+```bash
+npm run db:up
+npm run db:migrate && npm run db:migrate:test   # 0000–0006
+npm run db:seed  && npm run db:seed:test
+npm run dev:server        # API http://localhost:4800, with the job worker
+npm run dev               # web http://localhost:5173
+npm run jobs:run          # optional: run due jobs once; -- --status for counts and failures
+```
+
+Job schedule: one notification scan per Bangladesh clock hour (the first
+after 00:00 is the start-of-day task scan), one housekeeping run per day.
+Failed attempts retry after 1, 2, 4, 8 … minutes (at most 60), up to 5
+attempts (3 for exports), then stay `failed`.
+
+To see M6: as `arif.rahman@example.com`, the Dashboard (change Section and
+Date range; click Active Opportunities), Reports → Export CSV. As
+`nadia.islam@example.com`, the section dashboard, the bell and search
+("Portal"). As `rafiq.hasan@example.com`, open an alert from the bell — the
+task stays open. As `admin@example.com`, search finds accounts and sections
+only.
+
+### 10. Next task
+
+Feature development stops at the end of Milestone 6. Next session, in order:
+
+1. **Verify Milestone 6** against this section: branch and commit, clean
+   tree, migration `0006` applied; re-run `npm run typecheck`, `npm run
+   lint`, `npm test` (expect 479 passed), `npm run test:smoke` (expect
+   24 passed in five runs) and `npm run build`. Review the interface deviations (§2) and
+   the decisions for Penta (§3).
+2. **Begin Milestone 7 — audit and mutation-control sweep** (`Plan.md` §6)
+   **only when instructed**.
+
+Separately, before documents are enabled anywhere beyond development, Penta
+must choose the production file storage and scanning service.
 
 ---
 

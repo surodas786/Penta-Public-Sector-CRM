@@ -31,7 +31,9 @@ import {
 import { recordAuditEvent } from './audit.js';
 import { lockOpportunity } from './followUps.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
+import { alertsChangedInTransaction } from './notifications.js';
 import { getOpportunityDetail } from './opportunities.js';
+import { signalJobsEnqueued } from '../jobs/queue.js';
 
 type TransferCommand = z.output<typeof transferOpportunitySchema>;
 
@@ -149,8 +151,12 @@ export async function transferOpportunity(options: {
       });
     }
 
+    // BR-070: the previous team's alerts go with their access; the new
+    // owner, lead and management are told about the change.
+    await alertsChangedInTransaction(tx, { opportunityId: current.id, resolution: 'transferred', ownership: { newOwnerId: newOwner.id, version: command.version + 1, actorId: actor.id } });
     await completeClaim(tx, current.id);
   });
 
+  signalJobsEnqueued();
   return getOpportunityDetail(db, actor, opportunityId);
 }

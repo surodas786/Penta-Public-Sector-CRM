@@ -27,6 +27,13 @@ import { createLookupsRouter } from './routes/lookups.js';
 import { createOpportunitiesRouter } from './routes/opportunities.js';
 import { createOrganizationsRouter } from './routes/organizations.js';
 import { createTeamRouter } from './routes/team.js';
+import {
+  createDashboardRouter,
+  createExportsRouter,
+  createNotificationsRouter,
+  createReportsRouter,
+  createSearchRouter,
+} from './routes/reporting.js';
 import { createOpportunityTendersRouter, createTendersRouter } from './routes/tenders.js';
 import {
   createDocumentRevisionsRouter,
@@ -202,6 +209,11 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   app.use('/api/activities', createActivitiesRouter({ db: database.db, csrfGuard }));
   app.use('/api/lookups', createLookupsRouter({ db: database.db }));
   app.use('/api/team', createTeamRouter({ db: database.db }));
+  app.use('/api/dashboard', createDashboardRouter({ db: database.db }));
+  app.use('/api/reports', createReportsRouter({ db: database.db }));
+  app.use('/api/exports', createExportsRouter({ db: database.db, csrfGuard }));
+  app.use('/api/search', createSearchRouter({ db: database.db }));
+  app.use('/api/notifications', createNotificationsRouter({ db: database.db, csrfGuard }));
   app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin }));
 
   // NOTE: no demo, seed or reset endpoint is registered in any environment.

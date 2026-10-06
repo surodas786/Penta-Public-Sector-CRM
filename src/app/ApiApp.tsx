@@ -9,7 +9,6 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'rea
 import { AuthProvider, useAuth } from './AuthContext.js';
 import { AccessDeniedPanel } from './components/Feedback.js';
 import { ApiShell } from './layout/ApiShell.js';
-import { UnavailableFeature } from './components/Feedback.js';
 
 import { LoginPage } from './pages/LoginPage.js';
 import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
@@ -29,6 +28,8 @@ const OrganizationDetailPage = lazy(() =>
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage.js').then((m) => ({ default: m.ContactDetailPage })));
 const TenderTrackerPage = lazy(() => import('./pages/TenderTrackerPage.js').then((m) => ({ default: m.TenderTrackerPage })));
 const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })));
+const DashboardPage = lazy(() => import('./pages/DashboardPage.js').then((m) => ({ default: m.DashboardPage })));
+const ReportsPage = lazy(() => import('./pages/ReportsPage.js').then((m) => ({ default: m.ReportsPage })));
 
 function Lazy({ children }: { children: ReactNode }) {
   return (
@@ -104,35 +105,14 @@ function AppRoutes() {
             />
           </Route>
 
-          {/* Approved screens whose server endpoints arrive in later
-              milestones. Kept addressable so a bookmark explains itself
-              instead of silently redirecting. */}
-          <Route
-            element={<RequireSalesAccess />}
-          >
-          <Route
-            path="dashboard"
-            element={
-              <UnavailableFeature
-                title="Dashboard"
-                reason="Dashboard figures must come from scoped server-side aggregates so that cards, charts, lists and exports always agree. Those shared queries arrive in the reporting milestone."
-              />
-            }
-          />
+          <Route element={<RequireSalesAccess />}>
+          <Route path="dashboard" element={<Lazy><DashboardPage /></Lazy>} />
           <Route path="organizations" element={<Lazy><OrganizationsPage /></Lazy>} />
           <Route path="organizations/:id" element={<Lazy><OrganizationDetailPage /></Lazy>} />
           <Route path="contacts/:id" element={<Lazy><ContactDetailPage /></Lazy>} />
           <Route path="activities" element={<Lazy><FollowUpsPage /></Lazy>} />
           <Route path="tenders" element={<Lazy><TenderTrackerPage /></Lazy>} />
-          <Route
-            path="reports"
-            element={
-              <UnavailableFeature
-                title="Reports"
-                reason="Reports and CSV export must reuse the same scoped server queries as the dashboards, which arrive in the reporting milestone."
-              />
-            }
-          />
+          <Route path="reports" element={<Lazy><ReportsPage /></Lazy>} />
           <Route path="team" element={<RequireTeamView />} />
           </Route>
         </Route>
@@ -215,5 +195,7 @@ function RequireTeamView() {
 function HomeRedirect() {
   const { user } = useAuth();
   if (!user) return <Navigate to="/sign-in" replace />;
-  return <Navigate to={user.capabilities.salesRecords ? '/opportunities' : '/administration'} replace />;
+  // The approved landing page: the dashboard for sales roles (§20),
+  // administration for the administrator.
+  return <Navigate to={user.capabilities.salesRecords ? '/dashboard' : '/administration'} replace />;
 }

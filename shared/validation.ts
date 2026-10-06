@@ -22,6 +22,7 @@ import {
   type OpportunityStage,
 } from './enums.js';
 import { isValidMoneyString } from './money.js';
+import { DASHBOARD_RANGES, EXPORT_KINDS, REPORT_KEYS, SEARCH_MIN_LENGTH, SEARCH_RESULT_TYPES } from './reporting.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -507,10 +508,26 @@ export const listOpportunitiesQuerySchema = z
     sectionId: uuidField.optional(),
     expectedAwardFrom: optionalDate(),
     expectedAwardTo: optionalDate(),
+    /**
+     * BR-060: records with no expected award date, which a date range would
+     * otherwise hide silently. Cannot be combined with the range.
+     */
+    expectedAward: z.literal('undated').optional(),
+    /** §10.1 active pipeline (status Active, stage neither Awarded nor Lost): the dashboard drill-down. */
+    pipeline: z.literal('active').optional(),
+    /** Outcome dates, for the awarded-this-quarter and outcome drill-downs. */
+    awardDateFrom: optionalDate(),
+    awardDateTo: optionalDate(),
+    closedDateFrom: optionalDate(),
+    closedDateTo: optionalDate(),
     sort: z.enum(OPPORTUNITY_SORT_KEYS).optional().default('createdAt'),
     dir: z.enum(['asc', 'desc']).optional().default('desc'),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.expectedAward && (value.expectedAwardFrom || value.expectedAwardTo)), {
+    message: 'Choose either undated records or an expected award date range.',
+    path: ['expectedAward'],
+  });
 
 /** The board takes no stage or status filter: those are its lanes. */
 export const boardQuerySchema = z
@@ -531,6 +548,11 @@ export const listFollowUpsQuerySchema = z
     view: z.enum(FOLLOW_UP_VIEWS).optional().default('open'),
     /** `me`, or a user id. Narrows within scope; never widens it. */
     assignedTo: z.union([z.literal('me'), uuidField]).optional(),
+    /** §20: the opportunity-owner filter, independent of the assignee filter. */
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+    /** §10.1 shows overdue tasks on On Hold records separately. */
+    hold: z.enum(['exclude', 'only']).optional(),
     q: z.string().trim().max(200).optional(),
   })
   .strict();
@@ -887,6 +909,11 @@ export const listTendersQuerySchema = z
     deadlineTo: calendarDateField.optional(),
     /** `active`: current notices only (the default). `all`: every cycle. */
     notice: z.enum(TENDER_NOTICE_FILTERS).optional().default('active'),
+    /**
+     * §10.1 dashboard window: current participating notices whose deadline is
+     * from now up to, not including, now plus seven days (an instant window).
+     */
+    window: z.literal('7d').optional(),
     dir: z.enum(['asc', 'desc']).optional().default('asc'),
   })
   .strict();
@@ -921,5 +948,82 @@ export const updateDocumentSchema = z
 export const listDocumentsQuerySchema = z
   .object({
     includeArchived: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Dashboards, reports, exports, search and notifications (Milestone 6)
+// ---------------------------------------------------------------------------
+
+export const dashboardQuerySchema = z
+  .object({
+    /** FR-082: management only; narrows within scope. */
+    sectionId: uuidField.optional(),
+    /** FR-082: leads and management only; narrows within scope. */
+    ownerId: uuidField.optional(),
+    range: z.enum(DASHBOARD_RANGES).optional().default('all'),
+  })
+  .strict();
+
+/** Filters every report shares. Dates are Dhaka calendar dates on the report's named basis (BR-060). */
+const reportFilterFields = {
+  from: optionalDate(),
+  to: optionalDate(),
+  sectionId: uuidField.optional(),
+  ownerId: uuidField.optional(),
+};
+
+function chronological<T extends { from?: string | undefined; to?: string | undefined }>(value: T): boolean {
+  return !(value.from && value.to && value.to < value.from);
+}
+
+export const reportFiltersSchema = z
+  .object(reportFilterFields)
+  .strict()
+  .refine(chronological, { message: 'The end date is before the start date.', path: ['to'] });
+
+export const reportQuerySchema = z
+  .object({
+    ...reportFilterFields,
+    ...listPage,
+    /** Checked against the report's own column list by the server. */
+    sort: z.string().trim().max(40).regex(/^[a-zA-Z]+$/, 'Unknown sort column.').optional(),
+    dir: z.enum(['asc', 'desc']).optional(),
+  })
+  .strict()
+  .refine(chronological, { message: 'The end date is before the start date.', path: ['to'] });
+
+export const reportKeySchema = z.enum(REPORT_KEYS);
+export const exportKindSchema = z.enum(EXPORT_KINDS);
+
+export const searchQuerySchema = z
+  .object({
+    q: z
+      .string()
+      .trim()
+      .min(SEARCH_MIN_LENGTH, `Type at least ${SEARCH_MIN_LENGTH} characters.`)
+      .max(100, 'Use at most 100 characters.'),
+    /** One result type, paged; without it, the first few of every type. */
+    type: z.enum(SEARCH_RESULT_TYPES).optional(),
+    ...listPage,
+  })
+  .strict();
+
+export const listNotificationsQuerySchema = z
+  .object({
+    ...listPage,
+    unread: z.enum(['true', 'false']).optional(),
+  })
+  .strict();
+
+/**
+ * An export carries the filters of the screen it was requested from, as that
+ * screen sends them (query-string values). The server validates them with
+ * that screen's own schema (FR-083: same access and filter rules).
+ */
+export const createExportSchema = z
+  .object({
+    kind: z.enum(EXPORT_KINDS),
+    filters: z.record(z.string(), z.string().max(200)).optional().default({}),
   })
   .strict();

@@ -21,6 +21,17 @@ import type {
   TenderIndicator,
   UserRole,
 } from './enums.js';
+import type {
+  AdminSearchResultType,
+  DashboardRange,
+  DateBasis,
+  ExportKind,
+  ExportStatus,
+  NotificationType,
+  ReportColumnKind,
+  ReportKey,
+  SearchResultType,
+} from './reporting.js';
 
 /** SEC-020 error envelope. `requestId` is unique per response. */
 export interface ApiErrorBody {
@@ -42,6 +53,7 @@ export type ApiErrorCode =
   | 'possible_duplicate'
   | 'document_unavailable'
   | 'payload_too_large'
+  | 'export_unavailable'
   | 'validation_failed'
   | 'rate_limited'
   | 'invalid_csrf'
@@ -113,6 +125,15 @@ export interface OpportunityListItemDto {
   nextAction: NextActionDto | null;
   createdAt: string;
   version: number;
+}
+
+export interface OpportunityListDto extends Paginated<OpportunityListItemDto> {
+  /**
+   * BR-060: with an expected-award date range applied, how many otherwise
+   * matching records have no expected award date and are therefore not
+   * listed. Null when no range is applied.
+   */
+  undatedExpectedAward: number | null;
 }
 
 /** BR-013: derived from the earliest due open follow-up, never stored separately. */
@@ -236,6 +257,14 @@ export const IDEMPOTENCY_HEADER = 'idempotency-key';
 
 /** Header carrying the double-submit CSRF token. */
 export const CSRF_HEADER = 'x-csrf-token';
+
+/**
+ * Marks a request the browser makes on its own (the notification count poll).
+ * Such a request is authenticated as usual but is not user activity, so it
+ * never extends the idle window (SEC-031). It can only shorten a session's
+ * life, never lengthen it, so a forged value gains nothing.
+ */
+export const BACKGROUND_REQUEST_HEADER = 'x-background-request';
 
 // ---------------------------------------------------------------------------
 // Milestone 3: administration, invitations and the management team view
@@ -539,3 +568,226 @@ export interface DocumentPolicyDto {
 
 /** Header carrying the original filename of a raw upload, URI-encoded. */
 export const FILE_NAME_HEADER = 'x-file-name';
+
+// ---------------------------------------------------------------------------
+// Milestone 6: dashboards, reports, exports, search and notifications
+// ---------------------------------------------------------------------------
+
+/** Dashboard filters as the server applied them (FR-082: narrowing only). */
+export interface DashboardFiltersDto {
+  sectionId: string | null;
+  ownerId: string | null;
+  range: DashboardRange;
+}
+
+/** One column of the approved stage chart (FR-081). */
+export interface DashboardStageDto {
+  /** A pipeline stage, or `awarded` / `lost`. */
+  stage: OpportunityStage;
+  count: number;
+  /** Decimal string. Pipeline stages and Lost: estimated value; Awarded: actual awarded value (D-006). */
+  value: string;
+  valueBasis: 'estimated' | 'awarded';
+}
+
+export interface DashboardWorkloadRowDto {
+  userId: string;
+  fullName: string;
+  role: UserRole;
+  sectionId: string | null;
+  sectionName: string | null;
+  active: boolean;
+  /** Active pipeline records owned (§10.1 "Team workload"). */
+  activeOpportunities: number;
+  /** Decimal string; estimated value of the same records. */
+  estimatedPipeline: string;
+  /** Open follow-ups on records they own. */
+  openTasks: number;
+  overdueTasks: number;
+  /** Their records' current notices due in the seven-day window. */
+  tendersDueSoon: number;
+}
+
+export interface DashboardNextActionDto {
+  followUpId: string;
+  title: string;
+  dueDate: string;
+  dueState: 'overdue' | 'today' | 'upcoming';
+  opportunityId: string;
+  opportunityName: string;
+  assigneeName: string;
+  onHold: boolean;
+}
+
+export interface DashboardTenderDto {
+  id: string;
+  reference: string;
+  title: string;
+  opportunityId: string;
+  opportunityName: string;
+  submissionDeadline: string;
+  bidStatus: BidStatus;
+  indicator: TenderIndicator;
+}
+
+export interface DashboardActivityDto {
+  id: string;
+  opportunityId: string;
+  opportunityName: string;
+  type: ActivityType;
+  subject: string;
+  occurredAt: string;
+  authorName: string;
+}
+
+export interface DashboardSectionDto {
+  id: string;
+  name: string;
+  activeOpportunities: number;
+  /** Decimal string; estimated active pipeline. */
+  estimatedPipeline: string;
+}
+
+/**
+ * Scoped dashboard (FR-080, FR-081, §10.1). Every figure is computed by the
+ * server over the actor's scope, with the same definitions the reports, lists
+ * and exports use.
+ */
+export interface DashboardDto {
+  /** Dhaka calendar date and instant the figures were computed against. */
+  today: string;
+  generatedAt: string;
+  scopeLabel: string;
+  filters: DashboardFiltersDto;
+  quarter: { label: string; start: string; end: string };
+  /** Dhaka dates the range filter resolved to; null for All time. */
+  rangeBounds: { from: string; to: string } | null;
+  kpis: {
+    activeOpportunities: number;
+    /** Decimal string. Not a revenue forecast. */
+    estimatedActivePipeline: string;
+    /** Open follow-ups due before today, on records that are not On Hold. */
+    overdueFollowUps: number;
+    /** Shown separately (§10.1). */
+    overdueFollowUpsOnHold: number;
+    /** Current participating notices due from now up to, not including, now + 7 days. */
+    tendersDueNext7Days: number;
+    /** Decimal string; sum of actual awarded value, award date in the current Dhaka quarter. */
+    awardedValueThisQuarter: string;
+    awardedCountThisQuarter: number;
+  };
+  /** Pipeline stages (active records), then Awarded and Lost for the date range. */
+  stages: DashboardStageDto[];
+  onHold: { count: number; estimatedValue: string };
+  cancelled: { count: number; estimatedValue: string };
+  /** Leads and management only. */
+  workload: DashboardWorkloadRowDto[] | null;
+  /** Management only. */
+  sections: DashboardSectionDto[] | null;
+  nextActions: { target: { id: string; fullName: string }; items: DashboardNextActionDto[]; total: number };
+  upcomingTenders: DashboardTenderDto[];
+  recentActivity: DashboardActivityDto[];
+  /** Owner choices for the filter: leads see their section, management everyone; salespeople none. */
+  ownerOptions: { id: string; fullName: string; sectionId: string; active: boolean }[];
+  sectionOptions: { id: string; name: string }[];
+}
+
+export interface ReportColumnDto {
+  key: string;
+  label: string;
+  kind: ReportColumnKind;
+  sortable: boolean;
+}
+
+export type ReportCell = string | number | null;
+
+export interface ReportRowDto {
+  cells: Record<string, ReportCell>;
+  /** Present when the row belongs to one opportunity the reader can open. */
+  opportunityId: string | null;
+}
+
+export interface ReportSummaryItemDto {
+  label: string;
+  /** Preformatted for counts and percentages; decimal string for money. */
+  value: string;
+  kind: ReportColumnKind;
+}
+
+/** A scoped, filtered, sorted page of one report (FR-082, BR-060). */
+export interface ReportDto extends Paginated<ReportRowDto> {
+  report: ReportKey;
+  label: string;
+  dateBasis: { key: DateBasis; label: string };
+  filters: { from: string | null; to: string | null; sectionId: string | null; ownerId: string | null };
+  sort: string;
+  dir: 'asc' | 'desc';
+  columns: ReportColumnDto[];
+  /** Computed over every matching record, not just this page. */
+  summary: ReportSummaryItemDto[];
+  /**
+   * BR-060: records that match every other filter but have no value for the
+   * date basis, so a date filter would otherwise hide them silently. Null when
+   * the basis can never be empty.
+   */
+  undated: { count: number; note: string } | null;
+  today: string;
+  scopeLabel: string;
+}
+
+export interface ReportExportDto {
+  id: string;
+  kind: ExportKind;
+  label: string;
+  status: ExportStatus;
+  rowCount: number | null;
+  fileName: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  expiresAt: string | null;
+  /** Why it failed, in words safe to show. */
+  failureReason: string | null;
+}
+
+export interface SearchResultDto {
+  type: SearchResultType | AdminSearchResultType;
+  id: string;
+  title: string;
+  /** A safe summary: nothing the reader could not open themselves. */
+  summary: string;
+  /** In-app path to the record. */
+  path: string;
+  stage?: OpportunityStage;
+  status?: OpportunityStatus;
+}
+
+export interface SearchGroupDto {
+  type: SearchResultType | AdminSearchResultType;
+  label: string;
+  /** Matching accessible records of this type (may exceed `items.length`). */
+  total: number;
+  items: SearchResultDto[];
+}
+
+export interface SearchResponseDto {
+  q: string;
+  groups: SearchGroupDto[];
+  page: number;
+  pageSize: number;
+}
+
+export interface NotificationDto {
+  id: string;
+  type: NotificationType;
+  title: string;
+  detail: string;
+  tone: 'red' | 'amber' | 'teal';
+  /** Opens the record; the server rechecks access when it is followed. */
+  path: string;
+  createdAt: string;
+  readAt: string | null;
+}
+
+export interface NotificationListDto extends Paginated<NotificationDto> {
+  unreadCount: number;
+}

@@ -23,7 +23,7 @@ async function signIn(page: import('@playwright/test').Page, email: string) {
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
   // Wait for the session before navigating, or the sign-in request is cut off.
-  await page.waitForURL(/\/(opportunities|administration)$/);
+  await page.waitForURL(/\/(dashboard|administration)$/);
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -148,6 +148,7 @@ test('capture Milestone 2 screens', async ({ page }) => {
 
   // Management: both sections, with the held and cancelled lanes.
   await signIn(page, 'arif.rahman@example.com');
+  await page.goto('/opportunities');
   await expect(lane('On Hold').getByRole('listitem').first()).toBeVisible();
   await page.screenshot({ path: path.join(OUTPUT, '12-pipeline-management-desktop-1440.png'), fullPage: true });
 

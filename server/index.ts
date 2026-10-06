@@ -11,6 +11,7 @@ import { createDatabase } from './db/client.js';
 import { loadServerConfig } from './env.js';
 import { describeForLog } from './http/errors.js';
 import { cleanupAbandonedUploads, scanPendingRevisions } from './services/documents.js';
+import { startJobWorker } from './jobs/worker.js';
 
 /** Abandoned-upload cleanup and pending-scan retry (SEC-010). */
 const DOCUMENT_MAINTENANCE_INTERVAL_MS = 15 * 60_000;
@@ -48,6 +49,14 @@ async function main(): Promise<void> {
   };
   setInterval(maintainDocuments, DOCUMENT_MAINTENANCE_INTERVAL_MS).unref();
   maintainDocuments();
+
+  // Notifications, queued exports and housekeeping (FR-090, NFR-003). A
+  // deployment may run them elsewhere instead (`npm run jobs:run`).
+  if (config.jobs.enabled) {
+    startJobWorker(database.db, config.jobs);
+  } else {
+    console.warn('JOBS_ENABLED=false: notifications and CSV exports wait for `npm run jobs:run`.');
+  }
 
   const server = app.listen(config.port, config.host, () => {
     console.log(

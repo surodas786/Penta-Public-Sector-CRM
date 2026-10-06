@@ -6,7 +6,8 @@
  * Deliberately no commercial data and no commercial placeholder: an
  * administrator manages accounts, not sales records (FR-001, plan 3.1).
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { KeyRoundIcon, PencilIcon, PlusIcon, SearchIcon, ShieldIcon, UserPlusIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -56,6 +57,12 @@ const AUDIT_LABELS: Record<string, string> = {
 export function AdministrationPage() {
   const { user: me } = useAuth();
   const [q, setQ] = useState('');
+  // An administrative search result (FR-091) opens this page with ?q=.
+  const [searchParams] = useSearchParams();
+  const searched = searchParams.get('q');
+  useEffect(() => {
+    if (searched !== null) setQ(searched);
+  }, [searched]);
   const [page, setPage] = useState(1);
   const [auditPage, setAuditPage] = useState(1);
   const [userDialog, setUserDialog] = useState<{ open: boolean; user: AdminUserDto | null }>({ open: false, user: null });

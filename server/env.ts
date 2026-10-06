@@ -20,6 +20,22 @@ export interface ServerConfig {
   /** HTTPS-only cookies. Forced on in production. */
   secureCookies: boolean;
   documents: DocumentConfig;
+  jobs: JobsConfig;
+}
+
+/**
+ * Background work (FR-090, NFR-003): notification scans, queued CSV exports
+ * and housekeeping, all through the durable `background_jobs` queue.
+ */
+export interface JobsConfig {
+  /** Run the worker inside the API process. Off for the integration suite, which drives jobs itself. */
+  enabled: boolean;
+  /** How often the worker looks for due work. */
+  pollSeconds: number;
+  /** A ready export can be downloaded for this long, then it is removed. */
+  exportTtlHours: number;
+  /** An export reaching this many rows is refused rather than truncated (FR-083: all matching rows). */
+  exportMaxRows: number;
 }
 
 /**
@@ -57,6 +73,14 @@ function positiveInt(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive whole number, received "${raw}".`);
   }
   return parsed;
+}
+
+function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`${name} must be true or false, received "${raw}".`);
 }
 
 function readScanner(isProduction: boolean): DocumentScannerKind {
@@ -133,6 +157,12 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
       scanner: readScanner(isProduction),
       maxUploadBytes: positiveInt('DOCUMENT_MAX_UPLOAD_MB', 25) * 1024 * 1024,
       uploadTtlMinutes: positiveInt('DOCUMENT_UPLOAD_TTL_MINUTES', 60),
+    },
+    jobs: {
+      enabled: readBoolean('JOBS_ENABLED', true),
+      pollSeconds: positiveInt('JOBS_POLL_SECONDS', 15),
+      exportTtlHours: positiveInt('REPORT_EXPORT_TTL_HOURS', 24),
+      exportMaxRows: positiveInt('REPORT_EXPORT_MAX_ROWS', 50_000),
     },
     ...overrides,
   };

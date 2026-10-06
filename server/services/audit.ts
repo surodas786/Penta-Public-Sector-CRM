@@ -15,8 +15,11 @@ import { now } from '../clock.js';
  * administrative  accounts and sections; administrators only
  * directory       shared organization and contact identity changes, which
  *                 belong to no single opportunity
+ * reporting       CSV exports: who exported which report, with which filters
+ *                 and how many records (FR-083). Never shown in an
+ *                 opportunity's history.
  */
-export type AuditDomain = 'commercial' | 'administrative' | 'directory';
+export type AuditDomain = 'commercial' | 'administrative' | 'directory' | 'reporting';
 
 export interface AuditWrite {
   /** Null only for system work with no acting person, e.g. a scan verdict. */

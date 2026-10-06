@@ -31,13 +31,20 @@ import type {
   FollowUpListDto,
   HistoryEntryDto,
   OpportunityDetailDto,
-  OpportunityListItemDto,
   OrganizationSummaryDto,
   OwnerOptionDto,
   Paginated,
   TeamDto,
+  DashboardDto,
+  NotificationDto,
+  NotificationListDto,
+  OpportunityListDto,
+  ReportDto,
+  ReportExportDto,
+  SearchResponseDto,
 } from '../../shared/api.js';
-import { FILE_NAME_HEADER } from '../../shared/api.js';
+import type { ExportKind, ReportKey } from '../../shared/reporting.js';
+import { BACKGROUND_REQUEST_HEADER, FILE_NAME_HEADER } from '../../shared/api.js';
 import { apiRequest, setCsrfToken, toQuery } from './client.js';
 
 // --- Authentication ---------------------------------------------------------
@@ -89,6 +96,14 @@ export interface OpportunityListParams {
   organizationId?: string;
   ownerId?: string;
   sectionId?: string;
+  pipeline?: string;
+  expectedAward?: string;
+  expectedAwardFrom?: string;
+  expectedAwardTo?: string;
+  awardDateFrom?: string;
+  awardDateTo?: string;
+  closedDateFrom?: string;
+  closedDateTo?: string;
   sort?: string;
   dir?: string;
 }
@@ -96,7 +111,7 @@ export interface OpportunityListParams {
 export function fetchOpportunities(
   params: OpportunityListParams,
   signal?: AbortSignal,
-): Promise<Paginated<OpportunityListItemDto>> {
+): Promise<OpportunityListDto> {
   return apiRequest(`/api/opportunities${toQuery(params)}`, { signal });
 }
 
@@ -179,6 +194,9 @@ export interface FollowUpListParams {
   [key: string]: string | number | undefined;
   view?: string;
   assignedTo?: string;
+  ownerId?: string;
+  sectionId?: string;
+  hold?: string;
   q?: string;
   page?: number;
   pageSize?: number;
@@ -430,6 +448,7 @@ export interface TenderListParams {
   deadlineFrom?: string;
   deadlineTo?: string;
   notice?: 'active' | 'all';
+  window?: '7d';
   dir?: 'asc' | 'desc';
   page?: number;
   pageSize?: number;
@@ -512,4 +531,63 @@ export function archiveDocument(id: string, body: { version: number; reason: str
 /** An authorized, same-origin streaming URL. It works only while the session can see the record. */
 export function documentDownloadUrl(revisionId: string, inline = false): string {
   return `/api/document-revisions/${revisionId}/download${inline ? '?disposition=inline' : ''}`;
+}
+
+// --- Dashboards, reports, exports, search, notifications (M6) ---------------
+
+export function fetchDashboard(
+  params: { sectionId?: string; ownerId?: string; range?: string },
+  signal?: AbortSignal,
+): Promise<DashboardDto> {
+  return apiRequest(`/api/dashboard${toQuery(params)}`, { signal });
+}
+
+export function fetchReport(
+  key: ReportKey,
+  params: Record<string, string | number | undefined>,
+  signal?: AbortSignal,
+): Promise<ReportDto> {
+  return apiRequest(`/api/reports/${key}${toQuery(params)}`, { signal });
+}
+
+/** Queues a CSV export of every matching record; the key makes a retry safe (BR-091). */
+export function requestExport(kind: ExportKind, filters: Record<string, string>, idempotencyKey: string): Promise<ReportExportDto> {
+  return apiRequest('/api/exports', { method: 'POST', body: { kind, filters }, idempotencyKey });
+}
+
+export function fetchExport(id: string, signal?: AbortSignal): Promise<ReportExportDto> {
+  return apiRequest(`/api/exports/${id}`, { signal });
+}
+
+/** Same-origin download; the server re-checks access when it is opened. */
+export function exportDownloadUrl(id: string): string {
+  return `/api/exports/${id}/download`;
+}
+
+export function searchRecords(
+  params: { q: string; type?: string; page?: number; pageSize?: number },
+  signal?: AbortSignal,
+): Promise<SearchResponseDto> {
+  return apiRequest(`/api/search${toQuery(params)}`, { signal });
+}
+
+export function fetchNotifications(
+  params: { page?: number; pageSize?: number; unread?: 'true' | 'false' },
+  signal?: AbortSignal,
+): Promise<NotificationListDto> {
+  return apiRequest(`/api/notifications${toQuery(params)}`, { signal });
+}
+
+/** Polled while a page is open; marked as background so it never extends the idle window (SEC-031). */
+export function fetchUnreadCount(signal?: AbortSignal): Promise<{ unreadCount: number }> {
+  return apiRequest('/api/notifications/unread-count', { signal, headers: { [BACKGROUND_REQUEST_HEADER]: '1' } });
+}
+
+/** Records that the alert was read. It never completes or changes the task. */
+export function markNotificationRead(id: string): Promise<{ notification: NotificationDto; unreadCount: number }> {
+  return apiRequest(`/api/notifications/${id}/read`, { method: 'POST', body: {} });
+}
+
+export function markAllNotificationsRead(): Promise<{ unreadCount: number }> {
+  return apiRequest('/api/notifications/read-all', { method: 'POST', body: {} });
 }

@@ -24,6 +24,7 @@ import { ErrorPanel, LoadingRows } from '../components/Feedback.js';
 import { MarkSubmittedDialog, TenderFormDialog } from '../components/TenderDialogs.js';
 import { dhakaToday, formatInstantCompact } from '../ui/dates.js';
 import { BidStatusBadge, NoticeStateBadge, TenderIndicatorBadge, TenderLegend } from '../ui/TenderBadges.js';
+import { FilterChips } from '../components/FilterChips.js';
 import { useApiResource } from '../useApiResource.js';
 
 const PAGE_SIZE = 50;
@@ -79,6 +80,8 @@ export function TenderTrackerPage() {
   const section = user?.role === 'management' ? read('section') : '';
   const status = read('status');
   const deadline = read('deadline');
+  // The dashboard card's window: from now up to, not including, now + 7 days.
+  const window7d = read('window') === '7d' ? '7d' : '';
   const notice = read('notice', 'active') as 'active' | 'all';
   const dir = read('dir', 'asc') as 'asc' | 'desc';
   const page = Number(read('page', '1')) || 1;
@@ -103,8 +106,9 @@ export function TenderTrackerPage() {
       page,
       pageSize: PAGE_SIZE,
       ...deadlineRange(deadline, today),
+      ...(window7d ? { window: '7d' as const } : {}),
     }),
-    [owner, section, status, notice, dir, page, deadline, today],
+    [owner, section, status, notice, dir, page, deadline, today, window7d],
   );
   const tenders = useApiResource(useCallback((signal: AbortSignal) => fetchTenders(query, signal), [query]), [query]);
 
@@ -198,6 +202,19 @@ export function TenderTrackerPage() {
             <option value="all">Include superseded and cancelled</option>
           </FilterSelect>
         </div>
+        <FilterChips
+          chips={
+            window7d
+              ? [
+                  {
+                    key: 'window',
+                    label: 'Open bids due from now to 7 days ahead (dashboard card)',
+                    onRemove: () => update({ window: '' }),
+                  },
+                ]
+              : []
+          }
+        />
         <TenderLegend />
       </div>
 

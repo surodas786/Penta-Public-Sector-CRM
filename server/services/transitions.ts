@@ -41,6 +41,8 @@ import {
   lockOpportunity,
   type LockedOpportunity,
 } from './followUps.js';
+import { alertsChangedInTransaction } from './notifications.js';
+import { signalJobsEnqueued } from '../jobs/queue.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
 import { getOpportunityDetail } from './opportunities.js';
 
@@ -197,9 +199,11 @@ export async function changeStage(options: {
       });
     }
 
+    await alertsChangedInTransaction(tx, { opportunityId: current.id, resolution: 'opportunity_changed' });
     await completeClaim(tx, current.id);
   });
 
+  signalJobsEnqueued();
   return getOpportunityDetail(db, actor, opportunityId);
 }
 
@@ -308,9 +312,11 @@ export async function changeStatus(options: {
       }
     }
 
+    await alertsChangedInTransaction(tx, { opportunityId: current.id, resolution: 'opportunity_changed' });
     await completeClaim(tx, current.id);
   });
 
+  signalJobsEnqueued();
   return getOpportunityDetail(db, actor, opportunityId);
 }
 
@@ -377,8 +383,10 @@ export async function reopenOpportunity(options: {
       context: 'transition',
     });
 
+    await alertsChangedInTransaction(tx, { opportunityId: current.id, resolution: 'opportunity_changed' });
     await completeClaim(tx, current.id);
   });
 
+  signalJobsEnqueued();
   return getOpportunityDetail(db, actor, opportunityId);
 }

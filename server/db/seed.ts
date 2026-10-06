@@ -124,6 +124,7 @@ export async function seedDatabase(
       // unexpected foreign key surfaces instead of being silently cleared.
       await tx.execute(sql`
         TRUNCATE TABLE
+          notifications, report_exports, background_jobs,
           document_revisions, document_uploads, documents, tenders,
           activities, opportunity_contacts, contacts, account_tokens, audit_events,
           idempotency_records, follow_ups, opportunities,
