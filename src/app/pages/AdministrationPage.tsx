@@ -41,6 +41,7 @@ const AUDIT_LABELS: Record<string, string> = {
   'account.created': 'Account created',
   'account.updated': 'Account updated',
   'account.role_changed': 'Role changed',
+  'account.manager_changed': 'Reporting line changed',
   'account.deactivated': 'Account deactivated',
   'account.reactivated': 'Account reactivated',
   'account.invitation_issued': 'Invitation link issued',

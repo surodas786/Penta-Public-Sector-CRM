@@ -118,6 +118,7 @@ export const OPPORTUNITY_FIELD_LABELS: Record<string, string> = {
   byteSize: 'Size (bytes)',
   scanState: 'Scan result',
   scanner: 'Scanner',
+  archived: 'Archived',
 };
 
 /**

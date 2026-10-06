@@ -31,7 +31,7 @@ import { requireIdempotencyKey } from '../http/idempotencyKey.js';
 import { parseOrThrow, singleValueQuery } from '../http/validate.js';
 import type { Actor } from '../policy/actor.js';
 import { canCreateOpportunity } from '../policy/scope.js';
-import { createActivity, listOpportunityActivities } from '../services/activities.js';
+import { createActivity, getActivity, listOpportunityActivities } from '../services/activities.js';
 import { linkContact, listOpportunityContacts } from '../services/contacts.js';
 import { createFollowUp, getScopedFollowUp, listAssigneeOptions } from '../services/followUps.js';
 import { runIdempotent, type CompleteClaimInTransaction } from '../services/idempotency.js';
@@ -366,12 +366,9 @@ export function createOpportunitiesRouter(options: {
         payload: { id, body: req.body },
         execute: (completeClaim) =>
           createActivity({ db, actor, opportunityId: id, command, requestId: req.requestId, completeClaim }),
-        replay: async (activityId) => {
-          const page = await listOpportunityActivities(db, actor, id, 1, 100);
-          const activity = page.items.find((row) => row.id === activityId);
-          if (!activity) throw notFound('replayed activity no longer visible');
-          return activity;
-        },
+        // A single scoped read: a paged list could miss a back-dated activity
+        // on a busy record and answer a successful retry with 404.
+        replay: (activityId) => getActivity(db, actor, activityId),
       });
       res.status(replayed ? 200 : 201).json(result);
     }),

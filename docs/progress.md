@@ -1,13 +1,203 @@
 # Implementation progress
 
-**Current state (06 October 2026):** Milestone 6 complete on branch
-`m6-dashboards-reports-notifications`, stacked on `m5-tenders-documents`
-and `m4-organizations-contacts-activities` (committed locally, not pushed)
-and `m3-transfers-administration` (PR #2, CI green, not yet reviewed).
-Nothing is merged or deployed. **Production document storage and malware
-scanning are unresolved** (Milestone 5, §8). Milestone 7 has not been
-started. Sections, newest first: Milestone 6 · Milestone 5 · Milestone 4 ·
-Milestone 3 · Milestone 2 · Milestone 1 handover review · Milestone 1.
+**Current state (06 October 2026):** Milestone 7 complete on branch
+`m7-audit-mutation-controls`, stacked on `m6-dashboards-reports-notifications`,
+`m5-tenders-documents` and `m4-organizations-contacts-activities` (committed
+locally, not pushed) and `m3-transfers-administration` (PR #2, CI green, not
+yet reviewed). Nothing is merged or deployed. **Production document storage
+and malware scanning are unresolved** (Milestone 5, §8). Milestone 8 has not
+been started. Sections, newest first: Milestone 7 · Milestone 6 · Milestone 5 ·
+Milestone 4 · Milestone 3 · Milestone 2 · Milestone 1 handover review ·
+Milestone 1.
+
+---
+
+## Milestone 7 — audit and mutation-control sweep
+
+**Branch:** `m7-audit-mutation-controls`, created from `m6-dashboards-reports-notifications` at `029c560`
+**Commit:** the Milestone 7 commit that contains this section
+**Date:** 06 October 2026
+**Status:** Complete for development and ready for review. Not merged, not
+pushed, not deployed. **Production document storage and malware scanning
+remain unresolved** (Milestone 5, §8; ADR 0006). Milestone 8 not started.
+
+### 1. Milestone 6 check before starting
+
+| Handover claim | Finding |
+| --- | --- |
+| Branch `m6-dashboards-reports-notifications` at `029c560` | **Confirmed.** The M7 branch already existed at that commit (created in an earlier session) with **one uncommitted change** in `server/services/admin.ts`. It was stashed, M6 was verified without it, then it was restored, reviewed and kept (§3, fixes 4 and 5) |
+| Migration `0006` applied | **Confirmed**; `db:migrate` / `:test` no-ops |
+| `npm run typecheck`, `npm run lint` | **Pass**; lint 0 errors, the same 5 pre-existing warnings |
+| `npm test` — 479 passed | **Rerun: 479 passed, 0 failed**, 20 files |
+| `npm run test:smoke` — 24 passed in five runs | **Rerun: 24 passed** (12 + 2 + 3 + 3 + 4) |
+| `npm run build` with demo exclusion | **Rerun: pass** |
+
+No blocker for Milestone 7.
+
+### 2. What was audited
+
+Every implemented mutation endpoint was read against FR-062, SEC-012,
+BR-090 and BR-091, then exercised through the real app in
+`server/tests/m7MutationControls.test.ts`:
+
+| Area | Mutations |
+| --- | --- |
+| Opportunities | create; basic edit; stage (forward, skipped/backward with explanation, Awarded, Lost); status (On Hold, Cancelled, return to Active); management reopening; transfer |
+| Follow-ups | create; complete (with replacement); reschedule; cancel (with replacement); closure on Lost/Cancelled; reassignment on transfer |
+| Directory | organization create / edit / archive; contact create-and-link / identity edit / archive |
+| Relationship links | link; notes; remove |
+| Activities | log (with next follow-up); amend |
+| Tenders | create (superseding); edit; submit (with and without the stage change); designate current; cancel notice |
+| Documents | finalize (new document, revision); category; archive; system scan verdict |
+| Administration | account create (with invitation) / edit / role change / deactivate / reactivate / sign-in link; section create / rename / replace lead / deactivate |
+| Reporting | CSV export request (job and download events covered in `reports.test.ts`) |
+
+### 3. Findings and fixes
+
+| # | Finding | Severity | Fix |
+| --- | --- | --- | --- |
+| 1 | **The basic edit answered 409 to someone who had just lost access.** `patchOpportunity` read the record outside its transaction and relied on the version predicate. A previous owner's edit queued behind a transfer got `409 version_conflict` — revealing that the record exists and changed — instead of the standard 404 (SEC-003, SEC-005). The audit's before-values also came from that unlocked read | Access / disclosure | The record is read and locked through scope (`FOR UPDATE`) inside the transaction; version checked after the lock and in the UPDATE predicate. Detected by the race test (old code: 409) |
+| 2 | **Activity amendment did not lock the opportunity.** It locked only the activity, so a transfer could commit between the scope check and the update and the previous owner's edit landed after their access ended (SEC-005, lock order of ADR 0003) | Access | Locks the parent opportunity through scope first, like every other writer. Detected by the race test (old code does not queue behind the transfer) |
+| 3 | **A retried activity creation could answer 404.** The replay searched only the first 100 activities of the record; a back-dated activity on a busy record was not found, so a successful creation's retry reported "not found" (BR-091) | Retry correctness | Replay reads the one activity through scope (`getActivity`). Regression test inserts 100 later activities; old code fails it |
+| 4 | **Re-pointed reporting lines were not audited.** Installing a section lead (create, role/section change, reactivation, replacement) changed every salesperson's `manager_id` with no event of its own (FR-062 account changes) | Audit gap | Each re-pointed person gets `account.manager_changed` with before/after manager, actor, request id and the reason, in the same transaction. *(Found as uncommitted work in the tree; reviewed, completed and tested here.)* The demoted lead's `account.role_changed` now also records their previous manager |
+| 5 | **Some account and section changes skipped the administrator lock.** Account creation, reactivation, sign-in links and all section changes did not lock the active administrator rows first, so an administrator deactivated while such a request waited could still complete it, and two administrative transactions could lock users and sections in different orders (ADR 0004) | Authorization / deadlock | Every account and section change starts with `beginAdministrativeChange` (lock administrators in id order, then require the actor still to be one; 403 otherwise). *(Also found as uncommitted work; reviewed and tested.)* Three race tests; old code fails all three |
+| 6 | **History pages had no defined order.** Events of one transaction share a timestamp (all of them under the test clock); ordering by time alone left page boundaries undefined, so an entry could appear on two pages or none | History correctness | Migration `0007`: `audit_events.sequence` (identity). Commercial and administrative history order by `(occurred_at, sequence)` |
+| 7 | **The Change History tab showed only the first 50 entries**, and the activity log likewise, with no way to page | Bounded views | Both tabs page at 25 with the existing `Pagination` control; the API was already paginated |
+| 8 | `document.archived` recorded no before/after state, only the reason | Audit detail | Records `archived: false → true` (labelled "Archived" in history) |
+
+**Checked and found correct** (each with tests in the new file): every other
+mutation writes exactly the events listed in the matrix, by the acting
+person, under the request's own server-generated id, with the opportunity set
+for commercial events and unset otherwise; reasons are stored where the
+requirements ask for one (transfer, reschedule, cancel, status changes,
+skipped/backward stages, reopening, archives, lead replacement, notice
+cancellation); refused and invalid mutations (403/404/409/422) write no audit;
+no password, token or file content appears in any audit payload.
+
+**Files changed.** Services: `opportunities.ts` (basic edit), `activities.ts`
+(lock order, `getActivity`), `admin.ts` (administrator lock, reporting-line
+audit), `documents.ts` and `audit.ts` (archive values, label). Route:
+`routes/opportunities.ts` (activity replay). Schema and migration `0007`.
+UI: `OpportunityDetailPage.tsx` (paged Change History and activity log),
+`AdministrationPage.tsx` (audit label). Tests: `server/tests/m7MutationControls.test.ts`,
+`e2e/m7.spec.ts`. Docs: ADR 0008, this report, README and CLAUDE.md (six
+smoke runs, lock order). `package.json`: the M7 browser run.
+
+### 4. Database
+
+| Migration | Contents |
+| --- | --- |
+| `0007_audit_event_sequence.sql` | `audit_events.sequence bigint GENERATED ALWAYS AS IDENTITY`. Existing rows numbered in physical order. Runtime role unchanged: SELECT and INSERT only; the identity cannot be set on insert or changed |
+
+Additive; rollback in the header. Applied to the development and test
+databases; a repeat run is a no-op.
+
+### 5. Commands run and results
+
+| Command | Result |
+| --- | --- |
+| `npm run db:migrate` / `:test` | `0007` applied to both; repeat run no-op |
+| `npm run typecheck` | **Pass** (web, server, e2e) |
+| `npm run lint` | **Pass** — 0 errors, the same 5 pre-existing warnings |
+| `npm test` | **632 passed, 0 failed**, 21 files (479 after M6 + 153 new) |
+| `npm run test:smoke` | **25 passed** in six isolated runs: 12 (smoke + M2), 2 (M3), 3 (M4), 3 (M5), 4 (M6), 1 (M7). The first M7 attempt failed on two locators of my own (board view instead of table; a revision text shown twice on page 2); corrected and rerun |
+| `npm run build` | **Pass**, demo-exclusion before and after bundling; server compiled |
+
+`npm run test:smoke` is now **six** isolated Playwright runs; `e2e/m7.spec.ts`
+makes 27 audited edits through the API and pages the Change History tab
+(1–25 of 27, then 26–27 with the oldest edit).
+
+**`server/tests/m7MutationControls.test.ts` — 153 tests**
+
+| Section | Tests | What it proves |
+| --- | --- | --- |
+| FR-062 audit matrix | 45 | One test per mutation (42) checks the exact event list, actor, the response's `X-Request-Id`, domain, opportunity link, timestamp, changed keys and required reason; system events (scan verdicts) separately. A **completeness check scans the services for audit action names** and fails if a new one is not in the matrix or explicitly listed as tested elsewhere. Refused/invalid mutations write nothing |
+| BR-091 retries | 19 + 3 + 14 | For all 19 keyed operations: a retry returns the same entity and changes **no table at all** (whole-database digest); the same key with another payload is `409 idempotency_key_reuse` and changes nothing; after a transfer removes access the replay is the standard 404 (14 commercial operations). Keys are scoped by actor and by operation. For the 14 operations that lock an opportunity, a **duplicate sent while the first is held mid-transaction** is `409 idempotency_in_progress`, the first completes, and a later retry replays it with nothing new. Busy-record activity replay |
+| BR-090 stale versions | 27 + 1 | For every versioned mutation (27): a commit after the client's read makes the client's write a `409 version_conflict` with **the whole database unchanged**; the same write at the current version then succeeds (control). Two edits from one version, genuinely concurrent: one 200, one 409, one audit event, winner's value kept |
+| Atomicity | 14 | A trigger fails the **last** audit insert of each multi-write operation (transfer after the owner change, Lost while cancelling tasks, completion at its replacement, tender at creation after superseding, submission at its stage change, finalization after the revision row, lead replacement after both role changes, …). Response 500 with no internal text; **every table identical**, the idempotency claim included; the same key then succeeds once |
+| Transfer races | 3 + 11 | A separate connection holds the opportunity row while two requests queue (`pg_locks` confirms both waiting), so the order is certain. Transfer → old owner's completion: 404, every open task with the new owner. Completion → transfer: both apply, the completed task keeps its assignee and completer. Transfer → lead's completion of the reassigned task: 409, task untouched. **Eleven old-owner writes queued behind a transfer** (edit, stage, follow-up, activity log and amendment, notes, link, document category and finalization, tender edit, submission): each the standard 404, no audit |
+| ADR 0004 | 3 | An administrator deactivated while their change waits gets 403, nothing written (section, account, sign-in link) |
+| SEC-005 channels | 1 | After a cross-section transfer, the previous owner **and** lead lose: detail, follow-ups, history, activities, contacts tab, documents, tenders, assignees, the only-linked contact, the shared contact, document metadata and download, list, contacts list, follow-up list, search, alerts (and unread count), activity/follow-up/document writes, and the export prepared before the transfer (409, no content). The new owner gains them; history keeps the earlier authors |
+| SEC-012 history | 8 | Commercial history pages completely and in append order with equal timestamps; 422 for page size > 100, page 0, non-numeric and unknown parameters (both views); others and the administrator get the standard 404; directory, reporting and administrative events never appear in commercial history; administrative audit is 403 for management, lead and sales and pages completely |
+| SEC-012 role | 4 | Runtime role: SELECT and INSERT on `audit_events` only (UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES and column-level UPDATE all false); not superuser, no CREATEROLE/CREATEDB/BYPASSRLS, not a member of the owner role, cannot disable triggers; deleting an audited opportunity or user is refused by the foreign keys and the audit count is unchanged; the append order cannot be set or rewritten |
+
+**Mutation checks** — each fix was reverted and the tests re-run: old
+`patchOpportunity` (the basic-edit race test fails with 409), activity
+amendment without the opportunity lock (its race test fails), paged activity
+replay (busy-record test fails), M6 `admin.ts` (three administrator races and
+the lead-replacement audit test fail). **Not detected:** removing the
+`sequence` tie-break from history ordering — PostgreSQL happened to return a
+consistent order in the test; the guarantee rests on the explicit `ORDER BY`,
+not on a test that can tell the difference.
+
+### 6. Requirement and acceptance coverage
+
+| Requirement | Status |
+| --- | --- |
+| FR-062 | **Complete for implemented features.** Every implemented create/edit, transition, task assignment/completion/rescheduling, transfer, contact-link change, document revision, account change and export is audited with actor, event type, entity, time, request id, before/after values and reason where required; no passwords, tokens or file content. Verified mutation by mutation, with a completeness check |
+| SEC-012 | **Complete.** Commercial events carry their opportunity and are read only through its scope; administrative audit is administrator-only; directory and reporting events appear in neither view; append-only for the runtime role, verified at privilege level; history of a transferred record keeps earlier authors |
+| BR-090 | **Complete.** Every versioned write checks the version after its lock and in its UPDATE predicate; stale writes are 409 with nothing changed; every writer of an opportunity's data locks the opportunity first; transfer/task races verified both ways on real concurrent connections |
+| BR-091 | **Complete** for create, transfer, submit and upload finalization, and for every other create-style or transition operation (19 keyed operations). Versioned edits deduplicate through their version (ADR 0008) |
+| AT-15 | **Covered**: stale save 409 without overwriting; simultaneous transfer/task updates consistent; retried creates produce one record; committed data persists across sessions (M1/M2 browser checks) |
+| Plan §6 M7 | Commercial and administrative audit views separate, paginated and scope-checked; optimistic concurrency and idempotency verified across create, stage/status, tasks, transfers, activities, tender submission and upload finalization; errors and retries leave no partial records or duplicate audit |
+
+### 7. Unresolved issues and limitations
+
+**Unresolved production decisions — unchanged, not claimed ready:**
+production document storage and malware scanning (ADR 0006); identity
+provider and MFA; job execution and monitoring in production (M8).
+
+**Found during the audit, not fixed (outside M7's scope):**
+
+- **Follow-ups cannot be edited or reassigned individually.** §13 lists
+  "edit … reassign within eligibility" for follow-ups; only create, complete,
+  reschedule and cancel exist (reassignment happens only with a transfer).
+  This is a missing feature from Milestone 2, not a control gap; it needs a
+  product decision before it is built.
+- **No screen shows directory or reporting audit.** Organization/contact
+  identity edits and CSV exports are audited (FR-033, FR-083) but shown
+  nowhere. The requirements ask for the audit, not a view; who may see an
+  export log is a question for Penta (ADR 0008).
+
+**Other limitations:**
+
+- Versioned edits (PATCH, archive, deactivate, …) carry no idempotency key: a
+  retry after a lost response is a 409 and the browser offers reload. No
+  duplicate change or audit is possible.
+- The ordering guarantee for history pages is not proved by a failing test
+  (§5, mutation checks).
+- From earlier milestones, unchanged: account-link token cleanup is
+  unscheduled; the Activities & Follow-ups calendar view is unavailable; five
+  pre-existing fast-refresh lint warnings; management receives every alert
+  and the business day starts at 00:00 Dhaka (M6 decisions for review).
+
+### 8. Configuration and local startup
+
+Nothing new to configure. After pulling:
+
+```bash
+npm run db:migrate && npm run db:migrate:test   # 0000–0007
+npm test                                       # 632 tests
+npm run test:smoke                             # six Playwright runs
+```
+
+To see M7: as `rafiq.hasan@example.com`, open *Municipal Service Portal* →
+Change History; after more than 25 changes it pages. As `admin@example.com`,
+replace a section lead and read the Administrative audit: each re-pointed
+salesperson appears as "Reporting line changed".
+
+### 9. Next task
+
+Feature development stops at the end of Milestone 7. Next session, in order:
+
+1. **Verify Milestone 7** against this section: branch and commit, clean
+   tree, migration `0007` applied; re-run `npm run typecheck`, `npm run lint`,
+   `npm test` (expect 632 passed), `npm run test:smoke` (expect 25 passed in
+   six runs) and `npm run build`.
+2. Take Penta's decisions on the two audit findings in §7 (follow-up
+   edit/reassign; who sees directory and export audit).
+3. **Begin Milestone 8 — release preparation** (`Plan.md` §6) **only when
+   instructed**.
 
 ---
 

@@ -1,7 +1,7 @@
 # Penta Public Sector Sales CRM — project instructions
 
 A sales CRM for public sector project opportunities in Bangladesh, built from an
-approved MagicPatterns prototype. Currently at the end of **Milestone 6**.
+approved MagicPatterns prototype. Currently at the end of **Milestone 7**.
 
 ## Read before changing anything
 
@@ -67,7 +67,7 @@ npm run jobs:run       # run due background jobs once (notifications, exports, h
 npm run typecheck      # web + server + e2e projects
 npm run lint
 npm test               # backend integration suite (the milestone gate)
-npm run test:smoke     # Playwright browser checks (five isolated runs)
+npm run test:smoke     # Playwright browser checks (six isolated runs)
 npm run build          # web (with demo-exclusion checks) + server
 ```
 
@@ -95,11 +95,18 @@ explicit stage choice on submission) and private documents (staged upload,
 idempotent finalize, scan before download, revisions, management archive),
 server-computed dashboards and reports, queued audited CSV exports, scoped
 search and persistent notifications from a durable job queue — all with
-optimistic concurrency, durable idempotency and audit.
+optimistic concurrency, durable idempotency and audit. Milestone 7 verified
+every mutation's audit, version, retry and atomicity controls in
+`server/tests/m7MutationControls.test.ts`; a new mutation joins its matrices
+(a test fails if a new audit action is not covered).
 
-Every writer locks the opportunity row before any follow-up row; account
-changes lock the active administrator rows first, in id order. Keep both
-orders in new services (ADRs 0003 and 0004).
+Every writer of an opportunity's data locks the opportunity row, through
+scope, before any child row (follow-ups, activities, links, tenders,
+documents), so a transfer that commits first turns the previous owner's
+queued write into the standard 404. Every account or section change starts
+with `beginAdministrativeChange` (active administrator rows, in id order).
+Keep both orders in new services (ADRs 0003 and 0004). History views order
+by `(occurred_at, sequence)`; never page audit rows by time alone.
 
 Never log request data: unexpected errors go through `describeForLog` in
 `server/http/errors.ts` (SEC-032).
@@ -117,4 +124,4 @@ drill-downs and exports must compose them, inside `scopedWhere`, never
 restate them (FR-081). Services that make an alert obsolete call
 `alertsChangedInTransaction` inside their transaction; alert *generation*
 stays in background jobs (ADR 0007). Export delivery re-checks access to
-every exported record. See `docs/progress.md` before starting Milestone 7.
+every exported record. See `docs/progress.md` before starting Milestone 8.

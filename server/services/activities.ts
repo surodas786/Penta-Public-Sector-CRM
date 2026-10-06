@@ -142,7 +142,11 @@ export async function listActivities(
   return { items: rows.map((row) => toDto(actor, row)), total: total?.value ?? 0, page: query.page, pageSize: query.pageSize };
 }
 
-async function readActivity(db: Database, actor: Actor, activityId: string): Promise<ActivityDto> {
+/**
+ * One activity through its parent's scope. Also the replay of a retried
+ * creation, so it must not depend on which page the activity falls on.
+ */
+export async function getActivity(db: Database, actor: Actor, activityId: string): Promise<ActivityDto> {
   const [row] = await baseQuery(db).where(scopedWhere(actor, eq(activities.id, activityId))).limit(1);
   if (!row) throw notFound(`activity ${activityId} absent or outside scope for actor ${actor.id}`);
   return toDto(actor, row);
@@ -252,7 +256,7 @@ export async function createActivity(options: {
     return created.id;
   });
 
-  return readActivity(db, actor, id);
+  return getActivity(db, actor, id);
 }
 
 export async function updateActivity(options: {
@@ -266,6 +270,17 @@ export async function updateActivity(options: {
 
   await db.transaction(async (tx) => {
     // Through scope first: an author who has lost access gets a 404 (FR-041).
+    const [located] = await tx
+      .select({ opportunityId: activities.opportunityId })
+      .from(activities)
+      .innerJoin(opportunities, eq(opportunities.id, activities.opportunityId))
+      .where(scopedWhere(actor, eq(activities.id, activityId)))
+      .limit(1);
+    if (!located) throw notFound(`activity ${activityId} absent or outside scope for actor ${actor.id}`);
+    // Parent before child, as every writer does: a transfer that commits while
+    // this waits is seen, and the previous owner's edit becomes a 404 (SEC-005).
+    await lockOpportunity(tx, actor, located.opportunityId);
+
     const [current] = await tx
       .select({
         id: activities.id,
@@ -332,5 +347,5 @@ export async function updateActivity(options: {
     });
   });
 
-  return readActivity(db, actor, activityId);
+  return getActivity(db, actor, activityId);
 }

@@ -672,8 +672,8 @@ export async function archiveDocument(options: {
       entityType: 'document',
       entityId: documentId,
       action: 'document.archived',
-      before: { about: DOCUMENT_CATEGORY_LABELS[document.category] },
-      after: { about: DOCUMENT_CATEGORY_LABELS[document.category] },
+      before: { about: DOCUMENT_CATEGORY_LABELS[document.category], archived: false },
+      after: { about: DOCUMENT_CATEGORY_LABELS[document.category], archived: true },
       reason: command.reason,
       requestId,
     });

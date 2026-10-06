@@ -3,7 +3,7 @@
  * endpoints (plan 7.5). Every tab is live: Overview, Contacts, Activities
  * (with follow-ups), Tender and Documents (M5), and Change History.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -47,7 +47,7 @@ import {
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/Feedback';
 import { inputCls } from '../../components/ui/FormFields';
-import { DetailItem, PageContainer, Panel, Tabs, tdCls, thCls } from '../../components/ui/Layout';
+import { DetailItem, PageContainer, Pagination, Panel, Tabs, tdCls, thCls } from '../../components/ui/Layout';
 import { useAuth } from '../AuthContext.js';
 import { useApiResource } from '../useApiResource.js';
 import { ErrorPanel, LoadingPanel } from '../components/Feedback.js';
@@ -136,21 +136,32 @@ export function OpportunityDetailPage() {
     (signal: AbortSignal) => fetchOpportunityFollowUps(id, { pageSize: 50 }, signal),
     [id],
   );
+  // Change History and the activity log are paged on the server; nothing
+  // beyond the first page is silently dropped.
+  const [historyPage, setHistoryPage] = useState(1);
+  const [activitiesPage, setActivitiesPage] = useState(1);
+  useEffect(() => {
+    setHistoryPage(1);
+    setActivitiesPage(1);
+  }, [id]);
   const historyFetcher = useCallback(
-    (signal: AbortSignal) => fetchOpportunityHistory(id, { pageSize: 50 }, signal),
-    [id],
+    (signal: AbortSignal) => fetchOpportunityHistory(id, { page: historyPage, pageSize: HISTORY_PAGE_SIZE }, signal),
+    [id, historyPage],
   );
 
   const detail = useApiResource(detailFetcher, [id]);
   const followUps = useApiResource(followUpsFetcher, [id]);
-  const history = useApiResource(historyFetcher, [id]);
+  const history = useApiResource(historyFetcher, [id, historyPage]);
   const contacts = useApiResource(
     useCallback((signal: AbortSignal) => fetchOpportunityContacts(id, signal), [id]),
     [id],
   );
   const activities = useApiResource(
-    useCallback((signal: AbortSignal) => fetchOpportunityActivities(id, { pageSize: 50 }, signal), [id]),
-    [id],
+    useCallback(
+      (signal: AbortSignal) => fetchOpportunityActivities(id, { page: activitiesPage, pageSize: HISTORY_PAGE_SIZE }, signal),
+      [id, activitiesPage],
+    ),
+    [id, activitiesPage],
   );
   const tenders = useApiResource(
     useCallback((signal: AbortSignal) => fetchOpportunityTenders(id, signal), [id]),
@@ -407,10 +418,13 @@ export function OpportunityDetailPage() {
                 {activities.error ? (
                   <ErrorPanel error={activities.error} onRetry={activities.reload} />
                 ) : activities.data && activities.data.items.length > 0 ? (
-                  <ActivityTimeline
-                    activities={activities.data.items}
-                    onEdit={(activity) => setActivityDialog({ open: true, activity })}
-                  />
+                  <>
+                    <ActivityTimeline
+                      activities={activities.data.items}
+                      onEdit={(activity) => setActivityDialog({ open: true, activity })}
+                    />
+                    <PageControls page={activities.data} onChange={setActivitiesPage} />
+                  </>
                 ) : (
                   <EmptyState compact title="No activities logged" description="Log meetings, calls and visits to keep a record." />
                 )}
@@ -426,7 +440,7 @@ export function OpportunityDetailPage() {
             </div>
           )}
 
-          {tab === 'history' && <HistoryTab resource={history} />}
+          {tab === 'history' && <HistoryTab resource={history} onPageChange={setHistoryPage} />}
 
           {tab === 'tender' && (
             <TenderTab
@@ -491,6 +505,8 @@ export function OpportunityDetailPage() {
         activity={activityDialog.activity}
         onClose={() => setActivityDialog({ open: false, activity: null })}
         onDone={() => {
+          // A newly logged activity is on the first page, newest first.
+          if (!activityDialog.activity) setActivitiesPage(1);
           setActivityDialog({ open: false, activity: null });
           reloadAll();
         }}
@@ -729,10 +745,36 @@ function FollowUpsTab({
   );
 }
 
+const HISTORY_PAGE_SIZE = 25;
+
+/** Shown only when there is more than one page. */
+function PageControls({
+  page,
+  onChange,
+}: {
+  page: { page: number; pageSize: number; total: number };
+  onChange: (page: number) => void;
+}) {
+  if (page.total <= page.pageSize) return null;
+  return (
+    <div className="mt-3">
+      <Pagination
+        page={page.page}
+        pageCount={Math.max(1, Math.ceil(page.total / page.pageSize))}
+        total={page.total}
+        pageSize={page.pageSize}
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
 function HistoryTab({
   resource,
+  onPageChange,
 }: {
   resource: ReturnType<typeof useApiResource<Awaited<ReturnType<typeof fetchOpportunityHistory>>>>;
+  onPageChange: (page: number) => void;
 }) {
   if (resource.loading && !resource.data) return <LoadingPanel label="Loading change history…" />;
   if (resource.error) return <ErrorPanel error={resource.error} onRetry={resource.reload} />;
@@ -741,11 +783,14 @@ function HistoryTab({
   }
 
   return (
-    <ol className="flex flex-col gap-3">
-      {resource.data.items.map((entry) => (
-        <HistoryItem key={entry.id} entry={entry} />
-      ))}
-    </ol>
+    <div>
+      <ol className="flex flex-col gap-3">
+        {resource.data.items.map((entry) => (
+          <HistoryItem key={entry.id} entry={entry} />
+        ))}
+      </ol>
+      <PageControls page={resource.data} onChange={onPageChange} />
+    </div>
   );
 }
 

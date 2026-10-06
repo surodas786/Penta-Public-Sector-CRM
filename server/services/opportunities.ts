@@ -610,71 +610,72 @@ export async function patchOpportunity(options: {
 }): Promise<OpportunityDetailDto> {
   const { db, actor, opportunityId, command, requestId } = options;
 
-  // 404 before anything else: an invisible record must not produce a 403, a
-  // validation error, or any other distinguishable response.
-  const [current] = await db
-    .select({
-      id: opportunities.id,
-      version: opportunities.version,
-      stage: opportunities.stage,
-      status: opportunities.status,
-      name: opportunities.name,
-      department: opportunities.department,
-      solutionCategory: opportunities.solutionCategory,
-      description: opportunities.description,
-      estimatedValue: opportunities.estimatedValue,
-      fundingSource: opportunities.fundingSource,
-      priority: opportunities.priority,
-      expectedPublicationDate: opportunities.expectedPublicationDate,
-      expectedAwardDate: opportunities.expectedAwardDate,
-    })
-    .from(opportunities)
-    .where(scopedWhere(actor, eq(opportunities.id, opportunityId)))
-    .limit(1);
+  await db.transaction(async (tx) => {
+    // Read and lock inside the transaction, through scope, so the audit's
+    // before-values are exactly what this update replaces and a transfer
+    // committing meanwhile is seen (the opportunity lock comes first, as in
+    // every writer). 404 before anything else: an invisible record must not
+    // produce a 403, a validation error, or any other distinguishable response.
+    const [current] = await tx
+      .select({
+        id: opportunities.id,
+        version: opportunities.version,
+        stage: opportunities.stage,
+        status: opportunities.status,
+        name: opportunities.name,
+        department: opportunities.department,
+        solutionCategory: opportunities.solutionCategory,
+        description: opportunities.description,
+        estimatedValue: opportunities.estimatedValue,
+        fundingSource: opportunities.fundingSource,
+        priority: opportunities.priority,
+        expectedPublicationDate: opportunities.expectedPublicationDate,
+        expectedAwardDate: opportunities.expectedAwardDate,
+      })
+      .from(opportunities)
+      .where(scopedWhere(actor, eq(opportunities.id, opportunityId)))
+      .for('update')
+      .limit(1);
 
-  if (!current) {
-    throw notFound(`opportunity ${opportunityId} absent or outside scope for actor ${actor.id}`);
-  }
-
-  // Closed records are read-only. To correct one, management reopens it
-  // (BR-012) or a cancelled one is returned to Active first, so every change
-  // to a closed record passes through an audited, reasoned transition.
-  if (current.stage === 'awarded' || current.stage === 'lost' || current.status === 'cancelled') {
-    throw forbidden(
-      'Awarded, Lost and Cancelled opportunities are closed to editing. Reopen it, or return it to Active, first.',
-    );
-  }
-
-  const changes: Record<string, unknown> = {};
-  for (const field of PATCHABLE_OPPORTUNITY_FIELDS) {
-    if (field in command && command[field] !== undefined) {
-      changes[field] = command[field];
+    if (!current) {
+      throw notFound(`opportunity ${opportunityId} absent or outside scope for actor ${actor.id}`);
     }
-  }
-  if ('estimatedValue' in changes && typeof changes.estimatedValue === 'string') {
-    changes.estimatedValue = canonicalMoney(changes.estimatedValue);
-  }
 
-  if (Object.keys(changes).length === 0) {
-    throw validationFailed({ _: 'Provide at least one field to update.' });
-  }
+    // Closed records are read-only. To correct one, management reopens it
+    // (BR-012) or a cancelled one is returned to Active first, so every change
+    // to a closed record passes through an audited, reasoned transition.
+    if (current.stage === 'awarded' || current.stage === 'lost' || current.status === 'cancelled') {
+      throw forbidden(
+        'Awarded, Lost and Cancelled opportunities are closed to editing. Reopen it, or return it to Active, first.',
+      );
+    }
 
-  const diff = diffRecords(current as unknown as Record<string, unknown>, changes);
-  if (diff.changed.length === 0) {
-    // Nothing actually differs; return current state without burning a version.
-    return getOpportunityDetail(db, actor, opportunityId);
-  }
+    const changes: Record<string, unknown> = {};
+    for (const field of PATCHABLE_OPPORTUNITY_FIELDS) {
+      if (field in command && command[field] !== undefined) {
+        changes[field] = command[field];
+      }
+    }
+    if ('estimatedValue' in changes && typeof changes.estimatedValue === 'string') {
+      changes.estimatedValue = canonicalMoney(changes.estimatedValue);
+    }
 
-  const timestamp = now();
+    if (Object.keys(changes).length === 0) {
+      throw validationFailed({ _: 'Provide at least one field to update.' });
+    }
 
-  const updated = await db.transaction(async (tx) => {
-    // The version check lives in the UPDATE predicate, so two concurrent edits
-    // from the same version cannot both win (BR-090).
+    const diff = diffRecords(current as unknown as Record<string, unknown>, changes);
+    // Nothing actually differs: return current state without burning a version.
+    if (diff.changed.length === 0) return;
+
+    if (current.version !== command.version) throw versionConflict();
+
+    // The version check also lives in the UPDATE predicate (BR-090).
     const rows = await tx
       .update(opportunities)
       .set({
         ...changes,
-        updatedAt: timestamp,
+        updatedAt: now(),
         version: sql`${opportunities.version} + 1`,
       })
       .where(
@@ -684,9 +685,8 @@ export async function patchOpportunity(options: {
           eq(opportunities.version, command.version),
         ),
       )
-      .returning({ id: opportunities.id, version: opportunities.version });
-
-    if (rows.length === 0) return null;
+      .returning({ id: opportunities.id });
+    if (rows.length === 0) throw versionConflict();
 
     await recordAuditEvent(tx, {
       actorId: actor.id,
@@ -699,14 +699,7 @@ export async function patchOpportunity(options: {
       after: diff.after,
       requestId,
     });
-
-    return rows[0];
   });
-
-  if (!updated) {
-    // Still visible (checked above) but the version moved on.
-    throw versionConflict();
-  }
 
   return getOpportunityDetail(db, actor, opportunityId);
 }
@@ -761,7 +754,7 @@ export async function listOpportunityHistory(options: {
     .from(auditEvents)
     .leftJoin(users, eq(users.id, auditEvents.actorId))
     .where(where)
-    .orderBy(desc(auditEvents.occurredAt))
+    .orderBy(desc(auditEvents.occurredAt), desc(auditEvents.sequence))
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 

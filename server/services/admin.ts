@@ -265,17 +265,57 @@ async function assertLeadManager(tx: Database, managerId: string | null | undefi
   return row.id;
 }
 
-/** Makes `leadId` the section's lead and points every salesperson in it at them. */
-async function installLead(tx: Database, sectionId: string, leadId: string): Promise<void> {
+/**
+ * Makes `leadId` the section's lead and points every salesperson in it at
+ * them. Each re-pointed reporting line is its own audit event (FR-062): it
+ * changes that person's account, not just the section.
+ */
+async function installLead(
+  tx: Database,
+  sectionId: string,
+  leadId: string,
+  context: { actor: Actor; requestId: string; reason?: string | null | undefined },
+): Promise<void> {
   const timestamp = now();
   await tx
     .update(sections)
     .set({ leadUserId: leadId, updatedAt: timestamp, version: sql`${sections.version} + 1` })
     .where(eq(sections.id, sectionId));
+  const repointed = await tx
+    .select({ id: users.id, managerId: users.managerId })
+    .from(users)
+    .where(and(eq(users.sectionId, sectionId), eq(users.role, 'sales'), sql`${users.managerId} IS DISTINCT FROM ${leadId}`))
+    .orderBy(asc(users.id))
+    .for('update');
+  if (repointed.length === 0) return;
   await tx
     .update(users)
     .set({ managerId: leadId, updatedAt: timestamp, version: sql`${users.version} + 1` })
-    .where(and(eq(users.sectionId, sectionId), eq(users.role, 'sales'), sql`${users.managerId} IS DISTINCT FROM ${leadId}`));
+    .where(inArray(users.id, repointed.map((row) => row.id)));
+  for (const row of repointed) {
+    await audit(tx, context.actor, {
+      entityType: 'user',
+      entityId: row.id,
+      action: 'account.manager_changed',
+      before: { managerId: row.managerId },
+      after: { managerId: leadId },
+      reason: context.reason,
+      requestId: context.requestId,
+    });
+  }
+}
+
+/**
+ * The first step of every account or section change (ADR 0004): lock the
+ * active administrator rows in id order, then confirm the actor is still one
+ * of them. The session check ran before these locks; a demotion or
+ * deactivation that committed while this transaction waited must still stop
+ * the change.
+ */
+async function beginAdministrativeChange(tx: Database, actor: Actor): Promise<string[]> {
+  const activeAdmins = await lockAdministrators(tx);
+  if (!activeAdmins.includes(actor.id)) throw forbidden('Your account is no longer an active administrator.');
+  return activeAdmins;
 }
 
 function audit(
@@ -320,6 +360,7 @@ export async function createUser(options: {
   assertAdministrator(actor);
 
   const { userId, link } = await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     await assertEmailFree(tx, command.email);
 
     const inSection = SECTION_ROLES.includes(command.role);
@@ -364,7 +405,7 @@ export async function createUser(options: {
       .returning({ id: users.id });
     if (!created) throw new Error('User insert returned no row.');
 
-    if (command.role === 'lead' && sectionId) await installLead(tx, sectionId, created.id);
+    if (command.role === 'lead' && sectionId) await installLead(tx, sectionId, created.id, { actor, requestId });
 
     await audit(tx, actor, {
       entityType: 'user',
@@ -407,7 +448,7 @@ export async function updateUser(options: {
   assertAdministrator(actor);
 
   await db.transaction(async (tx) => {
-    const activeAdmins = await lockAdministrators(tx);
+    const activeAdmins = await beginAdministrativeChange(tx, actor);
     const target = await lockUser(tx, userId);
     if (target.version !== command.version) throw versionConflict();
 
@@ -495,7 +536,7 @@ export async function updateUser(options: {
     if (updated.length === 0) throw versionConflict();
 
     if (role === 'lead' && (roleChanged || sectionChanged) && target.active) {
-      await installLead(tx, sectionId as string, target.id);
+      await installLead(tx, sectionId as string, target.id, { actor, requestId });
     }
 
     await audit(tx, actor, {
@@ -523,14 +564,11 @@ export async function deactivateUser(options: {
   assertAdministrator(actor);
 
   await db.transaction(async (tx) => {
-    const activeAdmins = await lockAdministrators(tx);
+    const activeAdmins = await beginAdministrativeChange(tx, actor);
     const target = await lockUser(tx, userId);
     if (target.version !== command.version) throw versionConflict();
     if (target.id === actor.id) throw forbidden('You cannot deactivate your own account.');
     if (!target.active) throw blocked('This account is already inactive.');
-    // The actor may have been deactivated by a transaction that committed
-    // while this one waited for the administrator locks.
-    if (!activeAdmins.includes(actor.id)) throw forbidden('Your account is no longer an active administrator.');
 
     if (target.role === 'admin') assertNotLastAdministrator(activeAdmins, target.id);
     if (target.role === 'lead' && target.sectionId) {
@@ -583,6 +621,7 @@ export async function reactivateUser(options: {
   assertAdministrator(actor);
 
   await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     const target = await lockUser(tx, userId);
     if (target.version !== command.version) throw versionConflict();
     if (target.active) throw blocked('This account is already active.');
@@ -605,7 +644,9 @@ export async function reactivateUser(options: {
       .update(users)
       .set({ ...changes, updatedAt: now(), version: sql`${users.version} + 1` })
       .where(eq(users.id, target.id));
-    if (target.role === 'lead' && target.sectionId) await installLead(tx, target.sectionId, target.id);
+    if (target.role === 'lead' && target.sectionId) {
+      await installLead(tx, target.sectionId, target.id, { actor, requestId, reason: command.reason });
+    }
 
     await audit(tx, actor, {
       entityType: 'user',
@@ -633,6 +674,7 @@ export async function issueUserLink(options: {
   assertAdministrator(actor);
 
   return db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     const target = await lockUser(tx, userId);
     if (!target.active) throw blocked('Reactivate the account before issuing a sign-in link.');
     const [row] = await tx.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, userId)).limit(1);
@@ -673,6 +715,7 @@ export async function createSection(options: {
   const { db, actor, name, requestId, completeClaim } = options;
   assertAdministrator(actor);
   const id = await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     await assertSectionNameFree(tx, name);
     const timestamp = now();
     const [created] = await tx
@@ -703,6 +746,7 @@ export async function renameSection(options: {
   const { db, actor, sectionId, command, requestId } = options;
   assertAdministrator(actor);
   await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     const section = await lockSection(tx, sectionId);
     if (section.version !== command.version) throw versionConflict();
     if (section.name === command.name) return;
@@ -741,6 +785,7 @@ export async function replaceSectionLead(options: {
   assertAdministrator(actor);
 
   await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     const section = await lockSection(tx, sectionId);
     if (section.version !== command.version) throw versionConflict();
     if (!section.active) throw blocked('Reactivate the section before appointing its lead.');
@@ -769,7 +814,7 @@ export async function replaceSectionLead(options: {
         entityType: 'user',
         entityId: previous.id,
         action: 'account.role_changed',
-        before: { role: 'lead' },
+        before: { role: 'lead', managerId: previous.managerId },
         after: { role: 'sales', managerId: candidate.id },
         reason: command.reason,
         requestId,
@@ -796,7 +841,7 @@ export async function replaceSectionLead(options: {
       requestId,
     });
 
-    await installLead(tx, sectionId, candidate.id);
+    await installLead(tx, sectionId, candidate.id, { actor, requestId, reason: command.reason });
     await audit(tx, actor, {
       entityType: 'section',
       entityId: sectionId,
@@ -823,6 +868,7 @@ export async function setSectionActive(options: {
   assertAdministrator(actor);
 
   await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
     const section = await lockSection(tx, sectionId);
     if (section.version !== command.version) throw versionConflict();
     if (section.active === active) throw blocked(`This section is already ${active ? 'active' : 'inactive'}.`);
@@ -899,7 +945,7 @@ export async function listAdminAudit(
     .from(auditEvents)
     .leftJoin(actorUser, eq(actorUser.id, auditEvents.actorId))
     .where(where)
-    .orderBy(desc(auditEvents.occurredAt))
+    .orderBy(desc(auditEvents.occurredAt), desc(auditEvents.sequence))
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 

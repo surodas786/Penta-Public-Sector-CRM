@@ -5,6 +5,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   check,
   date,
@@ -321,6 +322,11 @@ export const auditEvents = pgTable(
     reason: text('reason'),
     occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
     requestId: text('request_id').notNull(),
+    /**
+     * Append order. Events written in one transaction can share a timestamp,
+     * so history pages order by (occurred_at, sequence) to be stable.
+     */
+    sequence: bigint('sequence', { mode: 'number' }).generatedAlwaysAsIdentity().notNull(),
   },
   (table) => [
     index('audit_events_entity_idx').on(table.entityType, table.entityId),

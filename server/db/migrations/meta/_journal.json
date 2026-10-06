@@ -50,6 +50,13 @@
       "when": 1791264025635,
       "tag": "0006_reports_exports_notifications_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791271242808,
+      "tag": "0007_audit_event_sequence",
+      "breakpoints": true
     }
   ]
 }

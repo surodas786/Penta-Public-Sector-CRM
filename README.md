@@ -147,7 +147,7 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run typecheck` | TypeScript for the web, server and e2e projects |
 | `npm run lint` | ESLint across all source |
 | `npm test` | Backend integration suite against the test database — **the milestone gate** |
-| `npm run test:smoke` | Playwright browser checks, as five isolated runs (smoke + M2, M3, M4, M5, M6), each starting its own servers on freshly seeded test data |
+| `npm run test:smoke` | Playwright browser checks, as six isolated runs (smoke + M2, M3, M4, M5, M6, M7), each starting its own servers on freshly seeded test data |
 | `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as five Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
