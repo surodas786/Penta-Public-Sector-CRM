@@ -296,6 +296,15 @@ export interface AdminUserDto {
   active: boolean;
   /** True until an invited account sets its password. */
   invitationPending: boolean;
+  /** An unused, unexpired invitation or reset link exists (never the link itself). */
+  linkActive: boolean;
+  /** The latest invitation or reset email for this account, if any (CR1). */
+  accountEmail: {
+    purpose: 'invitation' | 'password_reset';
+    status: EmailDeliveryStatus;
+    statusDetail: string | null;
+    at: string;
+  } | null;
   version: number;
 }
 
@@ -315,15 +324,30 @@ export interface AdminSectionDto {
  * stored in readable form. Delivered to the person out of band: release one
  * sends no email (requirements §1.3).
  */
-export interface AccountLinkDto {
-  purpose: 'invitation' | 'password_reset';
-  url: string;
-  expiresAt: string;
-}
+export type AccountLinkDto =
+  | {
+      purpose: 'invitation' | 'password_reset';
+      /** Shown once, for the administrator to deliver by hand. */
+      delivery: 'manual';
+      url: string;
+      expiresAt: string;
+    }
+  | {
+      purpose: 'invitation' | 'password_reset';
+      /**
+       * Queued as an email (CR1). The link is created only when the email is
+       * sent, so neither the administrator nor the database ever sees it.
+       */
+      delivery: 'email';
+      url: null;
+      expiresAt: null;
+    };
 
 export interface CreateUserResultDto {
   user: AdminUserDto;
-  /** Null when the request was a replay: the link is never shown twice. */
+  /** How the invitation goes out: emailed while email delivery is on, otherwise a link shown once. */
+  delivery: 'email' | 'manual';
+  /** The manual link. Null when emailed, or when the request was a replay: a link is never shown twice. */
   link: AccountLinkDto | null;
 }
 

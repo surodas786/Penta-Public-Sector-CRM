@@ -46,7 +46,7 @@ export function UserDialog({
   managementAccounts: AdminUserDto[];
   isSelf: boolean;
   onClose: () => void;
-  onSaved: (result: { user: AdminUserDto; link: AccountLinkDto | null }) => void;
+  onSaved: (result: { user: AdminUserDto; delivery?: 'email' | 'manual'; link: AccountLinkDto | null }) => void;
 }) {
   const submission = useSubmission();
   const errors = submission.fieldErrors;
@@ -222,8 +222,8 @@ export function UserDialog({
         )}
         {!user && (
           <p className="text-xs text-slate-500 sm:col-span-2">
-            The account is created with no password. You will receive a single-use invitation link to send to the person; they
-            choose their own password.
+            The account is created with no password. While email delivery is on, the person is emailed a single-use
+            invitation link; otherwise you receive the link to send them. Either way, they choose their own password.
           </p>
         )}
       </form>
@@ -235,12 +235,15 @@ export function UserDialog({
 // One-time link
 // ---------------------------------------------------------------------------
 
+/** A link shown once to copy. Emailed links are never shown (CR1). */
+export type ManualAccountLink = Extract<AccountLinkDto, { delivery: 'manual' }>;
+
 export function AccountLinkDialog({
   link,
   person,
   onClose,
 }: {
-  link: AccountLinkDto | null;
+  link: ManualAccountLink | null;
   person: string;
   onClose: () => void;
 }) {

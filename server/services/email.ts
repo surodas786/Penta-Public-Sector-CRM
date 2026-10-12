@@ -13,14 +13,16 @@
  *   1. `queueEmail` records a delivery and queues its job inside the caller's
  *      transaction, but only while delivery is turned on.
  *   2. `deliverEmail` re-checks everything when it runs: delivery still on,
- *      template still on, recipient still active. It renders the current
- *      wording and sends. The send happens outside any transaction; a crash
+ *      template still on, recipient still active. For an invitation or a
+ *      reset (CR1) it issues the single-use link only now, so the readable
+ *      token exists only in the message, and its expiry counts from sending.
+ *      It renders the current wording and sends. The send happens outside any transaction; a crash
  *      between sending and recording "sent" can repeat one message on retry
  *      (at least once, never silently lost).
  */
 import { createHash } from 'node:crypto';
 
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { z } from 'zod';
 
@@ -44,6 +46,7 @@ import { forbidden, notFound, validationFailed, versionConflict } from '../http/
 import { enqueueJob } from '../jobs/queue.js';
 import type { Actor } from '../policy/actor.js';
 import { canAdministerAccounts } from '../policy/scope.js';
+import { issueAccountLink } from './accountTokens.js';
 import { beginAdministrativeChange } from './admin.js';
 import { diffRecords, recordAuditEvent } from './audit.js';
 
@@ -485,6 +488,31 @@ export async function sendTestEmail(options: {
 // Queueing and sending
 // ---------------------------------------------------------------------------
 
+/** Delivery is turned on by an administrator. */
+export async function isEmailDeliveryOn(db: Database): Promise<boolean> {
+  return (await readSettingsRow(db))?.enabled ?? false;
+}
+
+const ACCOUNT_EMAILS: readonly EmailTemplateKey[] = ['invitation', 'password_reset'];
+
+/**
+ * Cancels any invitation or reset email still waiting to be sent to a person,
+ * e.g. when an administrator copies a link instead: sending it would issue a
+ * newer link and silently void the copied one.
+ */
+export async function suppressQueuedAccountEmails(tx: Database, userId: string, detail: string): Promise<void> {
+  await tx
+    .update(emailDeliveries)
+    .set({ status: 'suppressed', statusDetail: detail, updatedAt: now() })
+    .where(
+      and(
+        eq(emailDeliveries.recipientUserId, userId),
+        inArray(emailDeliveries.templateKey, [...ACCOUNT_EMAILS]),
+        eq(emailDeliveries.status, 'queued'),
+      ),
+    );
+}
+
 /**
  * Records an email to send and queues its job, in the caller's transaction,
  * so it exists if and only if the change that caused it commits. Does
@@ -562,7 +590,7 @@ async function settle(db: Database, deliveryId: string, change: { status: 'sent'
 }
 
 /** The `email.send` job. Throws on a sending failure so the queue retries it. */
-export async function deliverEmail(db: Database, runtime: EmailRuntime, deliveryId: string): Promise<void> {
+export async function deliverEmail(db: Database, runtime: EmailRuntime, deliveryId: string, requestId: string): Promise<void> {
   const prepared = await db.transaction(async (tx) => {
     const [delivery] = await tx.select().from(emailDeliveries).where(eq(emailDeliveries.id, deliveryId)).for('update').limit(1);
     if (!delivery || delivery.status !== 'queued') return null;
@@ -581,7 +609,7 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
 
     const [recipient] = delivery.recipientUserId
       ? await tx
-          .select({ fullName: users.fullName, email: users.email, active: users.active })
+          .select({ id: users.id, fullName: users.fullName, email: users.email, active: users.active, passwordHash: users.passwordHash })
           .from(users)
           .where(eq(users.id, delivery.recipientUserId))
           .limit(1)
@@ -595,6 +623,30 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
     }
 
     const values = renderValues(key, delivery.context as Record<string, unknown>, recipient, runtime.appOrigin);
+
+    // CR1: the link is issued now, inside this transaction, and exists in
+    // readable form only in the message below. Issuing spends any earlier
+    // link of the same purpose, so a retry leaves only the newest working.
+    if (key === 'invitation' || key === 'password_reset') {
+      if (key === 'invitation' && recipient.passwordHash) return suppress('The invitation was already accepted.');
+      const issued = await issueAccountLink(tx, {
+        userId: recipient.id,
+        purpose: key,
+        createdBy: delivery.createdBy ?? recipient.id,
+        appOrigin: runtime.appOrigin,
+      });
+      await recordAuditEvent(tx, {
+        actorId: delivery.createdBy,
+        entityType: 'user',
+        entityId: recipient.id,
+        action: key === 'invitation' ? 'account.invitation_issued' : 'account.reset_issued',
+        domain: 'administrative',
+        after: { expiresAt: issued.expiresAt, delivery: 'email' },
+        requestId,
+      });
+      values.link = issued.url;
+      values.expiresAt = formatDhakaInstant(new Date(issued.expiresAt));
+    }
     await tx
       .update(emailDeliveries)
       .set({ attempts: sql`${emailDeliveries.attempts} + 1`, recipientAddress: recipient.email, updatedAt: now() })

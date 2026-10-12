@@ -10,6 +10,7 @@ import {
   accountStateSchema,
   createSectionSchema,
   createUserSchema,
+  issueAccountLinkSchema,
   listUsersQuerySchema,
   paginationQuerySchema,
   renameSectionSchema,
@@ -76,6 +77,8 @@ export function createAdminRouter(options: {
 }): Router {
   const { db, csrfGuard, appOrigin } = options;
   const router = Router();
+  // CR1: links are emailed while email delivery is on, if this deployment may send at all.
+  const links = { appOrigin, emailAvailable: options.email.transport !== null };
   router.use(requireAuth, requireAdministrator);
   router.use('/email', createAdminEmailRouter({ db, csrfGuard, email: options.email }));
 
@@ -107,7 +110,7 @@ export function createAdminRouter(options: {
         key,
         payload: req.body,
         execute: (completeClaim) =>
-          createUser({ db, actor, command, requestId: req.requestId, appOrigin, completeClaim }),
+          createUser({ db, actor, command, requestId: req.requestId, links, completeClaim }),
         // The invitation link is never shown twice; a replay returns the account only.
         replay: (entityId) => getCreatedUser(db, actor, entityId),
       });
@@ -146,8 +149,9 @@ export function createAdminRouter(options: {
     '/users/:id/link',
     csrfGuard,
     handle(async (req, res) => {
+      const { delivery } = parseOrThrow(issueAccountLinkSchema, req.body ?? {});
       res.status(201).json(
-        await issueUserLink({ db, actor: actorOf(req), userId: readId(req.params.id), requestId: req.requestId, appOrigin }),
+        await issueUserLink({ db, actor: actorOf(req), userId: readId(req.params.id), delivery, requestId: req.requestId, links }),
       );
     }),
   );

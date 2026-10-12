@@ -3,9 +3,10 @@
 **Branch:** `cr-change-requests`, created from `changemade` at `e9a8e1b`
 (Milestone 8 plus the Vite host fix and the Chrome stale-cookie fix)
 **Date:** 12 October 2026
-**Status:** Step 1 (CR3), step 2 (CR4 + CR5, migration 0008) and step 3
-(CR2 email foundation, migration 0009) are implemented (see
-`docs/progress.md` and ADRs 0010–0011). Steps 4–7 have not started. No email
+**Status:** Steps 1–4 are implemented: CR3; CR4 + CR5 (migration 0008); the
+CR2 email foundation (migration 0009); and CR1 invitation and reset emails
+(no migration). See `docs/progress.md` and ADRs 0010–0011. Steps 5–7 have
+not started. No email
 has been sent outside the development capture folder, and nothing is
 deployed.
 
@@ -15,6 +16,16 @@ deployed.
   administrator saves them; until then the defaults in `shared/email.ts`
   apply. The migration therefore seeds nothing.
 - **`email.invitation_queued` is deferred.** It belongs to step 4.
+
+**Changes from this plan made during step 4:**
+
+- **Audit action names.** The queued account emails are audited as
+  `account.invitation_queued` and `account.reset_queued`, beside the
+  existing `account.invitation_issued` and `account.reset_issued`, rather
+  than as `email.invitation_queued`.
+- **Invitation state in the user table.** Shown as a status line (email
+  queued, emailed, failed, not sent with its reason, or "No active invitation
+  link"), rather than a separate badge.
 
 **Changes from this plan made during step 2:**
 

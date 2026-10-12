@@ -845,6 +845,35 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'section.deactivated', domain: 'administrative', changes: ['active'], reason: 'Pilot ended.' }],
     },
     {
+      name: 'account creation with an emailed invitation (CR1): the link is issued later, by the send job',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: true, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        return send(c, '/api/admin/users', { fullName: 'Emailed Person', email: 'emailed.person@example.com', role: 'management' });
+      },
+      status: 201,
+      events: [
+        { action: 'account.created', domain: 'administrative', changes: ['role'] },
+        { action: 'account.invitation_queued', domain: 'administrative', changes: ['delivery'] },
+      ],
+    },
+    {
+      name: 'reset link by email (CR1)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: true, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        return send(c, `/api/admin/users/${ids.salesGA2}/link`, {});
+      },
+      status: 201,
+      events: [{ action: 'account.reset_queued', domain: 'administrative', changes: ['delivery'] }],
+    },
+    {
       name: 'mail server settings (CR2), the password never recorded',
       actor: 'admin',
       opportunityId: null,

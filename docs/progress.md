@@ -275,11 +275,59 @@ turning email on afterwards.
 deployment authorization. Invitation and notification emails come in steps 4
 and 5.
 
-### 9. Next task
+### 9. Step 4 — CR1 invitation and reset links by email (implemented 12 October 2026)
 
-Review step 3. Then, when instructed, step 4 (CR1: invitation and reset links
-by email, issued at send time; manual copy kept as the fallback,
-D-CR1-1).
+Decision D-CR1-1 (keep a manual "copy link" fallback) is applied. **No
+database change and no production SQL in this step.**
+
+**What changed**
+
+| Area | Change |
+| --- | --- |
+| Account links | While email delivery is on and the server may send (`EMAIL_TRANSPORT` is not `none`), creating an account or asking for a new link **queues an email** (`account.invitation_queued` / `account.reset_queued`). The single-use link is issued **only by the send job**, audited as `account.invitation_issued` / `account.reset_issued` with the requesting administrator as actor, and expires 72 h / 24 h **after sending**. No readable token rests in the queue, the delivery log or the audit |
+| Send-time checks | The send is skipped, with the reason recorded, if the account was deactivated or the invitation accepted in the meantime. A retry issues a fresh link that voids the earlier one |
+| Manual fallback | `POST /api/admin/users/:id/link` takes `{delivery: 'email' \| 'manual'}`. "Copy link" shows the link once, as before, and cancels any account email still queued for that person. Asking for an email while delivery is off returns 409 with guidance. While delivery is off, everything works exactly as in release one |
+| API | `AccountLinkDto` gains `delivery` (with `url`/`expiresAt` null when emailed). `CreateUserResultDto` gains `delivery`. `AdminUserDto` gains `linkActive` and `accountEmail` (the latest invitation or reset email status) |
+| Interface | User table: while email is on the action reads "Email invitation" / "Email reset link", plus an icon-only "Copy link". A status line shows the email queued, emailed, failed (use Copy link) or not sent with its reason, or "No active invitation link". Adding a user confirms "Invitation emailed" instead of showing a link. Dialog text updated |
+
+**Tests**
+
+- New: `server/tests/invitations.test.ts` (9 tests), covering:
+  - the email-off path unchanged, and email refused while off;
+  - an emailed invitation: no token until sent; the captured message holds
+    the link, whose hash is the stored one; the token appears in no delivery,
+    job or audit row; the audit attributes the issue to the administrator;
+    the user-table state; single use;
+  - expiry counted from sending (injected clock);
+  - a resend voiding the earlier link;
+  - "Copy link" cancelling the queued email, and the copied link working;
+  - an emailed reset ending sessions;
+  - no link for a deactivated account or an accepted invitation;
+  - fallback after a failed delivery;
+  - `EMAIL_TRANSPORT=none` falling back to the shown link.
+- Audit matrix: two new cases (`account.invitation_queued`,
+  `account.reset_queued`).
+- Browser check: `e2e/cr1.spec.ts`. Email is turned on, a person is added,
+  "Invitation emailed" is shown, and the person opens the captured link,
+  chooses a password and signs in.
+
+**Commands and results (final run, on this code)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **703 passed, 0 failed**, 26 files |
+| Browser checks, run separately | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, cr2 1, **cr1 1** passed. m5 not rerun (aged fixture, step 1) |
+| `npm run build` | Pass, demo exclusion included |
+| `npm run check:production-server` | **20 passed, 0 failed** |
+
+**Evidence:** `docs/evidence/cr/cr1-invitation-emailed.png`.
+
+### 10. Next task
+
+Review step 4. Then, when instructed, step 5: CR2 notification emails. Each
+in-app alert also queues an email, with access rechecked when it is sent
+(D-EM-2: no commercial detail).
 
 ---
 

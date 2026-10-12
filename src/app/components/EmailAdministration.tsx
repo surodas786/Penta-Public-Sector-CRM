@@ -59,7 +59,8 @@ function StatusBadge({ status }: { status: EmailDeliveryDto['status'] }) {
   );
 }
 
-export function EmailAdministration() {
+/** `onSettingsChanged` lets the page refresh what depends on email being on (CR1 link delivery). */
+export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?: () => void }) {
   const settings = useApiResource(useCallback((signal: AbortSignal) => fetchEmailSettings(signal), []), []);
   const templates = useApiResource(useCallback((signal: AbortSignal) => fetchEmailTemplates(signal), []), []);
   const [logPage, setLogPage] = useState(1);
@@ -231,6 +232,7 @@ export function EmailAdministration() {
           onSaved={() => {
             setEditingSettings(false);
             settings.reload();
+            onSettingsChanged?.();
           }}
         />
       )}

@@ -1114,3 +1114,9 @@ export const updateEmailTemplateSchema = emailTemplateContentSchema
   .strict();
 
 export const sendTestEmailSchema = z.object({ to: emailField }).strict();
+
+/**
+ * How an invitation or reset link goes out (CR1). Omitted: by email while
+ * email delivery is on, otherwise shown once to copy (D-CR1-1).
+ */
+export const issueAccountLinkSchema = z.object({ delivery: z.enum(['email', 'manual']).optional() }).strict();

@@ -310,8 +310,9 @@ export function setAdminUserActive(id: string, active: boolean, body: Record<str
   return apiRequest(`/api/admin/users/${id}/${active ? 'reactivate' : 'deactivate'}`, { method: 'POST', body });
 }
 
-export function issueAccountLink(id: string): Promise<AccountLinkDto> {
-  return apiRequest(`/api/admin/users/${id}/link`, { method: 'POST', body: {} });
+/** CR1: emailed while email delivery is on, unless `manual` asks for a link to copy. */
+export function issueAccountLink(id: string, delivery?: 'email' | 'manual'): Promise<AccountLinkDto> {
+  return apiRequest(`/api/admin/users/${id}/link`, { method: 'POST', body: delivery ? { delivery } : {} });
 }
 
 export function fetchAdminSections(signal?: AbortSignal): Promise<{ items: AdminSectionDto[] }> {

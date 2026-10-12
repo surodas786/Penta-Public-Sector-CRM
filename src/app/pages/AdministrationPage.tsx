@@ -8,13 +8,13 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { KeyRoundIcon, PencilIcon, PlusIcon, SearchIcon, ShieldIcon, UserPlusIcon } from 'lucide-react';
+import { KeyRoundIcon, MailIcon, PencilIcon, PlusIcon, SearchIcon, ShieldIcon, UserPlusIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
-import type { AccountLinkDto, AdminSectionDto, AdminUserDto } from '../../../shared/api.js';
+import type { AdminSectionDto, AdminUserDto } from '../../../shared/api.js';
 import { ROLE_LABELS, USER_ROLES } from '../../../shared/enums.js';
 import { ApiRequestError } from '../../api/client.js';
-import { fetchAdminAudit, fetchAdminSections, fetchAdminUsers, issueAccountLink } from '../../api/endpoints.js';
+import { fetchAdminAudit, fetchAdminSections, fetchAdminUsers, fetchEmailSettings, issueAccountLink } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { inputCls } from '../../components/ui/FormFields';
 import { PageContainer, PageHeader, Pagination, Panel, tdCls, thCls } from '../../components/ui/Layout';
@@ -22,6 +22,7 @@ import { useAuth } from '../AuthContext.js';
 import {
   AccountLinkDialog,
   AccountStateDialog,
+  type ManualAccountLink,
   SectionDialog,
   UserDialog,
   type SectionAction,
@@ -62,6 +63,28 @@ const AUDIT_LABELS: Record<string, string> = {
   'section.reactivated': 'Section reactivated',
 };
 
+const ACCOUNT_EMAIL_NOTES: Record<NonNullable<AdminUserDto['accountEmail']>['status'], string> = {
+  queued: 'email queued',
+  sent: 'emailed',
+  failed: 'email failed. Use Copy link instead',
+  suppressed: 'email not sent',
+};
+
+/**
+ * One line under the status (CR1): what happened to the latest invitation or
+ * reset email, or that a pending invitation's link has expired.
+ */
+function accountLinkNote(person: AdminUserDto): string | null {
+  const email = person.accountEmail;
+  if (email && (email.status === 'queued' || email.status === 'failed' || (person.invitationPending && email.purpose === 'invitation'))) {
+    const what = email.purpose === 'invitation' ? 'Invitation' : 'Reset link';
+    const note = `${what} ${ACCOUNT_EMAIL_NOTES[email.status]}`;
+    return email.status === 'suppressed' && email.statusDetail ? `${note}: ${email.statusDetail}` : note;
+  }
+  if (person.invitationPending && !person.linkActive) return 'No active invitation link';
+  return null;
+}
+
 /** Long values (an email's whole message) are shortened in the audit list. */
 function clip(value: string | null): string | null {
   if (value === null || value.length <= 80) return value;
@@ -81,7 +104,10 @@ export function AdministrationPage() {
   const [auditPage, setAuditPage] = useState(1);
   const [userDialog, setUserDialog] = useState<{ open: boolean; user: AdminUserDto | null }>({ open: false, user: null });
   const [stateTarget, setStateTarget] = useState<AdminUserDto | null>(null);
-  const [link, setLink] = useState<{ link: AccountLinkDto; person: string } | null>(null);
+  const [link, setLink] = useState<{ link: ManualAccountLink; person: string } | null>(null);
+  const emailSettings = useApiResource(useCallback((signal: AbortSignal) => fetchEmailSettings(signal), []), []);
+  // CR1: links go by email while delivery is on and this server may send.
+  const emailOn = Boolean(emailSettings.data?.enabled && emailSettings.data.transport !== 'none');
   const [sectionAction, setSectionAction] = useState<SectionAction | null>(null);
 
   const users = useApiResource(
@@ -120,13 +146,19 @@ export function AdministrationPage() {
     audit.reload();
   };
 
-  const issueLink = async (person: AdminUserDto) => {
+  const issueLink = async (person: AdminUserDto, delivery?: 'email' | 'manual') => {
     try {
-      const issued = await issueAccountLink(person.id);
-      setLink({ link: issued, person: person.fullName });
-      audit.reload();
-    } catch (caught) {
-      toast.error(caught instanceof ApiRequestError ? caught.message : 'The link could not be issued.');
+      const issued = await issueAccountLink(person.id, delivery);
+      if (issued.delivery === 'manual') {
+        setLink({ link: issued, person: person.fullName });
+      } else {
+        toast.success(issued.purpose === 'invitation' ? 'Invitation emailed' : 'Reset link emailed', {
+          description: `${person.fullName} · ${person.email}. The link is created when the email is sent.`,
+        });
+      }
+      refresh();
+    } catch (error) {
+      toast.error(error instanceof ApiRequestError ? error.message : 'The link could not be issued.');
     }
   };
 
@@ -231,6 +263,9 @@ export function AdministrationPage() {
                         >
                           {!person.active ? 'Inactive' : person.invitationPending ? 'Invitation pending' : 'Active'}
                         </span>
+                        {person.active && accountLinkNote(person) && (
+                          <span className="mt-0.5 block text-[11.5px] text-slate-500">{accountLinkNote(person)}</span>
+                        )}
                       </td>
                       <td className={`${tdCls} pr-4 text-right`}>
                         <span className="inline-flex gap-1.5">
@@ -243,8 +278,31 @@ export function AdministrationPage() {
                             Edit
                           </Button>
                           {person.active && (
-                            <Button size="sm" variant="ghost" icon={<KeyRoundIcon className="h-3.5 w-3.5" />} onClick={() => void issueLink(person)}>
-                              {person.invitationPending ? 'New invitation' : 'Reset link'}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={emailOn ? <MailIcon className="h-3.5 w-3.5" /> : <KeyRoundIcon className="h-3.5 w-3.5" />}
+                              onClick={() => void issueLink(person)}
+                            >
+                              {person.invitationPending
+                                ? emailOn
+                                  ? 'Email invitation'
+                                  : 'New invitation'
+                                : emailOn
+                                  ? 'Email reset link'
+                                  : 'Reset link'}
+                            </Button>
+                          )}
+                          {person.active && emailOn && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={<KeyRoundIcon className="h-3.5 w-3.5" />}
+                              onClick={() => void issueLink(person, 'manual')}
+                              title="Copy link: show a single-use link to send yourself. Any queued email for this person is cancelled."
+                            >
+                              {/* Icon only, so the row keeps its width; the name stays for screen readers. */}
+                              <span className="sr-only">Copy link</span>
                             </Button>
                           )}
                           <Button
@@ -297,7 +355,7 @@ export function AdministrationPage() {
         )}
       </Panel>
 
-      <EmailAdministration />
+      <EmailAdministration onSettingsChanged={emailSettings.reload} />
 
       <Panel title="Administrative audit" subtitle="Account and section changes. Commercial history is never shown here." bodyClassName="p-0">
         {!audit.data ? (
@@ -354,7 +412,12 @@ export function AdministrationPage() {
         onClose={() => setUserDialog({ open: false, user: null })}
         onSaved={(result) => {
           setUserDialog({ open: false, user: null });
-          if (result.link) setLink({ link: result.link, person: result.user.fullName });
+          if (result.link?.delivery === 'manual') setLink({ link: result.link, person: result.user.fullName });
+          else if (result.delivery === 'email') {
+            toast.success('Invitation emailed', {
+              description: `${result.user.fullName} · ${result.user.email}. The link is created when the email is sent.`,
+            });
+          }
           refresh();
         }}
       />

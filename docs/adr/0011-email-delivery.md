@@ -95,8 +95,19 @@ supports Node 22, and added no production audit findings.
   Until then, production records nothing as sent.
 - **Rotating `EMAIL_SECRET_KEY`** makes the stored password unreadable. The
   page says so, and the administrator enters it again.
-- **CR1** (step 4) adds invitation and reset emails through `queueEmail`. The
-  token is issued when the email is sent, so no readable link rests in the
-  queue.
+- **CR1** (step 4, implemented) adds invitation and reset emails through
+  `queueEmail`:
+  - The token is issued only by the send job. The issue is audited as
+    `account.invitation_issued` or `account.reset_issued`, with the
+    requesting administrator as actor, and the expiry counts from sending.
+  - No readable link rests in the queue, the delivery log or the audit.
+  - A retry issues a fresh link that voids the earlier one.
+  - The send is skipped if the account was deactivated, or the invitation
+    was accepted, in the meantime.
+  - "Copy link" (D-CR1-1) still shows a link once. It also cancels any
+    account email still queued for that person, which would otherwise issue
+    a newer link and void the copied one.
+  - While delivery is off, or `EMAIL_TRANSPORT=none`, the copy-the-link path
+    is the only one, exactly as in release one.
 - **CR2 notifications** (step 5) add alert emails, with access rechecked at
   send time.

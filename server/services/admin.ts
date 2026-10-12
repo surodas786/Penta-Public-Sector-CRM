@@ -44,13 +44,14 @@ import type {
 } from '../../shared/validation.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { auditEvents, opportunities, sectionMemberships, sections, users } from '../db/schema.js';
+import { accountTokens, auditEvents, emailDeliveries, opportunities, sectionMemberships, sections, users } from '../db/schema.js';
 import { conflict, forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { canAdministerAccounts } from '../policy/scope.js';
-import { issueAccountLink, revokeAccountLinks } from './accountTokens.js';
+import { issueAccountLink, revokeAccountLinks, type AccountTokenPurpose } from './accountTokens.js';
 import { diffRecords, recordAuditEvent } from './audit.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
+import { isEmailDeliveryOn, queueEmail, suppressQueuedAccountEmails } from './email.js';
 import { presentChanges } from './opportunities.js';
 
 function assertAdministrator(actor: Actor): void {
@@ -86,7 +87,21 @@ const accountSections = sql<{ id: string; name: string; active: boolean }[]>`coa
              WHERE m.user_id = "users"."id" AND m.section_id = s.id AND m.ended_at IS NULL))
 ), '[]'::json)`;
 
-const userSelection = {
+/**
+ * The latest invitation or reset email for the account (CR1), for the user
+ * table. Status only, never content.
+ */
+const accountEmailJson = sql<AdminUserDto['accountEmail']>`(
+  SELECT json_build_object(
+           'purpose', d.template_key, 'status', d.status, 'statusDetail', d.status_detail,
+           'at', to_char(coalesce(d.sent_at, d.updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+    FROM ${emailDeliveries} d
+   WHERE d.recipient_user_id = "users"."id" AND d.template_key IN ('invitation', 'password_reset')
+   ORDER BY d.created_at DESC, d.id DESC
+   LIMIT 1)`;
+
+/** Built per query: "is a link still active" depends on the current time. */
+const userSelection = () => ({
   id: users.id,
   fullName: users.fullName,
   email: users.email,
@@ -96,11 +111,16 @@ const userSelection = {
   managerName: manager.fullName,
   active: users.active,
   passwordHash: users.passwordHash,
+  accountEmail: accountEmailJson,
+  // A usable link exists: unused and not yet expired (never the link itself).
+  linkActive: sql<boolean>`EXISTS (
+    SELECT 1 FROM ${accountTokens} t
+     WHERE t.user_id = "users"."id" AND t.used_at IS NULL AND t.expires_at > ${now().toISOString()}::timestamptz)`,
   version: users.version,
-} as const;
+});
 
 function userQuery(db: Database) {
-  return db.select(userSelection).from(users).leftJoin(manager, eq(manager.id, users.managerId));
+  return db.select(userSelection()).from(users).leftJoin(manager, eq(manager.id, users.managerId));
 }
 
 type UserRow = Awaited<ReturnType<ReturnType<typeof userQuery>['execute']>>[number];
@@ -117,6 +137,8 @@ function toAdminUser(row: UserRow): AdminUserDto {
     managerName: row.managerName ?? null,
     active: row.active,
     invitationPending: row.passwordHash === null,
+    linkActive: row.linkActive,
+    accountEmail: row.accountEmail ?? null,
     version: row.version,
   };
 }
@@ -422,6 +444,72 @@ function assertFieldsFitRole(role: UserRole, sectionIds: readonly string[] | und
 }
 
 // ---------------------------------------------------------------------------
+// Invitation and reset links (SEC-030, CR1)
+// ---------------------------------------------------------------------------
+
+/** What the route knows about this deployment's email. */
+export interface LinkDeliveryContext {
+  appOrigin: string;
+  /** This deployment may send email (EMAIL_TRANSPORT is not `none`). */
+  emailAvailable: boolean;
+}
+
+const EMAIL_OFF =
+  'Email delivery is turned off, so the link cannot be emailed. Copy the link instead, or turn email on under Email delivery.';
+
+/**
+ * Delivers an invitation or reset link, inside the caller's transaction.
+ *
+ *   email   while email delivery is on (the default then): an email is queued
+ *           and the link is created only when it is sent, so neither the
+ *           administrator nor the database ever holds a readable link.
+ *   manual  the link is shown once, to deliver by hand (D-CR1-1). Any account
+ *           email still queued for the person is cancelled: sending it would
+ *           issue a newer link and silently void this one.
+ */
+async function deliverAccountLink(
+  tx: Database,
+  context: LinkDeliveryContext & { actor: Actor; requestId: string },
+  userId: string,
+  purpose: AccountTokenPurpose,
+  requested: 'email' | 'manual' | undefined,
+): Promise<AccountLinkDto> {
+  const { actor, requestId } = context;
+  const emailOn = context.emailAvailable && (await isEmailDeliveryOn(tx));
+  const delivery = requested ?? (emailOn ? 'email' : 'manual');
+
+  if (delivery === 'email') {
+    if (!emailOn) throw blocked(EMAIL_OFF);
+    const queued = await queueEmail(tx, {
+      templateKey: purpose,
+      recipientUserId: userId,
+      dedupeKey: `${purpose}:${userId}:${requestId}`,
+      createdBy: actor.id,
+    });
+    if (!queued) throw blocked(EMAIL_OFF);
+    await audit(tx, actor, {
+      entityType: 'user',
+      entityId: userId,
+      action: purpose === 'invitation' ? 'account.invitation_queued' : 'account.reset_queued',
+      after: { delivery: 'email' },
+      requestId,
+    });
+    return { purpose, delivery: 'email', url: null, expiresAt: null };
+  }
+
+  await suppressQueuedAccountEmails(tx, userId, 'Replaced by a link an administrator copied instead.');
+  const issued = await issueAccountLink(tx, { userId, purpose, createdBy: actor.id, appOrigin: context.appOrigin });
+  await audit(tx, actor, {
+    entityType: 'user',
+    entityId: userId,
+    action: purpose === 'invitation' ? 'account.invitation_issued' : 'account.reset_issued',
+    after: { expiresAt: issued.expiresAt },
+    requestId,
+  });
+  return { ...issued, delivery: 'manual' };
+}
+
+// ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
 
@@ -430,10 +518,10 @@ export async function createUser(options: {
   actor: Actor;
   command: z.output<typeof createUserSchema>;
   requestId: string;
-  appOrigin: string;
+  links: LinkDeliveryContext;
   completeClaim: CompleteClaimInTransaction;
 }): Promise<CreateUserResultDto> {
-  const { db, actor, command, requestId, appOrigin, completeClaim } = options;
+  const { db, actor, command, requestId, links, completeClaim } = options;
   assertAdministrator(actor);
 
   const { userId, link } = await db.transaction(async (tx) => {
@@ -473,26 +561,24 @@ export async function createUser(options: {
     });
     await applyMemberships(tx, created.id, sectionIds, { actor, requestId });
 
-    const issued = await issueAccountLink(tx, { userId: created.id, purpose: 'invitation', createdBy: actor.id, appOrigin });
-    await audit(tx, actor, {
-      entityType: 'user',
-      entityId: created.id,
-      action: 'account.invitation_issued',
-      after: { expiresAt: issued.expiresAt },
-      requestId,
-    });
+    const link = await deliverAccountLink(tx, { ...links, actor, requestId }, created.id, 'invitation', undefined);
 
     await completeClaim(tx, created.id);
-    return { userId: created.id, link: issued };
+    return { userId: created.id, link };
   });
 
-  return { user: await readUser(db, userId), link };
+  return {
+    user: await readUser(db, userId),
+    delivery: link.delivery,
+    link: link.delivery === 'manual' ? link : null,
+  };
 }
 
 /** A replayed create: the account, but never the link a second time. */
 export async function getCreatedUser(db: Database, actor: Actor, userId: string): Promise<CreateUserResultDto> {
   assertAdministrator(actor);
-  return { user: await readUser(db, userId), link: null };
+  const user = await readUser(db, userId);
+  return { user, delivery: user.accountEmail?.purpose === 'invitation' ? 'email' : 'manual', link: null };
 }
 
 export async function updateUser(options: {
@@ -707,15 +793,20 @@ export async function reactivateUser(options: {
   return readUser(db, userId);
 }
 
-/** Issues a fresh single-use link: an invitation if no password was ever set, otherwise a reset. */
+/**
+ * A fresh single-use link: an invitation if no password was ever set,
+ * otherwise a reset. Emailed while email delivery is on, unless the
+ * administrator asks to copy it (CR1, D-CR1-1).
+ */
 export async function issueUserLink(options: {
   db: Database;
   actor: Actor;
   userId: string;
+  delivery: 'email' | 'manual' | undefined;
   requestId: string;
-  appOrigin: string;
+  links: LinkDeliveryContext;
 }): Promise<AccountLinkDto> {
-  const { db, actor, userId, requestId, appOrigin } = options;
+  const { db, actor, userId, delivery, requestId, links } = options;
   assertAdministrator(actor);
 
   return db.transaction(async (tx) => {
@@ -723,17 +814,8 @@ export async function issueUserLink(options: {
     const target = await lockUser(tx, userId);
     if (!target.active) throw blocked('Reactivate the account before issuing a sign-in link.');
     const [row] = await tx.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, userId)).limit(1);
-    const purpose = row?.passwordHash ? 'password_reset' : 'invitation';
-
-    const link = await issueAccountLink(tx, { userId, purpose, createdBy: actor.id, appOrigin });
-    await audit(tx, actor, {
-      entityType: 'user',
-      entityId: userId,
-      action: purpose === 'invitation' ? 'account.invitation_issued' : 'account.reset_issued',
-      after: { expiresAt: link.expiresAt },
-      requestId,
-    });
-    return link;
+    const purpose: AccountTokenPurpose = row?.passwordHash ? 'password_reset' : 'invitation';
+    return deliverAccountLink(tx, { ...links, actor, requestId }, userId, purpose, delivery);
   });
 }
 

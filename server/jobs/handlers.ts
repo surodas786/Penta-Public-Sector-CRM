@@ -61,8 +61,8 @@ export function createJobHandlers(
       },
     },
     'email.send': {
-      async run(job) {
-        await deliverEmail(db, email, String(job.payload.deliveryId));
+      async run(job, requestId) {
+        await deliverEmail(db, email, String(job.payload.deliveryId), requestId);
       },
       async onFinalFailure(job) {
         await failEmailAfterRetries(db, String(job.payload.deliveryId));

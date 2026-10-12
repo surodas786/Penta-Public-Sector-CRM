@@ -10,15 +10,16 @@
  *  - Every failure produces the same message, so a link cannot be used to
  *    learn whether an account exists or why the link failed.
  *
- * Release one sends no email (requirements §1.3), so the administrator
- * receives the link once and delivers it out of band. If Penta adopts its
- * identity provider, this module is replaced rather than extended.
+ * Delivery (CR1): while email delivery is on, a link is issued only when its
+ * email is sent (services/email.ts), so the readable token exists only in
+ * that message. Otherwise, or when an administrator asks to copy it, the
+ * link is shown once to the administrator to deliver by hand. If Penta adopts
+ * its identity provider, this module is replaced rather than extended.
  */
 import { createHash, randomBytes } from 'node:crypto';
 
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 
-import type { AccountLinkDto } from '../../shared/api.js';
 import { hashPassword } from '../auth/password.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
@@ -35,6 +36,13 @@ export const INVALID_LINK_MESSAGE =
 
 export type AccountTokenPurpose = 'invitation' | 'password_reset';
 
+/** A freshly issued link: the only readable copy of its token. */
+export interface IssuedLink {
+  purpose: AccountTokenPurpose;
+  url: string;
+  expiresAt: string;
+}
+
 function digest(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
@@ -47,7 +55,7 @@ function digest(token: string): string {
 export async function issueAccountLink(
   tx: Database,
   options: { userId: string; purpose: AccountTokenPurpose; createdBy: string; appOrigin: string },
-): Promise<AccountLinkDto> {
+): Promise<IssuedLink> {
   const { userId, purpose, createdBy, appOrigin } = options;
   const issuedAt = now();
   const hours = purpose === 'invitation' ? INVITATION_LIFETIME_HOURS : RESET_LIFETIME_HOURS;
