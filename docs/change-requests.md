@@ -443,7 +443,7 @@ built if Penta confirms it. None weakens access control.
 | --- | --- | --- |
 | D-CR4-1 | Can a lead also be a salesperson member of a section they do not lead? | No. One primary role (FR-001): a lead's sections are the ones they lead |
 | D-CR4-2 | May a lead move a record between two sections they both lead? FR-070 limits cross-section transfer to management | Yes, when the lead leads both the old and new section; anything else stays management-only |
-| D-CR4-3 | When a section is deactivated, who sees its closed historical records? | Management only. The lead pointer is cleared on deactivation, and leads see only active sections they lead |
+| D-CR4-3 | When a section is deactivated, who sees its closed historical records? | Management only. The lead pointer is kept as history (changed from the proposal to clear it; see above) and grants nothing, because leads see only active sections they lead |
 | D-CR4-4 | When a lead is replaced and leads no other section, do they become a salesperson in it (today's behaviour) or keep the lead role with no section? | Today's behaviour: they become a salesperson member of that section |
 | D-CR5-1 | With several leads above one salesperson, is a single "primary" reporting line needed for Team Management? | No primary line; Team Management shows the person under each section |
 | D-CR5-2 | Can a salesperson leave a section while they own closed (Awarded or Lost) records there? | No, matching today's BR-051: transfer them, or keep the membership. The alternative is to let closed records stay under an inactive membership, visible to the section's lead and management only |

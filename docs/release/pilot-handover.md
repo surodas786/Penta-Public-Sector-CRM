@@ -128,8 +128,10 @@ local server, so emails are written as files to `EMAIL_CAPTURE_DIR`
 3. **CR5. A salesperson in two sections** (administrator, then salesperson).
    1. Add Infrastructure and Security to Rafiq's sections.
    2. Rafiq's **New opportunity** form now asks for the section.
-   3. Remove him from that section again: his records there disappear from his
-      view on the next click, although they still name him as owner.
+   3. Create a record for him in that section, then try to remove him from it:
+      refused while he owns records there, open or closed (D-CR5-2).
+      Transfer the record first; then the removal succeeds and nothing moves
+      with it.
 4. **CR1. Invitation by email** (administrator).
    1. Turn email delivery on in **Administration → Email delivery**.
    2. Add a user. The status line says the invitation was emailed.
