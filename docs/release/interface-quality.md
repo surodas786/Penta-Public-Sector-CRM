@@ -46,6 +46,17 @@ Firefox. The run refreshed the screenshots in `docs/evidence/m8/`. They now show
 Workflow filter and the Change password button, in the existing layout,
 at all three widths.
 
+**Account access in three browsers.** `e2e/accountAccess.spec.ts` covers:
+
+- signing in through stale duplicate cookies;
+- Forgot password to reset;
+- the used-link page;
+- a wrong current password;
+- the other session ending.
+
+It passes in Chromium, Edge and Firefox. Its first Firefox run timed out on a
+lost click and was made robust (see `docs/progress.md` §14).
+
 **New screens.** They reuse the existing components (dialogs, form fields,
 tables, status lines, panels, the board) and introduce no new styles:
 

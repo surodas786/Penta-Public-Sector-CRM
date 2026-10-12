@@ -149,3 +149,39 @@ bootstrap and `establishSession` (sign-in, password change) may now insert
 a row; they mark the session `insertOnSave`. Every other save is an UPDATE,
 which does nothing once the row is gone (`server/auth/sessionStore.ts`;
 regression test in `auth.test.ts`, scenario 3).
+
+## Addendum (12 October 2026) — CR1/CR3 links completed and "Forgot your password?"
+
+Added when steps 1 and 4 were checked against the full CR1/CR3 instruction.
+
+- **Opening a link never spends it.** `POST /api/auth/link-status` reports
+  `valid`, `expired`, `used` (which includes a link replaced by a newer one)
+  or `invalid`, with the link's purpose. The token travels in the body. The
+  check shares the redemption rate limit. The set-password page uses it to
+  explain an expired or used link before anyone types a password, and to
+  title the page "Activate your account" or "Choose a new password". Only
+  saving a password spends the link.
+- **Purpose-bound links.**
+  - An invitation works only while the account has no password, that is,
+    pending activation.
+  - A reset works only once the account has a password.
+  - Neither works for a disabled account, and a reset never reactivates one.
+  - This is enforced in the redemption predicate, under the token row lock.
+    Two simultaneous submissions of one link therefore give exactly one
+    success.
+- **"Forgot your password?"** (`POST /api/auth/forgot-password`). It is
+  offered on the sign-in page only while this server sends email
+  (`GET /api/auth/recovery`), and it supersedes D-CR1-2.
+  - **Same answer for every address.** The response is always the same 202
+    message. The request queues an `account.reset_request` job that carries
+    only a SHA-256 digest of the address, so the response time does not
+    depend on whether an account exists, and no typed address is kept.
+  - **Who gets an email.** The job emails an ordinary reset link to an
+    active, activated account only, at most once per 15 minutes per account.
+    It records `account.reset_requested` as a system event.
+  - **Rate limited per address:** 5 per 15 minutes.
+- **Resend limit.** Resending an invitation or reset link is limited per
+  account: 5 per 15 minutes.
+- **Referrer.** The page also declares `<meta name="referrer"
+  content="no-referrer">`, so the guarantee does not depend on the web
+  server's headers. The token stays in the URL fragment as before.

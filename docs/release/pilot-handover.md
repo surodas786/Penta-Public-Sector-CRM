@@ -132,19 +132,26 @@ local server, so emails are written as files to `EMAIL_CAPTURE_DIR`
       refused while he owns records there, open or closed (D-CR5-2).
       Transfer the record first; then the removal succeeds and nothing moves
       with it.
-4. **CR1. Invitation by email** (administrator).
+4. **CR1/CR3. Links and "Forgot your password?"** (any account, email on).
+   1. On the sign-in page, choose **Forgot your password?** and enter your
+      address. The same message appears for any address.
+   2. The captured email holds a link. Opening it shows "Choose a new
+      password"; opening it again after saving shows "This link has already
+      been used".
+   3. Any other session you had is signed out.
+5. **CR1. Invitation by email** (administrator).
    1. Turn email delivery on in **Administration → Email delivery**.
    2. Add a user. The status line says the invitation was emailed.
    3. The captured email holds the link, and the link works once.
    4. **Copy link** instead gives a manual link and cancels the queued email.
-5. **CR2. Email settings, templates and alerts** (administrator, then
+6. **CR2. Email settings, templates and alerts** (administrator, then
    salesperson).
    1. Send a test email.
    2. Edit the "Follow-up due" wording, preview it, then restore the default.
    3. Run `npm run jobs:run` after a follow-up falls due. The owner, and only
       the owner, receives one email: a link and a date, no commercial detail.
    4. The delivery log lists it without the message body.
-6. **CR6. Software Procurement** (salesperson).
+7. **CR6. Software Procurement** (salesperson).
    1. Create an opportunity with **Workflow: Software Procurement**.
    2. Record an EOI notice and mark it submitted (the stage offered is EOI
       Submitted).

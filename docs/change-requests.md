@@ -288,7 +288,7 @@ Each ships with a reviewed production SQL script. None exists yet.
 | Change | Endpoint |
 | --- | --- |
 | CR3 | `POST /api/auth/password` `{currentPassword, newPassword}`. CSRF, its own rate limiter, 204, and the current session is regenerated |
-| CR1 | `POST /api/admin/users` returns delivery state instead of always returning a link. `POST /api/admin/users/:id/link` takes `{delivery: 'email' \| 'manual'}`. `GET /api/admin/users` adds `invitationState` |
+| CR1 | `POST /api/admin/users` returns delivery state instead of always returning a link. `POST /api/admin/users/:id/link` takes `{delivery: 'email' \| 'manual'}`. `GET /api/admin/users` adds `invitationState`. Added after the step 4 review: `POST /api/auth/link-status` (what an opened link can do, without spending it), `GET /api/auth/recovery` and `POST /api/auth/forgot-password` ("Forgot your password?", same answer for every address); resends limited per account |
 | CR2 | `GET`/`PUT /api/admin/email/settings` (the password is write-only: `{password?: string \| null}`, where absent means unchanged). `POST /api/admin/email/test`. `GET /api/admin/email/templates`, `PUT /api/admin/email/templates/:key` (versioned), `POST /api/admin/email/templates/:key/preview` (synthetic values only). `GET /api/admin/email/deliveries` (paginated: status and recipient, no body). Added after the step 3 review: `POST /api/admin/email/verify` (connection check, sends nothing), `GET /api/admin/email/templates/:key/history` (saved versions, from the audit), `POST /api/admin/email/deliveries/:id/retry` (failed emails only, at most three times, audited) |
 | CR4/5 | `PATCH /api/admin/users/:id` accepts `sectionIds[]` for salespeople. `POST /api/admin/sections` requires a lead (existing lead or member to promote). `POST /api/admin/sections/:id/replace-lead` accepts an existing lead. `GET /api/auth/me` returns `sections[]`. `GET /api/lookups/opportunity-owners` returns owner-and-section pairs. The transfer request gains an optional `newSectionId` |
 | CR6 | Create and list accept and filter by `workflow`. `GET /api/opportunities/board?workflow=`. Tender create takes `phase`. An EOI outcome endpoint `POST /api/tenders/:id/eoi-outcome` |
@@ -434,7 +434,7 @@ built if Penta confirms it. None weakens access control.
 | D-EM-3 | Can users opt out of notification emails, per type? | No opt-out in this change; administrators can disable a template globally |
 | D-EM-4 | Who is emailed about an alert? (Added in step 5.) Leads and management already receive every alert for their scope in the app | Only the person responsible: the task's assignee, the tender's owner, the new owner after a transfer. Leads and management keep the in-app alert |
 | D-CR1-1 | When email is enabled, should the administrator still be able to see or copy a link manually? | Yes, as an explicit "Copy link instead" action, audited separately, for when delivery fails |
-| D-CR1-2 | Should self-service "Forgot password" on the sign-in page be added now that email exists? It is not in CR1–CR6 | Not added; it can be a separate request |
+| D-CR1-2 | Should self-service "Forgot password" on the sign-in page be added now that email exists? It is not in CR1–CR6 | Not added; it can be a separate request. **Superseded on 12 October 2026**: the step 4 instruction asks for it, so it was added (ADR 0002 addendum) |
 | D-CR3-1 | After a password change, keep the current session or sign out everywhere? | Keep the current session (regenerated id); end every other session |
 
 **Sections and leads (CR4, CR5)**

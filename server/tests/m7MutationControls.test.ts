@@ -1045,10 +1045,12 @@ describe('Milestone 7: audit and mutation controls', () => {
         ['account.invitation_accepted', 'auth.test.ts / administration.test.ts set-password flows'],
         ['account.password_reset', 'auth.test.ts / administration.test.ts set-password flows'],
         ['section.reactivated', 'administration.test.ts'],
+        ['account.reset_requested', 'accountRecovery.test.ts: the system event of the reset-request job'],
         ['report.exported', 'reports.test.ts (job), and the export case in §6 below'],
         ['report.export_downloaded', 'reports.test.ts, and §6 below'],
         // A background job kind that shares the prefix; it writes no audit event.
         ['email.send', 'not an audit action: the job kind that sends queued email (email.test.ts)'],
+        ['account.reset_request', 'not an audit action: the job kind behind "Forgot your password?" (accountRecovery.test.ts)'],
       ]);
       const covered = new Set(auditCases.flatMap((auditCase) => [...auditCase.events.map((e) => e.action), ...(auditCase.systemEvents ?? [])]));
       const { readdirSync, readFileSync } = await import('node:fs');

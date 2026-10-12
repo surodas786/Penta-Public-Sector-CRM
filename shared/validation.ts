@@ -122,6 +122,16 @@ export const setPasswordSchema = z
 
 export type SetPasswordInput = z.infer<typeof setPasswordSchema>;
 
+/** Checking a link when it is opened (CR1). The token travels in the body, never the URL. */
+export const linkStatusSchema = z
+  .object({
+    token: z.string().trim().min(20, 'This link is incomplete. Open the full link you were sent.').max(200),
+  })
+  .strict();
+
+/** Asking for a reset link from the sign-in page (CR3). */
+export const forgotPasswordSchema = z.object({ email: emailField }).strict();
+
 /** A signed-in account changing its own password (CR3). */
 export const changePasswordSchema = z
   .object({

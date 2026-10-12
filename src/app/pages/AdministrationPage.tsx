@@ -262,7 +262,7 @@ export function AdministrationPage() {
                                 : 'bg-green-50 text-green-700 ring-green-600/20'
                           }`}
                         >
-                          {!person.active ? 'Inactive' : person.invitationPending ? 'Invitation pending' : 'Active'}
+                          {!person.active ? 'Inactive' : person.invitationPending ? 'Pending activation' : 'Active'}
                         </span>
                         {person.active && accountLinkNote(person) && (
                           <span className="mt-0.5 block text-[11.5px] text-slate-500">{accountLinkNote(person)}</span>

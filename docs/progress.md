@@ -556,7 +556,111 @@ password. Then, as administrator:
 The retry button was not driven in the browser, because capture mode cannot
 produce a failure. The backend tests cover it.
 
-### 14. Next task
+### 14. Steps 1 and 4 reviewed against the full CR1/CR3 instruction (12 October 2026)
+
+CR1 (step 4) and CR3 (step 1) were checked again, point by point, against the
+fuller step 4 instruction. Five gaps were closed. **No database change**:
+the token purposes, job kinds and audit actions are all text values in
+existing tables.
+
+**Gaps closed**
+
+| Instruction | Before | Now |
+| --- | --- | --- |
+| Opening a link must not consume it; clear expired/used states | Every failure read the same, and only on submit | `POST /api/auth/link-status` (token in the body, rate limited with redemption) says `valid`, `expired`, `used` (or replaced) or `invalid`, and never spends the link. The set-password page explains each state when opened. It is titled **Activate your account** or **Choose a new password**. A link pasted into the same tab is now picked up and checked again (found by the browser check) |
+| Purpose-bound tokens; disabled accounts cannot activate | Any unexpired link set a password | An invitation works only while the account is pending activation (no password), a reset only once it is activated. Neither works for a disabled account, and a reset never reactivates one. Enforced in the redemption predicate under the token lock |
+| Forgot Password with generic responses | Not offered (D-CR1-2) | **Forgot your password?** on the sign-in page, only while this server sends email (`GET /api/auth/recovery`). `POST /api/auth/forgot-password` always answers the same 202. The job carries only a SHA-256 digest of the address, so timing and the job table reveal nothing. Only an active, activated account is emailed, at most once per 15 minutes, as a system event `account.reset_requested`. The reset ends every session |
+| Rate-limit validation and resend | Redemption only | Link checks share the redemption limit. `forgot-password`: 5 per 15 minutes per address. Resending a link: 5 per 15 minutes per account |
+| Wording | "Invitation pending" | **Pending activation** in the user table |
+
+**Also added**
+
+- `<meta name="referrer" content="no-referrer">` on the page, as well as the
+  existing `Referrer-Policy` header and the fragment-only token.
+- A three-browser check, `e2e/accountAccess.spec.ts`, now part of
+  `test:smoke` and `test:browsers`. It covers:
+  - sign-in through stale duplicate session and CSRF cookies (the
+    stale-token recovery), and a fresh session;
+  - Forgot password to reset;
+  - the used-link page;
+  - a wrong current password;
+  - the other session ending after a reset and after a change.
+
+**Already met, confirmed in the code:**
+
+- **Accounts and links:**
+  - the administrator creates a user with role and sections;
+  - the account stays pending until a link is redeemed;
+  - redemption is one transaction: token spent, password set, sessions revoked, audit;
+  - tokens are 256-bit, store only a hash, expire and are single-use;
+  - the raw token is issued only when the email is sent, so no payload holds it;
+  - links are built from `APP_ORIGIN`, and the token is in the URL fragment, never logged;
+  - a resend revokes the earlier link, and there is an Admin resend and a copy-link action.
+- **Passwords and sessions:**
+  - administrators never see or set passwords;
+  - change password needs the current one, with the policy, argon2id, other sessions ended, this one rotated, and a confirmation email without credentials;
+  - existing activated accounts are untouched.
+
+**Placement.** The instruction says the account menu. The approved layout has
+no profile menu: Change password stays a button beside the profile chip in
+the top bar. A menu would be a redesign.
+
+**Tests added**
+
+- `server/tests/accountRecovery.test.ts` (10 tests):
+  - opening a link three times then using it, then `used`;
+  - expired after 72 hours, and replaced by a resend;
+  - an unknown token, and a disabled account: invalid; it cannot activate and stays inactive;
+  - **two simultaneous submissions**: exactly one 204, one audit, one working password;
+  - purpose binding both ways;
+  - forgot password: the same answer for unknown, pending, disabled and active (mixed-case) addresses, the job holding no address, exactly one email to the active account, a system audit event;
+  - one email per window; the reset ends the old session and the old password; a new window allows another;
+  - a disabled account is never reactivated;
+  - offered only while email is sent;
+  - rate limits: per address for forgot password and link checks, and per account for resends, with another account unaffected.
+- Audit matrix: `account.reset_requested` and the job kind registered.
+- `e2e/cr1.spec.ts`, `m3.spec.ts` and `evidence-m3.spec.ts` follow the new wording.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **739 passed, 0 failed**, 29 files (729 + 10 new) |
+| Browser checks, each in its own run | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, cr2 1, cr1 1, cr6 1, **accountAccess 1** passed. m5 fails only on the aged fixture (§12) |
+| `npm run test:browsers` | Chromium: m8 5/5, accountAccess passed. Edge: m8 5/5, accountAccess passed. Firefox: m8 5/5. The first Firefox accountAccess run timed out: the "Edit settings" click was lost while the panel re-rendered. The test now retries the click as a person would, and has a 2-minute limit. It then passed 3 times in a row in Firefox |
+| `npm run build`, `npm run check:production-server` | Pass; 20 passed, 0 failed |
+
+Evidence: `docs/evidence/cr/cr3-forgot-password.png` and `cr1-link-used.png`.
+
+**Synthetic test instructions (local, nothing leaves the machine)**
+
+1. `npm run db:up && npm run db:migrate && npm run db:seed`, then
+   `npm run dev:server` and `npm run dev`, with `EMAIL_TRANSPORT=capture`
+   (the development default). Messages land in `EMAIL_CAPTURE_DIR`.
+2. Sign in as `admin@example.com`. In **Email delivery → Edit settings**,
+   enter any host (for example `smtp.example.test`), port 587, a sender, and
+   tick "Send email from the CRM".
+3. **Activation:**
+   1. Add a user. The table shows **Pending activation**.
+   2. Open the link from the newest file in the capture folder. It reads
+      **Activate your account**.
+   3. Set a password, then open the link again: **This link has already been
+      used**.
+4. **Forgot password:**
+   1. Sign out. Choose **Forgot your password?** and enter `rafiq.hasan@example.com`.
+   2. Also try an unknown address: the message is the same.
+   3. Open the captured link, choose a new password, and confirm that a
+      browser signed in as Rafiq is signed out.
+5. **Change password:**
+   1. Signed in, use **Change password** in the top bar.
+   2. A wrong current password is refused beside its field.
+   3. A correct change signs out the other session and sends the "Password
+      changed" email to the capture folder.
+6. **Disabled account:** deactivate a pending user, then open their link:
+   **This link does not work**. It cannot be used.
+
+### 15. Next task
 
 Penta's decisions:
 

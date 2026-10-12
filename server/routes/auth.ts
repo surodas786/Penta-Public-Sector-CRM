@@ -9,7 +9,7 @@ import { Router, type Request, type RequestHandler, type Response } from 'expres
 import { eq } from 'drizzle-orm';
 
 import type { CurrentUserDto } from '../../shared/api.js';
-import { changePasswordSchema, loginSchema, setPasswordSchema } from '../../shared/validation.js';
+import { changePasswordSchema, forgotPasswordSchema, linkStatusSchema, loginSchema, setPasswordSchema } from '../../shared/validation.js';
 import { GENERIC_LOGIN_FAILURE, type ConfiguredPassport } from '../auth/passport.js';
 import {
   SESSION_COOKIE_NAME,
@@ -19,6 +19,7 @@ import {
 } from '../auth/sessionGuard.js';
 import type { Database } from '../db/client.js';
 import { users } from '../db/schema.js';
+import type { EmailRuntime } from '../email/runtime.js';
 import { CSRF_COOKIE_NAME } from '../http/csrf.js';
 import { expireShadowingCookies } from '../http/duplicateCookies.js';
 import { ApiError, unauthenticated } from '../http/errors.js';
@@ -31,8 +32,9 @@ import {
   canTransferOpportunity,
   canViewTeam,
 } from '../policy/scope.js';
-import { redeemAccountLink } from '../services/accountTokens.js';
+import { inspectAccountLink, redeemAccountLink } from '../services/accountTokens.js';
 import { changeOwnPassword } from '../services/ownPassword.js';
+import { isSelfServiceResetAvailable, requestPasswordReset, RESET_REQUESTED_MESSAGE } from '../services/passwordRecovery.js';
 import { signalJobsEnqueued } from '../jobs/queue.js';
 
 export interface AuthRouterOptions {
@@ -41,6 +43,9 @@ export interface AuthRouterOptions {
   loginRateLimiter: RequestHandler;
   recoveryRateLimiter: RequestHandler;
   passwordChangeRateLimiter: RequestHandler;
+  /** "Forgot your password?" requests, per address (CR3). */
+  forgotPasswordRateLimiter: RequestHandler;
+  email: EmailRuntime;
   csrfGuard: RequestHandler;
   generateCsrfToken: (req: Request, res: Response, options?: { overwrite?: boolean }) => string;
   idleMinutes: number;
@@ -185,6 +190,51 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
         const { token, password } = parseOrThrow(setPasswordSchema, req.body);
         await redeemAccountLink({ db, token, password, requestId: req.requestId });
         res.status(204).end();
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * Says what an opened invitation or reset link can do, without spending it
+   * (CR1), so the page can explain an expired or used link before anyone
+   * types a password. The token travels in the body; rate limited with
+   * redemption.
+   */
+  router.post('/link-status', options.recoveryRateLimiter, csrfGuard, (req, res, next) => {
+    void (async () => {
+      try {
+        const { token } = parseOrThrow(linkStatusSchema, req.body);
+        res.json(await inspectAccountLink(db, token));
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /** Whether the sign-in page offers "Forgot your password?" (CR3). */
+  router.get('/recovery', (_req, res, next) => {
+    void (async () => {
+      try {
+        res.json({ selfServiceReset: await isSelfServiceResetAvailable(db, options.email) });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * "Forgot your password?" (CR3). The answer never depends on the address;
+   * the lookup runs in the background (services/passwordRecovery.ts).
+   */
+  router.post('/forgot-password', options.forgotPasswordRateLimiter, csrfGuard, (req, res, next) => {
+    void (async () => {
+      try {
+        const { email } = parseOrThrow(forgotPasswordSchema, req.body);
+        const { queued } = await requestPasswordReset(db, options.email, email);
+        if (queued) signalJobsEnqueued();
+        res.status(202).json({ message: RESET_REQUESTED_MESSAGE });
       } catch (error) {
         next(error);
       }

@@ -3,15 +3,19 @@
  *
  * The token travels in the URL fragment, which browsers never send to a
  * server or put in a Referer header. It is read once and then removed from
- * the address bar, so it does not stay in history or on screen. Every failure
- * reads the same, as on the server.
+ * the address bar, so it does not stay in history or on screen.
+ *
+ * CR1: on opening, the page asks the server what the link can do, without
+ * spending it, so an expired or already used link is explained before anyone
+ * types a password. The link is spent only when the password is saved.
  */
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import type { AccountLinkStatusDto } from '../../../shared/api.js';
 import { PASSWORD_MIN_LENGTH } from '../../../shared/validation.js';
 import { ApiRequestError } from '../../api/client.js';
-import { setPasswordWithLink } from '../../api/endpoints.js';
+import { checkAccountLink, fetchRecoveryOptions, setPasswordWithLink } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { Field, inputCls } from '../../components/ui/FormFields';
 
@@ -22,11 +26,31 @@ function readTokenFromUrl(): string {
 }
 
 export function SetPasswordPage() {
-  const [token] = useState(readTokenFromUrl);
+  const [token, setToken] = useState(readTokenFromUrl);
+  // Counts links opened in this tab, so the same link opened again is checked again.
+  const [opened, setOpened] = useState(0);
 
-  // Once captured, take the token out of the address bar and history.
+  // Once captured, take the token out of the address bar and history. A link
+  // pasted into this same tab changes only the fragment and does not reload
+  // the page, so pick up the new token and check it afresh.
   useEffect(() => {
     if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
+    const onHashChange = () => {
+      const next = readTokenFromUrl();
+      window.history.replaceState(null, '', window.location.pathname);
+      if (!next) return;
+      setToken(next);
+      setOpened((count) => count + 1);
+      setDone(false);
+      setStatus(null);
+      setStatusError(null);
+      setPassword('');
+      setConfirm('');
+      setErrors({});
+      setFormError(null);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -34,6 +58,43 @@ export function SetPasswordPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  const [status, setStatus] = useState<AccountLinkStatusDto | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [selfServiceReset, setSelfServiceReset] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    checkAccountLink(token).then(
+      (result) => {
+        if (!cancelled) setStatus(result);
+      },
+      (error: unknown) => {
+        if (!cancelled) setStatusError(error instanceof ApiRequestError ? error.message : 'This link could not be checked. Try again.');
+      },
+    );
+    fetchRecoveryOptions().then(
+      (options) => {
+        if (!cancelled) setSelfServiceReset(options.selfServiceReset);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [token, opened]);
+
+  const isInvitation = status?.purpose === 'invitation';
+  const newLinkAdvice =
+    status?.purpose === 'password_reset' && selfServiceReset ? (
+      <Link to="/forgot-password" className="text-[13px] font-semibold text-brand-dark hover:underline">
+        Request a new link
+      </Link>
+    ) : (
+      <p className="text-[13px] text-slate-600">
+        Ask your system administrator to send you {isInvitation ? 'a new invitation' : 'a new link'}.
+      </p>
+    );
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -83,13 +144,53 @@ export function SetPasswordPage() {
             <>
               <h1 className="text-base font-bold text-slate-900">Link incomplete</h1>
               <p className="text-[13px] text-slate-600">
-                Open the full link your administrator sent you. If it no longer works, ask them for a new one.
+                Open the full link from your email. If it no longer works, ask for a new one.
+              </p>
+            </>
+          ) : statusError ? (
+            <>
+              <h1 className="text-base font-bold text-slate-900">Link not checked</h1>
+              <p role="alert" className="text-[13px] text-slate-600">
+                {statusError}
+              </p>
+            </>
+          ) : !status ? (
+            <p className="text-[13px] text-slate-500" role="status">
+              Checking your link…
+            </p>
+          ) : status.state === 'expired' ? (
+            <>
+              <h1 className="text-base font-bold text-slate-900">This link has expired</h1>
+              <p className="text-[13px] text-slate-600">
+                {isInvitation ? 'Invitation links work for 72 hours.' : 'Reset links work for 24 hours.'} Nothing was changed.
+              </p>
+              {newLinkAdvice}
+            </>
+          ) : status.state === 'used' ? (
+            <>
+              <h1 className="text-base font-bold text-slate-900">This link has already been used</h1>
+              <p className="text-[13px] text-slate-600">
+                Each link works once, and a newer link replaces an older one. If you have already chosen your password,
+                sign in with it.
+              </p>
+              <Link to="/sign-in" className="text-[13px] font-semibold text-brand-dark hover:underline">
+                Go to sign in
+              </Link>
+              {newLinkAdvice}
+            </>
+          ) : status.state === 'invalid' ? (
+            <>
+              <h1 className="text-base font-bold text-slate-900">This link does not work</h1>
+              <p className="text-[13px] text-slate-600">
+                It may be incomplete, or the account may no longer be active. Ask your system administrator for help.
               </p>
             </>
           ) : (
             <form onSubmit={(event) => void submit(event)} noValidate className="flex flex-col gap-4">
               <div>
-                <h1 className="text-base font-bold text-slate-900">Choose your password</h1>
+                <h1 className="text-base font-bold text-slate-900">
+                  {isInvitation ? 'Activate your account' : 'Choose a new password'}
+                </h1>
                 <p className="mt-1 text-[13px] text-slate-500">
                   Use at least {PASSWORD_MIN_LENGTH} characters. A short phrase is easier to remember than a complex word.
                 </p>

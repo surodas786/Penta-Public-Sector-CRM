@@ -14,6 +14,9 @@
  *   email.send             sends one queued email (CR2), re-checking that
  *                          delivery, the template and the recipient are
  *                          still on; marked failed after the last attempt.
+ *   account.reset_request  a "Forgot your password?" request (CR3): finds
+ *                          the account by the address digest and queues its
+ *                          reset email, at most once per window.
  *
  * Every handler is idempotent, so a retry after a partial failure is safe.
  */
@@ -27,6 +30,7 @@ import type { JobsConfig } from '../env.js';
 import { deliverEmail, failEmailAfterRetries } from '../services/email.js';
 import { failExportAfterRetries, generateExport, purgeExpiredExports } from '../services/exports.js';
 import { pruneExpiredIdempotencyRecords } from '../services/idempotency.js';
+import { processPasswordResetRequest } from '../services/passwordRecovery.js';
 import { generateDeadlineAlerts, generateOwnershipAlerts, runNotificationScan } from '../services/notifications.js';
 import { enqueueJob, type JobHandlers } from './queue.js';
 
@@ -66,6 +70,11 @@ export function createJobHandlers(
       },
       async onFinalFailure(job) {
         await failEmailAfterRetries(db, String(job.payload.deliveryId));
+      },
+    },
+    'account.reset_request': {
+      async run(job, requestId) {
+        await processPasswordResetRequest(db, String(job.payload.addressDigest ?? ''), requestId);
       },
     },
     housekeeping: {

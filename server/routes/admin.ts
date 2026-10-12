@@ -74,6 +74,8 @@ export function createAdminRouter(options: {
   csrfGuard: RequestHandler;
   appOrigin: string;
   email: EmailRuntime;
+  /** Limits resending a link to one account (CR1). */
+  accountLinkRateLimiter?: RequestHandler;
 }): Router {
   const { db, csrfGuard, appOrigin } = options;
   const router = Router();
@@ -147,6 +149,7 @@ export function createAdminRouter(options: {
 
   router.post(
     '/users/:id/link',
+    ...(options.accountLinkRateLimiter ? [options.accountLinkRateLimiter] : []),
     csrfGuard,
     handle(async (req, res) => {
       const { delivery } = parseOrThrow(issueAccountLinkSchema, req.body ?? {});

@@ -52,7 +52,7 @@ test('capture Milestone 3 screens', async ({ page }) => {
 
   // --- The invited person's page (no sign-in needed) -----------------------
   await page.goto(url);
-  await expect(page.getByRole('heading', { name: 'Choose your password' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Activate your account' })).toBeVisible();
   await shot('19-set-password-desktop-1440');
 
   // --- Management --------------------------------------------------------------

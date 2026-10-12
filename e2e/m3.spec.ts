@@ -52,14 +52,14 @@ test('an administrator invites a person, who sets a password and signs in', asyn
   const url = await linkDialog.getByLabel('Link').inputValue();
   expect(url).toMatch(/\/set-password#token=/);
   await linkDialog.getByRole('button', { name: 'Done' }).click();
-  await expect(page.getByRole('row').filter({ hasText: 'lamia.chowdhury@example.com' }).getByText('Invitation pending')).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'lamia.chowdhury@example.com' }).getByText('Pending activation')).toBeVisible();
 
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/sign-in$/);
 
   // The person opens the link, chooses a password and signs in.
   await page.goto(url);
-  await expect(page.getByRole('heading', { name: 'Choose your password' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Activate your account' })).toBeVisible();
   // The token is taken out of the address bar once read.
   await expect(page).toHaveURL(/\/set-password$/);
   await page.getByLabel('New password').fill(NEW_PASSWORD);
@@ -71,12 +71,11 @@ test('an administrator invites a person, who sets a password and signs in', asyn
   await expect(page.getByText('Opportunities you own')).toBeVisible();
   await page.getByRole('button', { name: 'Sign out' }).click();
 
-  // The same link cannot be used twice.
+  // The same link cannot be used twice: opened again, it says so before
+  // anyone types a password (CR1).
   await page.goto(url);
-  await page.getByLabel('New password').fill('yet another long passphrase');
-  await page.getByLabel('Repeat the password').fill('yet another long passphrase');
-  await page.getByRole('button', { name: 'Set password' }).click();
-  await expect(page.getByText(/invalid, has already been used, or has expired/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'This link has already been used' })).toBeVisible();
+  await expect(page.getByLabel('New password')).toHaveCount(0);
 });
 
 test('a section lead reassigns a record and the previous owner loses it', async ({ page }) => {

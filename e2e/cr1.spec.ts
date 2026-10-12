@@ -67,7 +67,7 @@ test('an emailed invitation lets a new person choose a password and sign in', as
 
   // The address also appears in the email delivery log; this is the user table row.
   const row = page.getByRole('row').filter({ hasText: PERSON }).filter({ hasText: 'Management' });
-  await expect(row.getByText('Invitation pending')).toBeVisible();
+  await expect(row.getByText('Pending activation')).toBeVisible();
   await expect(row.getByRole('button', { name: 'Email invitation' })).toBeVisible();
   await expect(row.getByRole('button', { name: 'Copy link' })).toBeVisible();
   await expect(async () => {
@@ -84,7 +84,7 @@ test('an emailed invitation lets a new person choose a password and sign in', as
   const link = /(http\S+\/set-password#token=[\w-]+)/.exec(message.text)?.[1];
   expect(link).toBeTruthy();
   await page.goto(link!);
-  await expect(page.getByRole('heading', { name: 'Choose your password' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Activate your account' })).toBeVisible();
   await page.getByLabel(/^New password/).fill(CHOSEN);
   await page.getByLabel(/Repeat the password/).fill(CHOSEN);
   await page.getByRole('button', { name: 'Set password' }).click();

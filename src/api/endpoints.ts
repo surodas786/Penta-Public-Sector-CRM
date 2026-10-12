@@ -7,6 +7,7 @@
  */
 import type {
   AccountLinkDto,
+  AccountLinkStatusDto,
   ActivityDto,
   ContactDetailDto,
   ContactListItemDto,
@@ -34,6 +35,7 @@ import type {
   OrganizationSummaryDto,
   OwnerOptionDto,
   Paginated,
+  RecoveryOptionsDto,
   TeamDto,
   DashboardDto,
   NotificationDto,
@@ -398,6 +400,23 @@ export async function setPasswordWithLink(token: string, password: string): Prom
     body: { token, password },
     suppressUnauthenticatedNotice: true,
   });
+}
+
+/** What an opened link can do; never spends it (CR1). */
+export async function checkAccountLink(token: string): Promise<AccountLinkStatusDto> {
+  await fetchCsrfToken();
+  return apiRequest<AccountLinkStatusDto>('/api/auth/link-status', { method: 'POST', body: { token }, suppressUnauthenticatedNotice: true });
+}
+
+/** Whether "Forgot your password?" is offered (CR3). */
+export function fetchRecoveryOptions(signal?: AbortSignal): Promise<RecoveryOptionsDto> {
+  return apiRequest<RecoveryOptionsDto>('/api/auth/recovery', { signal, suppressUnauthenticatedNotice: true });
+}
+
+/** Asks for a reset link. The answer is the same whether or not the address has an account. */
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+  await fetchCsrfToken();
+  return apiRequest<{ message: string }>('/api/auth/forgot-password', { method: 'POST', body: { email }, suppressUnauthenticatedNotice: true });
 }
 
 // --- Organization directory (M4) ---------------------------------------------

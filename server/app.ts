@@ -187,6 +187,31 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
     },
   });
 
+  // "Forgot your password?" (CR3): few requests per address, so the form
+  // cannot be used to flood someone's mailbox or to probe addresses quickly.
+  const forgotPasswordRateLimiter: RequestHandler = rateLimit({
+    windowMs: loginRateLimit?.windowMs ?? 15 * 60_000,
+    limit: loginRateLimit?.limit ?? 5,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new ApiError(429, 'rate_limited', 'Too many requests. Wait a few minutes before trying again.'));
+    },
+  });
+
+  // Resending an invitation or reset link (CR1), per account: a resend voids
+  // the previous link, so repeated clicks should not churn links or mail.
+  const accountLinkRateLimiter: RequestHandler = rateLimit({
+    windowMs: loginRateLimit?.windowMs ?? 15 * 60_000,
+    limit: loginRateLimit?.limit ?? 5,
+    keyGenerator: (req) => `account-link:${String(req.params.id ?? '')}`,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new ApiError(429, 'rate_limited', 'Too many links for this account. Wait a few minutes before sending another.'));
+    },
+  });
+
   app.get('/api/health', (_req, res) => {
     // Liveness. No secrets, no configuration, no counts (NFR-003).
     res.json({ status: 'ok' });
@@ -215,6 +240,8 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
       loginRateLimiter,
       recoveryRateLimiter,
       passwordChangeRateLimiter,
+      forgotPasswordRateLimiter,
+      email,
       csrfGuard,
       generateCsrfToken,
       idleMinutes: config.sessionIdleMinutes,
@@ -247,7 +274,7 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   app.use('/api/exports', createExportsRouter({ db: database.db, csrfGuard }));
   app.use('/api/search', createSearchRouter({ db: database.db }));
   app.use('/api/notifications', createNotificationsRouter({ db: database.db, csrfGuard }));
-  app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin, email }));
+  app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin, email, accountLinkRateLimiter }));
 
   // NOTE: no demo, seed or reset endpoint is registered in any environment.
   // Demo data lives in the separate synthetic frontend build (plan 4.4).

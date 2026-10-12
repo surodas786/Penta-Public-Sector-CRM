@@ -331,6 +331,20 @@ export interface AdminSectionDto {
  * stored in readable form. Delivered to the person out of band: release one
  * sends no email (requirements §1.3).
  */
+/**
+ * What an opened invitation or reset link can do (CR1). Opening a link never
+ * spends it. `used` also covers a link replaced by a newer one.
+ */
+export interface AccountLinkStatusDto {
+  state: 'valid' | 'expired' | 'used' | 'invalid';
+  purpose: 'invitation' | 'password_reset' | null;
+}
+
+/** Whether the sign-in page offers "Forgot your password?" (CR3). */
+export interface RecoveryOptionsDto {
+  selfServiceReset: boolean;
+}
+
 export type AccountLinkDto =
   | {
       purpose: 'invitation' | 'password_reset';

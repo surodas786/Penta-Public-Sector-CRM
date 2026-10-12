@@ -68,7 +68,7 @@ export const EMAIL_TEMPLATES: Record<EmailTemplateKey, EmailTemplateDefinition> 
   },
   password_reset: {
     label: 'Password reset',
-    sentWhen: 'An administrator issues a password reset link.',
+    sentWhen: 'An administrator issues a reset link, or the person asks for one on the sign-in page.',
     placeholders: ['recipientName', 'link', 'expiresAt', 'appName'],
     required: ['link'],
     defaultSubject: 'Reset your {{appName}} password',

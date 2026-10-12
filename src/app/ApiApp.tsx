@@ -17,6 +17,7 @@ import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
 // bundle every salesperson downloads.
 const AdministrationPage = lazy(() => import('./pages/AdministrationPage.js').then((m) => ({ default: m.AdministrationPage })));
 const SetPasswordPage = lazy(() => import('./pages/SetPasswordPage.js').then((m) => ({ default: m.SetPasswordPage })));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage.js').then((m) => ({ default: m.ForgotPasswordPage })));
 const OpportunityDetailPage = lazy(() =>
   import('./pages/OpportunityDetailPage.js').then((m) => ({ default: m.OpportunityDetailPage })),
 );
@@ -71,6 +72,14 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/sign-in" element={<SignInRoute />} />
+      <Route
+        path="/forgot-password"
+        element={
+          <Lazy>
+            <ForgotPasswordPage />
+          </Lazy>
+        }
+      />
       {/* Reached from an invitation or reset link, signed in or not. */}
       <Route
         path="/set-password"

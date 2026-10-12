@@ -5,10 +5,11 @@
  * switcher. Built in the approved navy/teal palette with the same form
  * primitives as every other screen (FR-010, A.6 deviation 1).
  */
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { ApiRequestError } from '../../api/client.js';
+import { fetchRecoveryOptions } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { Field, inputCls } from '../../components/ui/FormFields';
 import { useAuth } from '../AuthContext.js';
@@ -22,6 +23,17 @@ export function LoginPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // CR3: offered only while this deployment sends email.
+  const [selfServiceReset, setSelfServiceReset] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchRecoveryOptions(controller.signal).then(
+      (options) => setSelfServiceReset(options.selfServiceReset),
+      () => setSelfServiceReset(false),
+    );
+    return () => controller.abort();
+  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -110,10 +122,15 @@ export function LoginPage() {
             {submitting ? 'Signing in…' : 'Sign in'}
           </Button>
 
-          <p className="text-[11.5px] leading-relaxed text-slate-500">
-            Forgotten your password? Contact your system administrator. Password recovery by email
-            is not enabled in this release.
-          </p>
+          {selfServiceReset ? (
+            <Link to="/forgot-password" className="text-[12.5px] font-semibold text-brand-dark hover:underline">
+              Forgot your password?
+            </Link>
+          ) : (
+            <p className="text-[11.5px] leading-relaxed text-slate-500">
+              Forgotten your password? Contact your system administrator.
+            </p>
+          )}
         </form>
       </div>
     </div>

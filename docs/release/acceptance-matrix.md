@@ -199,6 +199,9 @@ checks named below.
 | CR1-AC5 | Resend supersedes; the user table shows invitation state | Complete | `invitations.test.ts`, `e2e/cr1.spec.ts` | — |
 | CR1-AC6 | Disabled or failed delivery is visible; manual "copy link" fallback | Complete | `invitations.test.ts` (failure, then fallback) | — |
 | CR1-AC7 | Reset links use the same email path | Complete | `invitations.test.ts` (reset ends sessions) | — |
+| CR1 link states | Opening a link never spends it; expired, used (or replaced) and invalid links are explained on opening; "Activate your account" for an invitation | Complete | `accountRecovery.test.ts`; `e2e/accountAccess.spec.ts` (three browsers) | — |
+| CR1 purpose and concurrency | An invitation only activates a pending account, a reset only resets an activated one; a disabled account can do neither; two simultaneous uses give one success | Complete | `accountRecovery.test.ts` | — |
+| CR1 rate limits | Link checks share the redemption limit; resends limited per account | Complete | `accountRecovery.test.ts` | — |
 | CR2-AC1 | SMTP settings managed by the administrator; password encrypted at rest, never returned, logged or audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
 | CR2-AC2 | Test email, with its result reported and audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | Real mail server not yet configured (D-EM-1) |
 | CR2-AC3 | Template wording edited; placeholders allowlisted; synthetic preview | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
@@ -219,6 +222,8 @@ checks named below.
 | CR3-AC3 | Other sessions end; this one continues without extending its limit | Complete | `ownPassword.test.ts` | — |
 | CR3-AC4 | Audited without password material; "password changed" email while email is on | Complete | `ownPassword.test.ts`, `email.test.ts` | — |
 | CR3-AC5 | Administrators still cannot set another user's password | Complete | `ownPassword.test.ts` | — |
+| CR3 forgot password | Offered only while email is sent; the same answer for every address; only active, activated accounts emailed, at most once per 15 minutes; the reset ends every session and never reactivates a disabled account; limited per address | Complete | `accountRecovery.test.ts`; `e2e/accountAccess.spec.ts` (three browsers) | Supersedes D-CR1-2 |
+| CR3 placement | Change password beside the profile chip in the top bar | Complete | `e2e/cr3.spec.ts` | There is no profile menu in the approved layout; a menu would be a redesign |
 | CR4-AC1 | One lead can lead several active sections | Complete | `sections.test.ts`, `e2e/cr45.spec.ts` | — |
 | CR4-AC2 | Every active section has exactly one active lead, in the database too | Complete | `sections.test.ts` (CHECK and deferred triggers, runtime role) | — |
 | CR4-AC3 | A lead sees the sections they lead now; a lost section is gone on the next request | Complete | `sections.test.ts` | — |
