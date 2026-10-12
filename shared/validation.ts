@@ -21,6 +21,7 @@ import {
   isTerminalStage,
   type OpportunityStage,
 } from './enums.js';
+import { EMAIL_SECURITY_MODES } from './email.js';
 import { isValidMoneyString } from './money.js';
 import { DASHBOARD_RANGES, EXPORT_KINDS, REPORT_KEYS, SEARCH_MIN_LENGTH, SEARCH_RESULT_TYPES } from './reporting.js';
 
@@ -115,6 +116,19 @@ export const setPasswordSchema = z
 
 export type SetPasswordInput = z.infer<typeof setPasswordSchema>;
 
+/** A signed-in account changing its own password (CR3). */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Enter your current password.').max(512),
+    newPassword: z
+      .string()
+      .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters.`)
+      .max(256, 'Use at most 256 characters.'),
+  })
+  .strict();
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
 // ---------------------------------------------------------------------------
 // Ownership transfer (FR-070, BR-050)
 // ---------------------------------------------------------------------------
@@ -123,6 +137,12 @@ export const transferOpportunitySchema = z
   .object({
     version: z.number().int().positive('Reload the record and try again.'),
     newOwnerId: uuidField,
+    /**
+     * Required only when the new owner works in more than one section the
+     * actor may assign to and the record's current section is not one of
+     * them (CR5). Validated against the database, never trusted.
+     */
+    newSectionId: uuidField.optional(),
     reason: z
       .string()
       .trim()
@@ -142,16 +162,23 @@ const optionalId = z.union([uuidField, z.null()]).optional();
 const adminReason = z.string().trim().max(2000, 'Use at most 2000 characters.').optional();
 
 /**
- * Section and reporting line are validated against the database by the
- * server; for a salesperson the reporting line is derived from the section's
- * active lead and any supplied value is only checked against it.
+ * A salesperson's sections (CR5). Validated against the database by the
+ * server: each must exist and be active. Their reporting line is the lead of
+ * each section, never a supplied value. Leads take their sections from the
+ * sections they are appointed to lead, so they are given none here.
  */
+const sectionIdsField = z
+  .array(uuidField)
+  .max(50, 'Choose at most 50 sections.')
+  .refine((ids) => new Set(ids).size === ids.length, 'Each section can be chosen once.');
+
 export const createUserSchema = z
   .object({
     fullName: personName,
     email: emailField,
     role: z.enum(USER_ROLES),
-    sectionId: optionalId,
+    sectionIds: sectionIdsField.optional(),
+    /** A lead's management manager; nothing else accepts one. */
     managerId: optionalId,
   })
   .strict();
@@ -164,8 +191,10 @@ export const updateUserSchema = z
     fullName: personName.optional(),
     email: emailField.optional(),
     role: z.enum(USER_ROLES).optional(),
-    sectionId: optionalId,
+    sectionIds: sectionIdsField.optional(),
     managerId: optionalId,
+    /** Recorded with membership changes and role changes. */
+    reason: adminReason,
   })
   .strict();
 
@@ -184,6 +213,11 @@ export const sectionNameSchema = z
   })
   .strict();
 
+/** CR4: an active section always has a lead, so one is named at creation. */
+export const createSectionSchema = sectionNameSchema
+  .extend({ leadId: uuidField })
+  .strict();
+
 export const renameSectionSchema = sectionNameSchema
   .extend({ version: z.number().int().positive('Reload the section and try again.') })
   .strict();
@@ -200,6 +234,8 @@ export const sectionStateSchema = z
   .object({
     version: z.number().int().positive('Reload the section and try again.'),
     reason: adminReason,
+    /** Reactivation only: the lead, if the section's former lead cannot resume (CR4). */
+    leadId: uuidField.optional(),
   })
   .strict();
 
@@ -1027,3 +1063,54 @@ export const createExportSchema = z
     filters: z.record(z.string(), z.string().max(200)).optional().default({}),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// Email administration (CR2)
+// ---------------------------------------------------------------------------
+
+/** No line breaks: these values end up in mail headers. */
+const singleLine = (max: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .max(max, `Use at most ${max} characters.`)
+    .refine((value) => !/[\r\n]/.test(value), `${label} must be on one line.`);
+
+export const updateEmailSettingsSchema = z
+  .object({
+    /** 0 while no settings have ever been saved. */
+    version: z.number().int().min(0),
+    enabled: z.boolean(),
+    host: z
+      .string()
+      .trim()
+      .max(255, 'Use at most 255 characters.')
+      .regex(/^[A-Za-z0-9.-]+$/, 'Enter a host name such as smtp.example.com.')
+      .nullable(),
+    port: z.number().int().min(1, 'Enter a port between 1 and 65535.').max(65535, 'Enter a port between 1 and 65535.').nullable(),
+    security: z.enum(EMAIL_SECURITY_MODES),
+    username: singleLine(255, 'The user name').nullable(),
+    /** Absent: keep the stored password. Null: remove it. Never returned by the API. */
+    password: z.string().max(1000, 'Use at most 1000 characters.').nullable().optional(),
+    fromName: singleLine(100, 'The sender name').nullable(),
+    fromAddress: emailField.nullable(),
+    replyTo: emailField.nullable(),
+  })
+  .strict();
+
+export const emailTemplateContentSchema = z
+  .object({
+    subject: singleLine(200, 'The subject').pipe(z.string().min(1, 'Enter a subject.')),
+    bodyText: z.string().min(1, 'Enter the message.').max(10_000, 'Use at most 10000 characters.'),
+  })
+  .strict();
+
+export const updateEmailTemplateSchema = emailTemplateContentSchema
+  .extend({
+    /** 0 while the template still uses the default wording. */
+    version: z.number().int().min(0),
+    enabled: z.boolean(),
+  })
+  .strict();
+
+export const sendTestEmailSchema = z.object({ to: emailField }).strict();

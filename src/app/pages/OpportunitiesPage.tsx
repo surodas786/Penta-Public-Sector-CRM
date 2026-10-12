@@ -41,6 +41,7 @@ import {
   thCls,
 } from '../../components/ui/Layout';
 import { useAuth } from '../AuthContext.js';
+import { sectionNames } from '../sections.js';
 import { useApiResource } from '../useApiResource.js';
 import { OpportunityCreateDialog } from '../components/OpportunityCreateDialog.js';
 import { ErrorPanel, LoadingPanel, LoadingRows } from '../components/Feedback.js';
@@ -227,7 +228,9 @@ export function OpportunitiesPage() {
     user?.role === 'management'
       ? 'All sections'
       : user?.role === 'lead'
-        ? `${user.section?.name ?? 'Your section'} — every opportunity in your section`
+        ? user.sections.length > 1
+          ? `${sectionNames(user)} — every opportunity in the sections you lead`
+          : `${sectionNames(user) || 'Your section'} — every opportunity in your section`
         : 'Opportunities you own';
 
   const shownTotal =

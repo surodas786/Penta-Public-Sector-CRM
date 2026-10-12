@@ -82,7 +82,7 @@ function notifyUnauthenticated(): void {
 // --- Request ----------------------------------------------------------------
 
 export interface ApiRequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   /** A file sent as the raw request body instead of JSON (document uploads). */
   file?: Blob;

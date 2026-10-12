@@ -40,8 +40,10 @@ test('an administrator invites a person, who sets a password and signs in', asyn
   await form.getByLabel('Full name').fill('Lamia Chowdhury');
   await form.getByLabel('Email').fill('lamia.chowdhury@example.com');
   await form.getByLabel('Role').selectOption('sales');
-  await form.getByLabel('Section').selectOption({ label: 'Government Applications' });
-  await expect(form.locator('#u-mgr-sales')).toHaveValue('Nadia Islam');
+  // Sections are a checklist since CR5; Government Applications only.
+  await form.getByLabel('Government Applications').check();
+  await form.getByLabel('Infrastructure & Security').uncheck();
+  await expect(form.locator('#u-mgr-sales')).toHaveValue('Nadia Islam (Government Applications)');
   await form.getByRole('button', { name: 'Add user' }).click();
 
   // The single-use link is shown once.

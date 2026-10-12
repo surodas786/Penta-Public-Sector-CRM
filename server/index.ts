@@ -11,6 +11,7 @@ import { createDatabase } from './db/client.js';
 import { loadServerConfig } from './env.js';
 import { describeForLog } from './http/errors.js';
 import { cleanupAbandonedUploads, scanPendingRevisions } from './services/documents.js';
+import { createEmailRuntime } from './email/runtime.js';
 import { startJobWorker } from './jobs/worker.js';
 
 /** Abandoned-upload cleanup and pending-scan retry (SEC-010). */
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
   // Notifications, queued exports and housekeeping (FR-090, NFR-003). A
   // deployment may run them elsewhere instead (`npm run jobs:run`).
   if (config.jobs.enabled) {
-    startJobWorker(database.db, config.jobs);
+    startJobWorker(database.db, config.jobs, createEmailRuntime(config));
   } else {
     console.warn('JOBS_ENABLED=false: notifications and CSV exports wait for `npm run jobs:run`.');
   }

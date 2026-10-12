@@ -40,12 +40,20 @@ export function cookieValues(req: Request, name: string): string[] {
  * cookies on Path=/, so a browser that treats the Domain variant as our own
  * cookie gets it back in the same response.
  */
-export function expireShadowingCookies(req: Request, res: Response, names: readonly string[]): void {
+export function expireShadowingCookies(
+  req: Request,
+  res: Response,
+  names: readonly string[],
+  options: { secure: boolean },
+): void {
   const segments = req.originalUrl.split('?')[0]!.split('/').filter(Boolean);
   const paths = segments.map((_segment, index) => `/${segments.slice(0, index + 1).join('/')}`);
+  // The same attributes as the cookies themselves, so production never emits
+  // a Set-Cookie without Secure and SameSite=Strict.
+  const attributes = { secure: options.secure, sameSite: 'strict' as const };
 
   for (const name of names) {
-    for (const path of paths) res.clearCookie(name, { path });
-    res.clearCookie(name, { path: '/', domain: req.hostname });
+    for (const path of paths) res.clearCookie(name, { ...attributes, path });
+    res.clearCookie(name, { ...attributes, path: '/', domain: req.hostname });
   }
 }

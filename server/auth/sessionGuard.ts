@@ -1,19 +1,18 @@
 /**
  * Resolves and re-validates the authenticated account on every request.
  *
- * Nothing is trusted from the cookie except the account id. Role, section and
- * active state are read fresh from the database, so a deactivation, role change
- * or section change takes effect on the account's next request (SEC-005).
+ * Nothing is trusted from the cookie except the account id. Role, sections and
+ * active state are read fresh from the database, so a deactivation, role change,
+ * lead replacement or membership change takes effect on the account's next
+ * request (SEC-005).
  */
-import { eq } from 'drizzle-orm';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import { BACKGROUND_REQUEST_HEADER } from '../../shared/api.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { sections, users } from '../db/schema.js';
 import { forbidden, unauthenticated } from '../http/errors.js';
-import type { Actor } from '../policy/actor.js';
+import { loadActor } from '../policy/actor.js';
 import { canAccessSalesRecords } from '../policy/scope.js';
 
 export const SESSION_COOKIE_NAME = 'penta.sid';
@@ -34,13 +33,17 @@ export function destroySession(req: Request): Promise<void> {
   });
 }
 
-/** Stamps the expiry bookkeeping this module enforces. Called once, at login. */
+/**
+ * Stamps the expiry bookkeeping this module enforces. Called at login, and
+ * when a password change re-issues the session; that passes the original
+ * `absoluteExpiresAt` so re-issuing never extends the absolute limit.
+ */
 export function stampSessionLifetimes(
   req: Request,
-  options: { idleMinutes: number; absoluteMinutes: number; userSessionVersion: number },
+  options: { idleMinutes: number; absoluteMinutes: number; userSessionVersion: number; absoluteExpiresAt?: number },
 ): void {
   const current = now().getTime();
-  req.session.absoluteExpiresAt = current + options.absoluteMinutes * 60_000;
+  req.session.absoluteExpiresAt = options.absoluteExpiresAt ?? current + options.absoluteMinutes * 60_000;
   req.session.idleExpiresAt = current + options.idleMinutes * 60_000;
   req.session.userSessionVersion = options.userSessionVersion;
 }
@@ -71,24 +74,10 @@ export function resolveActor({ db, idleMinutes }: SessionGuardOptions): RequestH
           return;
         }
 
-        const [account] = await db
-          .select({
-            id: users.id,
-            fullName: users.fullName,
-            email: users.email,
-            role: users.role,
-            sectionId: users.sectionId,
-            sectionName: sections.name,
-            active: users.active,
-            sessionVersion: users.sessionVersion,
-          })
-          .from(users)
-          .leftJoin(sections, eq(sections.id, users.sectionId))
-          .where(eq(users.id, sessionUser.id))
-          .limit(1);
+        const actor = await loadActor(db, sessionUser.id);
 
         // Deactivated, deleted, or privileges changed since the session began.
-        if (!account || !account.active || account.sessionVersion !== req.session.userSessionVersion) {
+        if (!actor || !actor.active || actor.sessionVersion !== req.session.userSessionVersion) {
           await destroySession(req);
           next();
           return;
@@ -100,16 +89,6 @@ export function resolveActor({ db, idleMinutes }: SessionGuardOptions): RequestH
           req.session.idleExpiresAt = current + idleMinutes * 60_000;
         }
 
-        const actor: Actor = {
-          id: account.id,
-          fullName: account.fullName,
-          email: account.email,
-          role: account.role,
-          sectionId: account.sectionId,
-          sectionName: account.sectionName,
-          active: account.active,
-          sessionVersion: account.sessionVersion,
-        };
         req.actor = actor;
         next();
       } catch (error) {

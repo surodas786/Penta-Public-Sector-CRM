@@ -25,6 +25,7 @@ import {
   opportunities,
   opportunityContacts,
   organizations,
+  sectionMemberships,
   sections,
   tenders,
   users,
@@ -126,22 +127,15 @@ export async function seedDatabase(
         TRUNCATE TABLE
           notifications, report_exports, background_jobs,
           document_revisions, document_uploads, documents, tenders,
-          activities, opportunity_contacts, contacts, account_tokens, audit_events,
+          activities, opportunity_contacts, contacts, account_tokens, audit_events, section_memberships,
+          email_deliveries, email_templates, email_settings,
           idempotency_records, follow_ups, opportunities,
           organizations, users, sections, session
         RESTART IDENTITY CASCADE
       `);
       await tx.execute(sql`ALTER SEQUENCE opportunity_reference_seq RESTART WITH 1`);
 
-      await tx.insert(sections).values(
-        seedSections.map((section) => ({
-          id: legacyUuid(section.legacyId),
-          name: section.name,
-          leadUserId: null,
-          active: section.active,
-        })),
-      );
-
+      // Users first: an active section needs its lead to exist (CR4).
       await tx.insert(users).values(
         seedUsers.map((user) => ({
           id: legacyUuid(user.legacyId),
@@ -149,18 +143,30 @@ export async function seedDatabase(
           email: user.email.toLowerCase(),
           passwordHash,
           role: user.role,
-          sectionId: user.sectionLegacyId ? legacyUuid(user.sectionLegacyId) : null,
-          managerId: user.managerLegacyId ? legacyUuid(user.managerLegacyId) : null,
+          // Only a lead's manager is recorded; salespeople report to the lead
+          // of each of their sections (CR5).
+          managerId: user.role === 'lead' && user.managerLegacyId ? legacyUuid(user.managerLegacyId) : null,
           active: user.active,
         })),
       );
 
-      // Set each section's lead now that the users exist.
-      for (const section of seedSections) {
-        await tx
-          .update(sections)
-          .set({ leadUserId: legacyUuid(section.leadLegacyId) })
-          .where(sql`${sections.id} = ${legacyUuid(section.legacyId)}`);
+      await tx.insert(sections).values(
+        seedSections.map((section) => ({
+          id: legacyUuid(section.legacyId),
+          name: section.name,
+          leadUserId: legacyUuid(section.leadLegacyId),
+          active: section.active,
+        })),
+      );
+
+      const members = seedUsers.filter((user) => user.role === 'sales' && user.sectionLegacyId);
+      if (members.length > 0) {
+        await tx.insert(sectionMemberships).values(
+          members.map((user) => ({
+            userId: legacyUuid(user.legacyId),
+            sectionId: legacyUuid(user.sectionLegacyId!),
+          })),
+        );
       }
 
       // Parents before children so the self-referencing key resolves.

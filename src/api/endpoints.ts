@@ -42,6 +42,11 @@ import type {
   ReportDto,
   ReportExportDto,
   SearchResponseDto,
+  EmailDeliveryDto,
+  EmailPreviewDto,
+  EmailSettingsDto,
+  EmailTemplateDto,
+  EmailTestResultDto,
 } from '../../shared/api.js';
 import type { ExportKind, ReportKey } from '../../shared/reporting.js';
 import { BACKGROUND_REQUEST_HEADER, FILE_NAME_HEADER } from '../../shared/api.js';
@@ -70,6 +75,18 @@ export async function signIn(email: string, password: string): Promise<void> {
 export async function signOut(): Promise<void> {
   await apiRequest<void>('/api/auth/logout', { method: 'POST' });
   setCsrfToken(null);
+}
+
+/**
+ * Changes the signed-in account's own password (CR3). The server re-issues
+ * this session under a new id, so the CSRF token it returns replaces ours.
+ */
+export async function changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+  const { csrfToken } = await apiRequest<{ csrfToken: string }>('/api/auth/password', {
+    method: 'POST',
+    body: { currentPassword, newPassword },
+  });
+  setCsrfToken(csrfToken);
 }
 
 export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUserDto> {
@@ -322,6 +339,36 @@ export function fetchAdminAudit(
   signal?: AbortSignal,
 ): Promise<Paginated<AdminAuditEntryDto>> {
   return apiRequest(`/api/admin/audit${toQuery(params)}`, { signal });
+}
+
+// --- Email administration (CR2) -----------------------------------------------
+
+export function fetchEmailSettings(signal?: AbortSignal): Promise<EmailSettingsDto> {
+  return apiRequest('/api/admin/email/settings', { signal });
+}
+
+export function updateEmailSettings(body: Record<string, unknown>): Promise<EmailSettingsDto> {
+  return apiRequest('/api/admin/email/settings', { method: 'PUT', body });
+}
+
+export function sendTestEmail(to: string): Promise<EmailTestResultDto> {
+  return apiRequest('/api/admin/email/test', { method: 'POST', body: { to } });
+}
+
+export function fetchEmailTemplates(signal?: AbortSignal): Promise<{ items: EmailTemplateDto[] }> {
+  return apiRequest('/api/admin/email/templates', { signal });
+}
+
+export function updateEmailTemplate(key: string, body: Record<string, unknown>): Promise<EmailTemplateDto> {
+  return apiRequest(`/api/admin/email/templates/${key}`, { method: 'PUT', body });
+}
+
+export function previewEmailTemplate(key: string, body: { subject: string; bodyText: string }): Promise<EmailPreviewDto> {
+  return apiRequest(`/api/admin/email/templates/${key}/preview`, { method: 'POST', body });
+}
+
+export function fetchEmailDeliveries(params: { page?: number; pageSize?: number }, signal?: AbortSignal): Promise<Paginated<EmailDeliveryDto>> {
+  return apiRequest(`/api/admin/email/deliveries${toQuery(params)}`, { signal });
 }
 
 // --- Invitations and password reset (M3) ---------------------------------------

@@ -26,6 +26,7 @@ import {
   UserDialog,
   type SectionAction,
 } from '../components/AdminDialogs.js';
+import { EmailAdministration } from '../components/EmailAdministration.js';
 import { ErrorPanel, LoadingPanel } from '../components/Feedback.js';
 import { Avatar } from '../ui/ApiBadges.js';
 import { formatInstant } from '../ui/dates.js';
@@ -48,12 +49,24 @@ const AUDIT_LABELS: Record<string, string> = {
   'account.invitation_accepted': 'Invitation accepted',
   'account.reset_issued': 'Password reset link issued',
   'account.password_reset': 'Password reset',
+  'account.password_changed': 'Password changed by the account holder',
+  'account.section_joined': 'Joined a section',
+  'account.section_left': 'Left a section',
+  'email.settings_updated': 'Email settings changed',
+  'email.template_updated': 'Email wording changed',
+  'email.test_sent': 'Test email sent',
   'section.created': 'Section created',
   'section.renamed': 'Section renamed',
   'section.lead_replaced': 'Section lead replaced',
   'section.deactivated': 'Section deactivated',
   'section.reactivated': 'Section reactivated',
 };
+
+/** Long values (an email's whole message) are shortened in the audit list. */
+function clip(value: string | null): string | null {
+  if (value === null || value.length <= 80) return value;
+  return `${value.slice(0, 77).trimEnd()}…`;
+}
 
 export function AdministrationPage() {
   const { user: me } = useAuth();
@@ -88,6 +101,16 @@ export function AdministrationPage() {
   );
 
   const all = useMemo(() => everyone.data?.items ?? [], [everyone.data]);
+
+  // A salesperson reports to the lead of each of their sections (CR5); a lead
+  // to their management manager.
+  const reportsTo = (person: AdminUserDto) => {
+    if (person.role !== 'sales') return person.managerName ?? '—';
+    const leads = person.sections
+      .map((item) => sections.data?.items.find((section) => section.id === item.id)?.leadName)
+      .filter((name): name is string => Boolean(name));
+    return [...new Set(leads)].join(', ') || '—';
+  };
   const management = all.filter((person) => person.role === 'management' && person.active);
 
   const refresh = () => {
@@ -194,8 +217,8 @@ export function AdministrationPage() {
                         <span className="block text-[11.5px] text-slate-500">{person.email}</span>
                       </td>
                       <td className={tdCls}>{ROLE_LABELS[person.role]}</td>
-                      <td className={tdCls}>{person.sectionName ?? '—'}</td>
-                      <td className={tdCls}>{person.managerName ?? '—'}</td>
+                      <td className={tdCls}>{person.sections.map((item) => item.name).join(', ') || '—'}</td>
+                      <td className={tdCls}>{reportsTo(person)}</td>
                       <td className={tdCls}>
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${
@@ -266,13 +289,15 @@ export function AdministrationPage() {
               <SectionCard
                 key={section.id}
                 section={section}
-                members={all.filter((person) => person.sectionId === section.id && person.role === 'sales')}
+                members={all.filter((person) => person.role === 'sales' && person.sections.some((item) => item.id === section.id))}
                 onAction={setSectionAction}
               />
             ))}
           </div>
         )}
       </Panel>
+
+      <EmailAdministration />
 
       <Panel title="Administrative audit" subtitle="Account and section changes. Commercial history is never shown here." bodyClassName="p-0">
         {!audit.data ? (
@@ -300,8 +325,8 @@ export function AdministrationPage() {
                         .filter((change) => change.field !== 'expiresAt')
                         .map((change) =>
                           change.before === null
-                            ? `${change.label}: ${change.after ?? '—'}`
-                            : `${change.label}: ${change.before} → ${change.after ?? '—'}`,
+                            ? `${change.label}: ${clip(change.after) ?? '—'}`
+                            : `${change.label}: ${clip(change.before)} → ${clip(change.after) ?? '—'}`,
                         )
                         .join(' · ')}
                     </p>
@@ -384,9 +409,6 @@ function SectionCard({
             <Avatar name={person.fullName} />
             <span className={person.active ? 'text-slate-700' : 'text-slate-400 line-through'}>{person.fullName}</span>
             {!person.active && <span className="text-[11px] text-slate-400">Inactive</span>}
-            {person.active && person.managerId === null && (
-              <span className="text-[11px] text-amber-700">no reporting line</span>
-            )}
           </li>
         ))}
         {members.length === 0 && <li className="py-1 text-[13px] text-slate-400">No salespeople</li>}

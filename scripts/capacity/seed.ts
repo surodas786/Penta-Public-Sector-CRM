@@ -61,7 +61,8 @@ SELECT setseed(0.42);
 
 -- Sections, accounts (100) -----------------------------------------------
 CREATE TEMP TABLE cap_sections AS SELECT n, gen_random_uuid() AS id FROM generate_series(1, 8) n;
-INSERT INTO sections (id, name) SELECT id, 'Capacity Section ' || lpad(n::text, 2, '0') FROM cap_sections;
+-- Inactive until their leads exist: an active section needs a lead (CR4).
+INSERT INTO sections (id, name, active) SELECT id, 'Capacity Section ' || lpad(n::text, 2, '0'), false FROM cap_sections;
 
 INSERT INTO users (full_name, email, password_hash, role)
   VALUES ('Capacity Administrator', 'cap.admin@example.com', $1, 'admin');
@@ -71,7 +72,7 @@ INSERT INTO users (full_name, email, password_hash, role, section_id, manager_id
   SELECT 'Capacity Lead ' || n, 'cap.lead.' || n || '@example.com', $1, 'lead', id,
          (SELECT id FROM users WHERE email = 'cap.management.1@example.com')
     FROM cap_sections;
-UPDATE sections s SET lead_user_id = u.id FROM users u WHERE u.role = 'lead' AND u.section_id = s.id;
+UPDATE sections s SET lead_user_id = u.id, active = true FROM users u WHERE u.role = 'lead' AND u.section_id = s.id;
 INSERT INTO users (full_name, email, password_hash, role, section_id, manager_id, active)
   SELECT CASE WHEN k % 4 = 0 THEN 'বিক্রয় কর্মকর্তা ' || n || '.' || k ELSE 'Capacity Sales ' || n || '.' || k END,
          'cap.sales.' || n || '.' || k || '@example.com', $1, 'sales', cs.id, l.id, k <= 10
@@ -79,6 +80,9 @@ INSERT INTO users (full_name, email, password_hash, role, section_id, manager_id
     JOIN users l ON l.section_id = cs.id AND l.role = 'lead'
     CROSS JOIN generate_series(1, 11) k
    WHERE k <= 10 OR n <= 7;
+-- users.section_id is only this script's scratch column since migration 0008;
+-- the memberships are what the application reads (CR5).
+INSERT INTO section_memberships (user_id, section_id) SELECT id, section_id FROM users WHERE role = 'sales';
 
 CREATE TEMP TABLE cap_owners AS
   SELECT row_number() OVER (ORDER BY u.email) AS n, u.id, u.section_id, u.active

@@ -4,6 +4,7 @@
  * These are DTOs, not database rows: they deliberately omit password hashes,
  * session data and any private account field (plan 7.3).
  */
+import type { EmailDeliveryStatus, EmailSecurityMode, EmailTemplateKey, EmailTransportKind } from './email.js';
 import type {
   ActivityType,
   BidStatus,
@@ -78,7 +79,11 @@ export interface CurrentUserDto {
   fullName: string;
   email: string;
   role: UserRole;
-  section: SectionDto | null;
+  /**
+   * The sections the account works in now: those a lead leads, or those a
+   * salesperson belongs to (CR4, CR5). Empty for management and administrators.
+   */
+  sections: SectionDto[];
   /** Server-computed UI affordances. Not a security boundary. */
   capabilities: {
     salesRecords: boolean;
@@ -280,8 +285,12 @@ export interface AdminUserDto {
   fullName: string;
   email: string;
   role: UserRole;
-  sectionId: string | null;
-  sectionName: string | null;
+  /**
+   * For a salesperson, the sections they currently belong to; for a lead, the
+   * sections they currently lead (CR4, CR5). Empty otherwise.
+   */
+  sections: { id: string; name: string; active: boolean }[];
+  /** A lead's management manager. Salespeople report to the lead of each section. */
   managerId: string | null;
   managerName: string | null;
   active: boolean;
@@ -296,6 +305,7 @@ export interface AdminSectionDto {
   active: boolean;
   leadId: string | null;
   leadName: string | null;
+  /** Active salespeople who are current members. The lead is not counted. */
   activeMembers: number;
   version: number;
 }
@@ -334,13 +344,15 @@ export interface TeamDto {
     id: string;
     name: string;
     lead: { id: string; fullName: string } | null;
-    members: { id: string; fullName: string; active: boolean; reportsToLead: boolean }[];
+    /** Current members; each reports to this section's lead (CR5). */
+    members: { id: string; fullName: string; active: boolean }[];
   }[];
   workload: {
     userId: string;
     fullName: string;
     role: UserRole;
-    sectionName: string;
+    /** Sections they work in now; a person may work in several (CR4, CR5). */
+    sectionNames: string[];
     /** Active pipeline population: status Active, stage neither Awarded nor Lost. */
     activeOpportunities: number;
     /** Decimal string; estimated value of the same population. */
@@ -594,8 +606,8 @@ export interface DashboardWorkloadRowDto {
   userId: string;
   fullName: string;
   role: UserRole;
-  sectionId: string | null;
-  sectionName: string | null;
+  /** The sections they work in now (CR4, CR5); empty for a former member. */
+  sectionNames: string[];
   active: boolean;
   /** Active pipeline records owned (§10.1 "Team workload"). */
   activeOpportunities: number;
@@ -687,8 +699,8 @@ export interface DashboardDto {
   nextActions: { target: { id: string; fullName: string }; items: DashboardNextActionDto[]; total: number };
   upcomingTenders: DashboardTenderDto[];
   recentActivity: DashboardActivityDto[];
-  /** Owner choices for the filter: leads see their section, management everyone; salespeople none. */
-  ownerOptions: { id: string; fullName: string; sectionId: string; active: boolean }[];
+  /** Owner choices for the filter: leads see their sections' people, management everyone; salespeople none. */
+  ownerOptions: { id: string; fullName: string; active: boolean }[];
   sectionOptions: { id: string; name: string }[];
 }
 
@@ -790,4 +802,74 @@ export interface NotificationDto {
 
 export interface NotificationListDto extends Paginated<NotificationDto> {
   unreadCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Email administration (CR2)
+// ---------------------------------------------------------------------------
+
+/** The mail server settings. The password itself is never returned. */
+export interface EmailSettingsDto {
+  enabled: boolean;
+  host: string | null;
+  port: number | null;
+  security: EmailSecurityMode;
+  username: string | null;
+  /** A password is stored. */
+  passwordSet: boolean;
+  /** False when a stored password can no longer be decrypted (EMAIL_SECRET_KEY changed). */
+  passwordReadable: boolean;
+  fromName: string | null;
+  fromAddress: string | null;
+  replyTo: string | null;
+  /** How this deployment sends, from EMAIL_TRANSPORT. */
+  transport: EmailTransportKind;
+  /** EMAIL_SECRET_KEY is configured, so a password can be stored. */
+  canStorePassword: boolean;
+  /** 0 until settings are first saved. */
+  version: number;
+  updatedAt: string | null;
+  updatedByName: string | null;
+}
+
+export interface EmailTemplateDto {
+  key: EmailTemplateKey;
+  label: string;
+  sentWhen: string;
+  placeholders: string[];
+  required: string[];
+  subject: string;
+  bodyText: string;
+  enabled: boolean;
+  /** False while the default wording is in use. */
+  customized: boolean;
+  defaultSubject: string;
+  defaultBody: string;
+  /** 0 while the default wording is in use. */
+  version: number;
+  updatedAt: string | null;
+}
+
+/** A template rendered with synthetic sample values: never real records. */
+export interface EmailPreviewDto {
+  subject: string;
+  text: string;
+}
+
+/** One entry of the delivery log. Never the message body. */
+export interface EmailDeliveryDto {
+  id: string;
+  templateKey: string;
+  label: string;
+  recipientName: string | null;
+  recipientAddress: string | null;
+  status: EmailDeliveryStatus;
+  statusDetail: string | null;
+  attempts: number;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+export interface EmailTestResultDto {
+  delivery: EmailDeliveryDto;
 }

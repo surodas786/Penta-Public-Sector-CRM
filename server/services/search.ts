@@ -21,7 +21,7 @@ import type { searchQuerySchema } from '../../shared/validation.js';
 import type { Database } from '../db/client.js';
 import { contacts, opportunities, organizations, sections, tenders, users } from '../db/schema.js';
 import { forbidden } from '../http/errors.js';
-import type { Actor } from '../policy/actor.js';
+import { currentSectionNamesSql, type Actor } from '../policy/actor.js';
 import { canAccessSalesRecords, canSearchAdministration, contactScope, scopedWhere } from '../policy/scope.js';
 
 type SearchQuery = z.output<typeof searchQuerySchema>;
@@ -213,9 +213,15 @@ async function searchAdministration(db: Database, query: SearchQuery, pattern: s
   const accountWhere = or(ilike(users.fullName, pattern), ilike(users.email, pattern));
   const [accountTotal] = await db.select({ value: count() }).from(users).where(accountWhere);
   const accounts = await db
-    .select({ id: users.id, fullName: users.fullName, role: users.role, active: users.active, section: sections.name })
+    .select({
+      id: users.id,
+      fullName: users.fullName,
+      role: users.role,
+      active: users.active,
+      // Every section they work in now (CR4, CR5), as one label.
+      section: sql<string | null>`nullif(array_to_string(${currentSectionNamesSql()}, ', '), '')`,
+    })
     .from(users)
-    .leftJoin(sections, eq(sections.id, users.sectionId))
     .where(accountWhere)
     .orderBy(asc(users.fullName), asc(users.id))
     .limit(PREVIEW_PER_TYPE);

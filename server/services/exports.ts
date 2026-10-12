@@ -30,11 +30,11 @@ import { EXPORT_KIND_LABELS, type ExportKind, type ReportKey } from '../../share
 import { listOpportunitiesQuerySchema, reportQuerySchema } from '../../shared/validation.js';
 import { dhakaDateOf, now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { opportunities, reportExports, sections, users } from '../db/schema.js';
+import { opportunities, reportExports } from '../db/schema.js';
 import { ApiError, notFound } from '../http/errors.js';
 import { parseOrThrow } from '../http/validate.js';
 import { enqueueJob } from '../jobs/queue.js';
-import type { Actor } from '../policy/actor.js';
+import { loadActor, type Actor } from '../policy/actor.js';
 import { canViewCommercialReports, scopedWhere } from '../policy/scope.js';
 import { recordAuditEvent } from './audit.js';
 import { buildCsv, type CsvColumn } from './csv.js';
@@ -150,26 +150,6 @@ export async function getExport(db: Database, actor: Actor, exportId: string): P
 // ---------------------------------------------------------------------------
 // Generation (background job)
 // ---------------------------------------------------------------------------
-
-/** The requester as they are now, read fresh, never from the queued request. */
-async function loadActor(db: Database, userId: string): Promise<Actor | null> {
-  const [row] = await db
-    .select({
-      id: users.id,
-      fullName: users.fullName,
-      email: users.email,
-      role: users.role,
-      sectionId: users.sectionId,
-      sectionName: sections.name,
-      active: users.active,
-      sessionVersion: users.sessionVersion,
-    })
-    .from(users)
-    .leftJoin(sections, eq(sections.id, users.sectionId))
-    .where(eq(users.id, userId))
-    .limit(1);
-  return row ?? null;
-}
 
 const OPPORTUNITY_EXPORT_COLUMNS: CsvColumn[] = [
   { key: 'reference', label: 'Reference', kind: 'text' },

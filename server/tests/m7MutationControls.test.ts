@@ -27,7 +27,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { FILE_NAME_HEADER } from '../../shared/api.js';
 import { FixedClock, resetClock, setClock } from '../clock.js';
-import { auditEvents } from '../db/schema.js';
+import { auditEvents, emailSettings } from '../db/schema.js';
 import { createJobHandlers } from '../jobs/handlers.js';
 import { runDueJobs } from '../jobs/queue.js';
 import { runNotificationScan } from '../services/notifications.js';
@@ -36,6 +36,7 @@ import {
   ABSENT_UUID,
   CSRF_HEADER,
   TEST_ORIGIN,
+  TEST_PASSWORD,
   createOpportunityPayload,
   createTestApp,
   emails,
@@ -239,14 +240,14 @@ describe('Milestone 7: audit and mutation controls', () => {
       fullName,
       email: `${fullName.toLowerCase().replace(/\s+/g, '.')}@example.com`,
       role: 'sales',
-      sectionId: ids.sectionIS,
+      sectionIds: [ids.sectionIS],
     });
     expect(created.status).toBe(201);
     return created.body.user as { id: string; version: number };
   }
 
   async function createSection(admin: SignedInClient, name: string) {
-    const created = await send(admin, '/api/admin/sections', { name });
+    const created = await send(admin, '/api/admin/sections', { name, leadId: ids.leadIS });
     expect(created.status).toBe(201);
     return created.body as { id: string; version: number };
   }
@@ -708,10 +709,11 @@ describe('Milestone 7: audit and mutation controls', () => {
       actor: 'admin',
       opportunityId: null,
       run: (c) =>
-        send(c, '/api/admin/users', { fullName: 'Nusrat Jahan', email: 'nusrat.jahan@example.com', role: 'sales', sectionId: ids.sectionGA }),
+        send(c, '/api/admin/users', { fullName: 'Nusrat Jahan', email: 'nusrat.jahan@example.com', role: 'sales', sectionIds: [ids.sectionGA] }),
       status: 201,
       events: [
-        { action: 'account.created', domain: 'administrative', changes: ['role', 'sectionId', 'managerId'] },
+        { action: 'account.created', domain: 'administrative', changes: ['role', 'managerId'] },
+        { action: 'account.section_joined', domain: 'administrative', changes: ['sectionId'] },
         { action: 'account.invitation_issued', domain: 'administrative', changes: ['expiresAt'] },
       ],
     },
@@ -733,7 +735,24 @@ describe('Milestone 7: audit and mutation controls', () => {
         return patch(c, `/api/admin/users/${person.id}`, { version: person.version, role: 'management' });
       },
       status: 200,
-      events: [{ action: 'account.role_changed', domain: 'administrative', changes: ['role', 'sectionId', 'managerId'] }],
+      // Leaving the selling role ends the membership first (CR5).
+      events: [
+        { action: 'account.section_left', domain: 'administrative', changes: ['sectionId'] },
+        { action: 'account.role_changed', domain: 'administrative', changes: ['role'] },
+      ],
+    },
+    {
+      name: 'joining a second section (CR5)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) =>
+        patch(c, `/api/admin/users/${ids.salesGA2}`, {
+          version: await versionOf('users', ids.salesGA2),
+          sectionIds: [ids.sectionGA, ids.sectionIS],
+          reason: 'Also covers infrastructure accounts.',
+        }),
+      status: 200,
+      events: [{ action: 'account.section_joined', domain: 'administrative', changes: ['sectionId'], reason: 'Also covers infrastructure accounts.' }],
     },
     {
       name: 'deactivation with a reason',
@@ -767,12 +786,21 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'account.reset_issued', domain: 'administrative', changes: ['expiresAt'] }],
     },
     {
+      name: 'changing one’s own password (CR3)',
+      actor: 'salesGA1',
+      opportunityId: null,
+      run: (c) =>
+        send(c, '/api/auth/password', { currentPassword: TEST_PASSWORD, newPassword: 'A-brand-new-passphrase-2026' }, null),
+      status: 200,
+      events: [{ action: 'account.password_changed', domain: 'administrative' }],
+    },
+    {
       name: 'section creation',
       actor: 'admin',
       opportunityId: null,
-      run: (c) => send(c, '/api/admin/sections', { name: 'Health Systems' }),
+      run: (c) => send(c, '/api/admin/sections', { name: 'Health Systems', leadId: ids.leadIS }),
       status: 201,
-      events: [{ action: 'section.created', domain: 'administrative', changes: ['name'] }],
+      events: [{ action: 'section.created', domain: 'administrative', changes: ['name', 'leadUserId'] }],
     },
     {
       name: 'section rename',
@@ -784,7 +812,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'section.renamed', domain: 'administrative', changes: ['name'] }],
     },
     {
-      name: 'section lead replacement: both role changes, each re-pointed reporting line, the section',
+      name: 'section lead replacement: the promotion, the former lead staying on as a member, the section',
       actor: 'admin',
       opportunityId: null,
       run: async (c) =>
@@ -794,14 +822,14 @@ describe('Milestone 7: audit and mutation controls', () => {
           reason: 'Nadia moves to the bid office.',
         }),
       status: 200,
+      // Reporting lines are derived from the section's lead (CR5), so no
+      // salesperson's account changes; Nadia led only this section, so she
+      // stays in it as a salesperson (D-CR4-4).
       events: [
+        { action: 'account.section_left', domain: 'administrative', changes: ['sectionId'], reason: true },
         { action: 'account.role_changed', domain: 'administrative', changes: ['role', 'managerId'], reason: true },
-        { action: 'account.role_changed', domain: 'administrative', changes: ['role'], reason: true },
-        // Every other salesperson in the section now reports to Tasnia (FR-062:
-        // an account change). Rafiq, Shuvo (inactive) and Mehjabin.
-        { action: 'account.manager_changed', domain: 'administrative', changes: ['managerId'], reason: true },
-        { action: 'account.manager_changed', domain: 'administrative', changes: ['managerId'], reason: true },
-        { action: 'account.manager_changed', domain: 'administrative', changes: ['managerId'], reason: true },
+        { action: 'account.role_changed', domain: 'administrative', changes: ['role', 'managerId'], reason: true },
+        { action: 'account.section_joined', domain: 'administrative', changes: ['sectionId'], reason: true },
         { action: 'section.lead_replaced', domain: 'administrative', changes: ['leadUserId'], reason: true },
       ],
     },
@@ -815,6 +843,56 @@ describe('Milestone 7: audit and mutation controls', () => {
       },
       status: 200,
       events: [{ action: 'section.deactivated', domain: 'administrative', changes: ['active'], reason: 'Pilot ended.' }],
+    },
+    {
+      name: 'mail server settings (CR2), the password never recorded',
+      actor: 'admin',
+      opportunityId: null,
+      run: (c) =>
+        c.agent
+          .put('/api/admin/email/settings')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, c.csrfToken)
+          .send({
+            version: 0,
+            enabled: true,
+            host: 'smtp.example.test',
+            port: 587,
+            security: 'starttls',
+            username: 'crm@example.test',
+            password: 'smtp-secret-for-the-matrix',
+            fromName: 'Penta CRM',
+            fromAddress: 'crm@example.test',
+            replyTo: null,
+          }),
+      status: 200,
+      events: [{ action: 'email.settings_updated', domain: 'administrative', changes: ['enabled', 'host', 'smtpCredential'] }],
+    },
+    {
+      name: 'email wording (CR2)',
+      actor: 'admin',
+      opportunityId: null,
+      run: (c) =>
+        c.agent
+          .put('/api/admin/email/templates/ownership_changed')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, c.csrfToken)
+          .send({ version: 0, subject: 'New owner', bodyText: 'Open it: {{link}}', enabled: true }),
+      status: 200,
+      events: [{ action: 'email.template_updated', domain: 'administrative', changes: ['subject', 'bodyText'] }],
+    },
+    {
+      name: 'test email (CR2)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: false, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        return send(c, '/api/admin/email/test', { to: 'it.desk@example.test' }, null);
+      },
+      status: 200,
+      events: [{ action: 'email.test_sent', domain: 'administrative', changes: ['recipientAddress', 'status'] }],
     },
     {
       name: 'CSV export request',
@@ -885,6 +963,8 @@ describe('Milestone 7: audit and mutation controls', () => {
         ['section.reactivated', 'administration.test.ts'],
         ['report.exported', 'reports.test.ts (job), and the export case in §6 below'],
         ['report.export_downloaded', 'reports.test.ts, and §6 below'],
+        // A background job kind that shares the prefix; it writes no audit event.
+        ['email.send', 'not an audit action: the job kind that sends queued email (email.test.ts)'],
       ]);
       const covered = new Set(auditCases.flatMap((auditCase) => [...auditCase.events.map((e) => e.action), ...(auditCase.systemEvents ?? [])]));
       const { readdirSync, readFileSync } = await import('node:fs');
@@ -893,7 +973,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       const written = new Set<string>();
       for (const file of readdirSync(servicesDir)) {
         const source = readFileSync(path.join(servicesDir, file), 'utf8');
-        for (const match of source.matchAll(/'((?:opportunity|follow_up|contact|organization|activity|tender|document|account|section|report)\.[a-z_]+)'/g)) {
+        for (const match of source.matchAll(/'((?:opportunity|follow_up|contact|organization|activity|tender|document|account|section|report|email)\.[a-z_]+)'/g)) {
           written.add(match[1]!);
         }
       }
@@ -1235,8 +1315,8 @@ describe('Milestone 7: audit and mutation controls', () => {
       name: 'account creation',
       actor: 'admin',
       prepare: async () => {
-        const body = { fullName: 'Retried Person', email: 'retried.person@example.com', role: 'sales', sectionId: ids.sectionGA };
-        return { path: '/api/admin/users', body, altered: { ...body, sectionId: ids.sectionIS } };
+        const body = { fullName: 'Retried Person', email: 'retried.person@example.com', role: 'sales', sectionIds: [ids.sectionGA] };
+        return { path: '/api/admin/users', body, altered: { ...body, sectionIds: [ids.sectionIS] } };
       },
       created: 201,
       entity: (r) => r.body.user.id,
@@ -1244,7 +1324,7 @@ describe('Milestone 7: audit and mutation controls', () => {
     {
       name: 'section creation',
       actor: 'admin',
-      prepare: async () => ({ path: '/api/admin/sections', body: { name: 'Retried Section' }, altered: { name: 'Other Section' } }),
+      prepare: async () => ({ path: '/api/admin/sections', body: { name: 'Retried Section', leadId: ids.leadIS }, altered: { name: 'Other Section', leadId: ids.leadIS } }),
       created: 201,
       entity: (r) => r.body.id,
     },
@@ -1819,7 +1899,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       failOn: 'account.invitation_issued',
       prepare: async () => ({
         path: '/api/admin/users',
-        body: { fullName: 'Atomic Person', email: 'atomic.person@example.com', role: 'sales', sectionId: ids.sectionGA },
+        body: { fullName: 'Atomic Person', email: 'atomic.person@example.com', role: 'sales', sectionIds: [ids.sectionGA] },
       }),
       succeeds: 201,
     },
@@ -2091,11 +2171,11 @@ describe('Milestone 7: audit and mutation controls', () => {
 
   describe('ADR 0004: an administrator who loses the role while a change waits', () => {
     it.each([
-      ['creating a section', (admin: SignedInClient) => send(admin, '/api/admin/sections', { name: 'Late Section' })],
+      ['creating a section', (admin: SignedInClient) => send(admin, '/api/admin/sections', { name: 'Late Section', leadId: ids.leadIS })],
       [
         'creating an account',
         (admin: SignedInClient) =>
-          send(admin, '/api/admin/users', { fullName: 'Late Person', email: 'late.person@example.com', role: 'sales', sectionId: ids.sectionGA }),
+          send(admin, '/api/admin/users', { fullName: 'Late Person', email: 'late.person@example.com', role: 'sales', sectionIds: [ids.sectionGA] }),
       ],
       ['issuing a sign-in link', (admin: SignedInClient) => send(admin, `/api/admin/users/${ids.salesGA2}/link`, {})],
     ] as const)('is refused when %s, and nothing is written', async (_label, run) => {

@@ -1,13 +1,285 @@
 # Implementation progress
 
-**Current state (06 October 2026):** Milestone 8 (release preparation)
-complete on branch `m8-release-preparation`, stacked on
-`m7-audit-mutation-controls` and the earlier milestone branches (committed
-locally, not pushed; PR #2 for Milestone 3 still unreviewed). Nothing is
-merged or deployed. **Not production-ready:** production document storage and
-malware scanning, the identity provider and MFA, and a staging environment
-are unresolved release blockers (Milestone 8, §8). Sections, newest first:
-Milestone 8 · 7 · 6 · 5 · 4 · 3 · 2 · Milestone 1 handover review · 1.
+**Current state (12 October 2026):** Milestone 8 is complete, and change
+requests CR1–CR6 have been **assessed, not implemented**, on branch
+`cr-change-requests` (see below and `docs/change-requests.md`). Nothing is
+deployed. **Not production-ready:** production document storage and malware
+scanning, the identity provider and MFA, and a staging environment are
+unresolved release blockers (Milestone 8, §8). Sections, newest first:
+Change requests · Milestone 8 · 7 · 6 · 5 · 4 · 3 · 2 · Milestone 1 handover
+review · 1.
+
+---
+
+## Change requests CR1–CR6 — assessment
+
+**Branch:** `cr-change-requests`, created from `changemade` at `e9a8e1b`
+**Date:** 12 October 2026
+**Status:** Assessment complete; **implementation not started**, by
+instruction. No code, migration or database change; no email sent; nothing
+deployed.
+
+### 1. Baseline since Milestone 8
+
+| Item | Finding |
+| --- | --- |
+| Commits after M8 | `88debfb` (allow the `APP_ORIGIN` host in the Vite dev server) and `e9a8e1b` (Chrome fix: stale duplicate `penta.sid`/CSRF cookies are expired at `GET /api/auth/csrf`, `server/http/duplicateCookies.ts`; no database change). `main` has the M8 and `changemade` merges up to `88debfb` (PR #4); `e9a8e1b` is not yet on `main` |
+| Working tree | Clean before the branch was created |
+| Migrations | `0000`–`0007`; none added since M7 |
+| `npm run typecheck` | **Pass** |
+| `npm test` | **643 passed, 0 failed**, 22 files (640 after M8 + 3 cookie-recovery tests in `auth.test.ts`) |
+
+### 2. Assessment summary
+
+Full detail, acceptance criteria and decisions are in
+[`docs/change-requests.md`](change-requests.md).
+
+| CR | What exists | Gap |
+| --- | --- | --- |
+| CR1 email invitation | Hashed, single-use, expiring invitation and reset links (`account_tokens`, `accountTokens.ts`), shown once to the administrator | No email code at all. The plan issues the token inside the send job, so no raw token is ever stored |
+| CR2 email notifications and admin configuration | Durable job queue with retry and health check; four in-app alert types | No SMTP, settings, templates or delivery log; no server-side secret encryption; no admin settings panel |
+| CR3 change own password | argon2id hashing, password policy, `session_version` revocation | No endpoint or UI |
+| CR4 multi-section lead | One lead per section via the `users_one_active_lead_per_section` index and `users.section_id` | Lead scope must come from `sections.lead_user_id`. A database rule is needed: an active section must have an active lead |
+| CR5 multi-section salesperson | Scalar `users.section_id`; about 40 tests encode one section per user | New `section_memberships` table; policy, admin, create, transfer, team, dashboard and DTO changes |
+| CR6 Software Procurement (EOI → RFP) | One linear stage pipeline; free-text procurement method | A workflow discriminator, a second stage sequence, and a tender phase. **The stages are not specified** and need Penta's input |
+
+Superseded requirements: §1.3 (email exclusion, for email only), FR-002,
+BR-001, BR-002, the §2.1 lead cells and BR-051, as adapted. The
+one-active-lead rule (BR-052) is kept and strengthened. Change-requests §8
+lists every effect.
+
+### 3. Planned sequence
+
+1. CR3
+2. CR4 + CR5 (migration 0008)
+3. CR2 foundation (migration 0009)
+4. CR1
+5. CR2 notification emails
+6. CR6 (migration 0010, after decisions)
+7. Full regression and release documents
+
+### 4. Database
+
+None changed. There is **no production SQL** for this step. Each later
+migration will ship with a production upgrade script, pre-flight checks and
+rollback statements.
+
+### 5. Decisions needed before or during implementation
+
+Change-requests §9 lists 18 decisions with proposed defaults. Three block
+work:
+
+- **D-CR6-2:** the Software Procurement stages. Blocks CR6.
+- **D-EM-1:** the production mail server. Blocks only real sending; development uses a capture transport.
+- **D-EM-2:** whether commercial details may appear in emails. Affects the template content.
+
+### 6. Step 1 — CR3 change own password (implemented 12 October 2026)
+
+**What was built**
+
+| Area | Change |
+| --- | --- |
+| API | `POST /api/auth/password` `{currentPassword, newPassword}`. It requires a session, a CSRF token and a trusted origin, and has its own rate limiter counted **per account**. It returns a new CSRF token |
+| Service | `server/services/ownPassword.ts`: verifies the current password and refuses reuse of the current one. The UPDATE repeats the verified hash in its predicate, so a concurrent change is not overwritten. It bumps `session_version`, spends outstanding invitation and reset links, and audits `account.password_changed` (administrative, no password data) |
+| Session | The caller's session is re-issued under a new id and keeps its **original absolute expiry**. All other sessions end on their next request (D-CR3-1 default). `establishSession` is now shared by sign-in and password change |
+| Validation | `changePasswordSchema` in `shared/validation.ts` (same 12–256 policy; strict, so no account id is accepted) |
+| Interface | A "Change password" button in the top bar opens `ChangePasswordDialog`, built from the existing Modal, Field and DialogAlert and `useSubmission`. The administrative audit label is added. No other screen changed |
+
+**Defects found and fixed during this step**
+
+| # | Defect | Fix |
+| --- | --- | --- |
+| 1 | **Sign-out did not always end the session** (predates CR3; found by the new browser check). A request still running when "Sign out" was pressed saved its session afterwards, and the store's upsert put the deleted row back | `server/auth/sessionStore.ts`: only the CSRF bootstrap and `establishSession` may insert a session row; every other save is an UPDATE. Regression test in `auth.test.ts`; it fails without the fix |
+| 2 | **`check:production-server` 2 of 19 failed** on the Chrome stale-cookie fix (`e9a8e1b`): its cookie-expiry headers had no `Secure`/`SameSite=Strict` | The headers now carry the same attributes as the cookies. The "no session cookie over plain HTTP" check now ignores empty, expired deletion headers, which carry no session id; any session id still fails it. **This changes the check itself, for review** |
+
+**Database:** no migration and no database change. **No production SQL is
+needed for this step.**
+
+**Commands and results (final run, on this code)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass: 0 errors, the same 5 pre-existing warnings |
+| `npm test` | **655 passed, 0 failed**, 23 files (643 + 10 in `ownPassword.test.ts` + 1 logout regression + 1 matrix case) |
+| `npm run build` | Pass, including demo exclusion |
+| `npm run check:production-server` | **19 passed, 0 failed** (after fix 2) |
+| `npm run test:smoke` | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, **cr3 1 (new; 6 of 6 repeated runs pass)** passed. **m5 failed** (see below) |
+
+**Open: m5 browser check fails because a fixture has aged.** The
+synthetic tender `DCR/PROC/2026/221` has a fixed submission deadline of
+`2026-10-08T15:00+06:00`, and browser checks use the real clock. Since 8
+October, "Mark Submitted" correctly treats the bid as late and asks for an
+explanation, which the test does not expect. It passed on 6 October (M8),
+and no file it touches changed in this step. This was not re-run on the
+earlier commit. The fix (dates relative to the seed time, or an updated
+fixture) touches shared synthetic data. It is left for a decision rather
+than changed silently.
+
+**Evidence:** `docs/evidence/cr/cr3-change-password-error.png`. ADR 0002
+has an addendum covering CR3 and the session store.
+
+### 7. Step 2 — CR4 + CR5 multi-section leads and salespeople (implemented 12 October 2026)
+
+Design and reasons: ADR 0010. Proposed defaults D-CR4-1/2/4 and D-CR5-1/2
+are applied. D-CR4-3 is applied in effect, with one difference: the lead
+pointer is kept as history rather than cleared. The status note at the top of `docs/change-requests.md` records
+the changes from the plan.
+
+**What changed**
+
+| Area | Change |
+| --- | --- |
+| Database (migration 0008) | New `section_memberships` table: history kept; the runtime role has no DELETE. `sections.lead_user_id` is now the source of truth for leads. CHECK: an active section has a lead. Deferred constraint triggers: that lead is an active account with the lead role. The old one-lead-per-section index is dropped. Pre-flight checks refuse inconsistent data and change nothing. Backfill: one membership per salesperson. `users.section_id` is kept, unread and unwritten, for rollback |
+| Access (`scope.ts`, `actor.ts`) | Lead: records in the active sections they lead. Salesperson: records they own **and** that are in a current section (fails closed). The actor carries `sections`/`sectionIds`, read fresh on every request. New helpers `leadsSectionSql`, `memberOfSectionSql` and `worksInSectionSql` drive alert recipients, follow-up assignees and eligible owners |
+| Create and transfer | Owner and section are checked as a pair. Create now share-locks the owner and re-checks inside the transaction; it did not lock the owner before. Transfer takes an optional `newSectionId`; it is required only when it is ambiguous. A lead may move a record between two sections they lead |
+| Administration | Salespeople have `sectionIds` (one or more). Leads are created without sections and appointed through a section. A new section names its lead. Replace lead accepts an existing lead or a member salesperson. Reactivating a section needs a lead. Membership changes are audited as `account.section_joined` and `account.section_left`. Losing a section, or a role change, ends sessions |
+| Team, dashboard, search | A person shows every current section. A section filter narrows the records counted, not the people listed |
+| Interface | User dialog: a section checklist, and "Reports to" listing the lead of each section. Section dialog: choose the lead when adding or reactivating; Replace lead offers existing leads and member salespeople. Create dialog: a section select when the owner has several. Transfer dialog: the choice is an owner in a section. The shell and dashboards list multiple sections. Existing components only |
+| Operations | `scripts/ops/export-migration-sql.ts` writes a reviewed, standalone production script; output in `docs/operations/sql/`. Runbook §3.1 covers applying, checking and rolling back 0008 |
+
+**Defects found and fixed during this step**
+
+1. **Drizzle renders a column inside a raw SQL fragment as a bare `"id"` in a
+   single-table select.** Inside a subquery that bound to the subquery's own
+   `id`, and Team Management showed zero workload. The users columns in these
+   subqueries are now written in full. A comment explains why at each place.
+2. **Opportunity create did not lock the owner.** A concurrent role or
+   section change could therefore leave a record with an ineligible owner. It
+   now share-locks the owner and re-checks.
+3. The admin page warned "no reporting line" for every salesperson. That
+   warning is meaningless now that reporting lines are derived, so it is
+   removed.
+
+**Tests**
+
+- New: `server/tests/sections.test.ts` (13 tests), covering:
+  - backfill scope equivalence for every seeded account;
+  - a lead of two sections, and losing a section on the next request;
+  - a lead moving records between their sections, and only those;
+  - the database refusing an active section without a lead, a non-lead
+    pointer, and demoting or deactivating a sitting lead (the deferred
+    trigger allows a swap inside one transaction);
+  - a salesperson gaining a section without signing out, and creating there;
+  - wrong-section and other-team refusals;
+  - leaving a section only once their records are moved;
+  - fail-closed scope when a membership ends;
+  - the runtime role unable to delete history;
+  - an ambiguous transfer section;
+  - assignee and alert-lead resolution.
+- Rewritten on purpose, never deleted:
+  - the single-section assertions in `administration.test.ts` (AT-09);
+  - `auth.test.ts`: section change now means a lost membership;
+  - `dashboard.test.ts`;
+  - `childScope.test.ts`;
+  - the `m7MutationControls.test.ts` matrices: new audit sequences for
+    create, role change and lead replacement, plus a membership-join case;
+  - `reports.test.ts`: the requester who loses access is now a salesperson,
+    because a section's lead can no longer be deactivated directly;
+  - `m8Operations.test.ts`.
+- New browser check: `e2e/cr45.spec.ts`. `m3` and `evidence-m3` are updated
+  for the section checklist.
+
+**Commands and results (final run, on this code)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass: 0 errors, the same 5 warnings |
+| `npm test` | **669 passed, 0 failed**, 24 files (655 + 13 in `sections.test.ts` + 1 matrix case) |
+| Browser checks, run separately | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, **cr45 1** passed; **m5 failed** (the aged-fixture deadline from step 1, not this change) |
+| `npm run build` | Pass, demo exclusion included |
+| `npm run check:production-server` | **19 passed, 0 failed** |
+| Migration on the development database | Applied: 6 memberships backfilled, no active section without a lead, both triggers installed |
+| Production upgrade rehearsal (scratch database at 0007, release-one data) | Pre-flight refused an active section without a lead and changed nothing. After the fix, the upgrade succeeded: memberships for active and inactive salespeople, triggers, CHECK, old index dropped, runtime role INSERT but not DELETE. A rerun was refused, and `db:migrate` then skipped it. Scratch database dropped |
+
+**Database: production SQL.** This step changes the database.
+`docs/operations/sql/0008_section_memberships_and_multi_section_leads.production.sql`
+is the upgrade script (file sha256 `95f4e1f9…b80ae`). Run it as
+`penta_migrator` after a verified backup, or use `npm run db:migrate`.
+
+**Evidence:** `docs/evidence/cr/` holds `cr5-user-sections.png`,
+`cr4-replace-lead.png` and `cr5-create-section-choice.png`.
+
+**Open:** capacity was not re-measured. Scope now uses `IN` lists and
+correlated `EXISTS` subqueries, so staging should repeat NFR-010/011. The
+m5 aged fixture remains. A later contract migration drops
+`users.section_id`.
+
+### 8. Step 3 — CR2 email foundation (implemented 12 October 2026)
+
+Design and reasons: ADR 0011. Proposed defaults D-EM-2 (no commercial detail
+in emails) and D-EM-3 (no per-person opt-out; an administrator can turn each
+email off) are applied. **No real email was sent**: development, tests and
+browser checks use the capture transport.
+
+**What changed**
+
+| Area | Change |
+| --- | --- |
+| Database (migration 0009, additive) | `email_settings` (at most one row; the SMTP password stored only as AES-256-GCM ciphertext), `email_templates` (only wording an administrator changed), `email_deliveries` (the delivery log, never message bodies). CHECKs: complete settings when on, one-line subjects, a recipient on every delivery. The runtime role cannot delete from any of them |
+| Configuration | `EMAIL_TRANSPORT` (`none` / `capture` / `smtp`; production default `none`, production refuses `capture`), `EMAIL_SECRET_KEY` (64 hex), `EMAIL_CAPTURE_DIR`, `EMAIL_SEND_TIMEOUT_SECONDS`. Documented in `.env.example`; `check:env` passes with 32 variables |
+| Server | `server/email/`: secret box, capture and SMTP transports (nodemailer **10.0.10**, exact version), runtime. `server/services/email.ts`: settings, templates with allowlisted placeholders, a synthetic preview, a synchronous test message, the delivery log, `queueEmail`, and the `email.send` job with send-time re-checks, retries and final failure. Routes are under `/api/admin/email`, administrator only |
+| CR3 follow-up | Changing one's own password queues a "password changed" email in the same transaction, while delivery is on |
+| Interface | Administration page: Email delivery (status, server, sender, a transport note, Edit settings, Send test email), Email templates (edit, preview, restore the default), and the Email delivery log. The password is write-only. Built from the existing Panel, table, Modal and form components |
+| Audit | `email.settings_updated` (the password only as "replaced"/"removed"), `email.template_updated`, `email.test_sent`, all in the administrative domain with labels. The audit matrix now also scans `email.*` actions |
+
+**Tests**
+
+- New: `server/tests/email.test.ts` (20 tests), covering:
+  - administrator only;
+  - defaults when nothing is saved;
+  - the encrypted password never returned or audited, and unreadable under
+    another key;
+  - keeping or removing the password, and refusing a password when no key is
+    configured;
+  - incomplete, header-injecting and stale settings;
+  - no DELETE for the runtime role;
+  - templates: defaults, a versioned and audited save, unknown or unclosed
+    placeholders, a missing `{{link}}`, multi-line subjects, a synthetic
+    preview;
+  - the test message: captured, then SMTP failure without credentials;
+  - the "password changed" email: queued with the change and sent by the job
+    with no password material; not queued while off; suppressed when its
+    template is off, when the transport is `none`, or when the recipient is
+    inactive;
+  - retry, then final failure;
+  - production refusing `capture`.
+- Audit matrix: three new cases.
+- Browser check: `e2e/cr2.spec.ts` (settings, test message, template preview,
+  and a password change appearing as Sent in the log).
+- `check:production-server` gained "refuses EMAIL_TRANSPORT=capture in
+  production".
+
+**Commands and results (final run, on this code)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **692 passed, 0 failed**, 25 files |
+| Browser checks, run separately | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, **cr2 1** passed. m5 was not rerun: the aged-fixture deadline from step 1 |
+| `npm run build` | Pass, demo exclusion included |
+| `npm run check:production-server` | **20 passed, 0 failed** |
+| `npm audit --omit=dev` | Unchanged: 2 moderate (React Router); nodemailer adds none |
+| 0009 rehearsal (scratch database at 0008) | Applied, runtime role INSERT but not DELETE, a rerun refused, `db:migrate` then skipped it; scratch database dropped |
+
+**Database: production SQL.** This step changes the database.
+`docs/operations/sql/0009_email_settings_templates_and_deliveries.production.sql`
+(file sha256 `a650274b…de54d1`). Apply it after 0008. Runbook §3.2 covers
+turning email on afterwards.
+
+**Evidence:** `docs/evidence/cr/` holds `cr2-email-settings.png`,
+`cr2-template-preview.png` and `cr2-delivery-log.png`.
+
+**Open:** real sending waits for D-EM-1 (Penta's mail server) and for
+deployment authorization. Invitation and notification emails come in steps 4
+and 5.
+
+### 9. Next task
+
+Review step 3. Then, when instructed, step 4 (CR1: invitation and reset links
+by email, issued at send time; manual copy kept as the fallback,
+D-CR1-1).
 
 ---
 

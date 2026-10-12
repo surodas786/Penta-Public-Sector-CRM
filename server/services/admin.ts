@@ -1,5 +1,5 @@
 /**
- * Account and section administration (FR-071, BR-002, BR-051, BR-052,
+ * Account and section administration (FR-071, BR-051, BR-052, CR4, CR5,
  * SEC-005, SEC-030).
  *
  * The System Administrator maintains structure, never commercial data: these
@@ -8,20 +8,23 @@
  * refusal says so without quantifying it.
  *
  * Invariants kept here, each under row locks inside one transaction:
- *   - a salesperson belongs to one active section and reports to its active
- *     lead; an active section has at most one active lead (BR-002, FR-002);
- *   - owner/section consistency: nobody's role or section changes while they
- *     own opportunities, so no opportunity is left with a mismatched or
- *     ineligible owner (BR-051);
- *   - the only lead of an active section is replaced, never just removed, and
- *     the replacement updates every direct report atomically (BR-052);
+ *   - a salesperson belongs to one or more active sections (section
+ *     memberships, CR5) and reports to the lead of each; a lead's sections are
+ *     the sections that name them as lead (CR4);
+ *   - every active section has exactly one active lead. The database enforces
+ *     it too (migration 0008); these checks give the readable refusal;
+ *   - owner/section consistency: nobody leaves a section, or a role, while
+ *     they own opportunities there, so no record is left with an ineligible
+ *     owner (BR-051 as amended by CR5);
+ *   - a section's lead is replaced, never just removed (BR-052);
  *   - a section with open opportunities or active members stays active;
  *   - the last active administrator stays an active administrator;
  *   - no account changes its own role or deactivates itself;
- *   - material changes bump the session version, revoking live sessions on
- *     their next request (SEC-005).
+ *   - a role change or a lost section bumps the session version, revoking
+ *     live sessions on their next request (SEC-005). Scope is read fresh on
+ *     every request in any case, so a gained section needs no sign-out.
  */
-import { and, asc, count, desc, eq, ilike, inArray, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { z } from 'zod';
 
@@ -41,7 +44,7 @@ import type {
 } from '../../shared/validation.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { auditEvents, opportunities, sections, users } from '../db/schema.js';
+import { auditEvents, opportunities, sectionMemberships, sections, users } from '../db/schema.js';
 import { conflict, forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { canAdministerAccounts } from '../policy/scope.js';
@@ -50,8 +53,6 @@ import { diffRecords, recordAuditEvent } from './audit.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
 import { presentChanges } from './opportunities.js';
 
-const SECTION_ROLES: readonly UserRole[] = ['sales', 'lead'];
-
 function assertAdministrator(actor: Actor): void {
   // Routes already require it; services refuse independently.
   if (!canAdministerAccounts(actor)) throw forbidden('Account administration is limited to the System Administrator.');
@@ -59,19 +60,38 @@ function assertAdministrator(actor: Actor): void {
 
 const blocked = (message: string) => conflict(message, 'conflict');
 
+const LEAD_SECTIONS_ARE_APPOINTED =
+  'A section lead’s sections are the ones they are appointed to lead. Create the section with them as lead, or use Replace lead.';
+const NO_SECTIONS_HERE = 'Management and administrator accounts have no section or reporting line.';
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
 
 const manager = alias(users, 'manager');
 
+/**
+ * A salesperson's open memberships (any section state, so an administrator can
+ * see a membership in a section that was later deactivated), or the active
+ * sections a lead leads. The users columns are written out in full: in a
+ * single-table select Drizzle would render a bare "id", which this subquery
+ * would bind to the section's own id.
+ */
+const accountSections = sql<{ id: string; name: string; active: boolean }[]>`coalesce((
+  SELECT json_agg(json_build_object('id', s.id, 'name', s.name, 'active', s.active) ORDER BY s.name, s.id)
+    FROM ${sections} s
+   WHERE ("users"."role" = 'lead' AND s.lead_user_id = "users"."id" AND s.active)
+      OR ("users"."role" = 'sales' AND EXISTS (
+            SELECT 1 FROM ${sectionMemberships} m
+             WHERE m.user_id = "users"."id" AND m.section_id = s.id AND m.ended_at IS NULL))
+), '[]'::json)`;
+
 const userSelection = {
   id: users.id,
   fullName: users.fullName,
   email: users.email,
   role: users.role,
-  sectionId: users.sectionId,
-  sectionName: sections.name,
+  sections: accountSections,
   managerId: users.managerId,
   managerName: manager.fullName,
   active: users.active,
@@ -80,11 +100,7 @@ const userSelection = {
 } as const;
 
 function userQuery(db: Database) {
-  return db
-    .select(userSelection)
-    .from(users)
-    .leftJoin(sections, eq(sections.id, users.sectionId))
-    .leftJoin(manager, eq(manager.id, users.managerId));
+  return db.select(userSelection).from(users).leftJoin(manager, eq(manager.id, users.managerId));
 }
 
 type UserRow = Awaited<ReturnType<ReturnType<typeof userQuery>['execute']>>[number];
@@ -96,8 +112,7 @@ function toAdminUser(row: UserRow): AdminUserDto {
     fullName: row.fullName,
     email: row.email,
     role: row.role,
-    sectionId: row.sectionId,
-    sectionName: row.sectionName ?? null,
+    sections: row.sections,
     managerId: row.managerId,
     managerName: row.managerName ?? null,
     active: row.active,
@@ -139,12 +154,20 @@ export async function listSections(db: Database, actor: Actor): Promise<AdminSec
       leadId: lead.id,
       leadName: lead.fullName,
       version: sections.version,
-      activeMembers: sql<number>`(SELECT count(*)::int FROM ${users} m WHERE m.section_id = ${sections.id} AND m.active)`,
+      activeMembers: sql<number>`(
+        SELECT count(*)::int FROM ${sectionMemberships} m JOIN ${users} mu ON mu.id = m.user_id
+         WHERE m.section_id = ${sections.id} AND m.ended_at IS NULL AND mu.active)`,
     })
     .from(sections)
     .leftJoin(lead, and(eq(lead.id, sections.leadUserId), eq(lead.active, true)))
     .orderBy(asc(sections.name));
-  return rows.map((row) => ({ ...row, leadId: row.leadId ?? null, leadName: row.leadName ?? null }));
+  // An inactive section keeps its former lead's pointer as history; it grants
+  // nothing (scope reads active sections only), so it is not shown as a lead.
+  return rows.map((row) => ({
+    ...row,
+    leadId: row.active ? (row.leadId ?? null) : null,
+    leadName: row.active ? (row.leadName ?? null) : null,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +181,6 @@ async function lockUser(tx: Database, userId: string) {
       fullName: users.fullName,
       email: users.email,
       role: users.role,
-      sectionId: users.sectionId,
       managerId: users.managerId,
       active: users.active,
       version: users.version,
@@ -182,20 +204,61 @@ async function lockSection(tx: Database, sectionId: string) {
   return row;
 }
 
-/** The section's active lead, locked. */
-async function activeLead(tx: Database, sectionId: string) {
-  const [row] = await tx
-    .select({ id: users.id, managerId: users.managerId })
-    .from(users)
-    .where(and(eq(users.sectionId, sectionId), eq(users.role, 'lead'), eq(users.active, true)))
-    .for('update')
-    .limit(1);
-  return row ?? null;
+/**
+ * Locks the chosen sections, in id order, and requires each to exist and be
+ * active. Locking serialises a membership change with a concurrent section
+ * deactivation, which locks the same row.
+ */
+async function lockActiveSections(tx: Database, sectionIds: readonly string[], field = 'sectionIds'): Promise<void> {
+  if (sectionIds.length === 0) return;
+  const rows = await tx
+    .select({ id: sections.id, active: sections.active })
+    .from(sections)
+    .where(inArray(sections.id, [...sectionIds]))
+    .orderBy(asc(sections.id))
+    .for('update');
+  if (rows.length !== sectionIds.length || rows.some((row) => !row.active)) {
+    throw validationFailed({ [field]: 'Choose active sections only.' });
+  }
 }
 
-/** Opportunities the person owns, open or closed. Any of them pins their role and section (BR-051). */
-async function ownsAnyOpportunity(tx: Database, userId: string): Promise<boolean> {
-  const [row] = await tx.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.ownerId, userId)).limit(1);
+/** Open memberships, locked. */
+async function openMemberships(tx: Database, userId: string) {
+  return tx
+    .select({ id: sectionMemberships.id, sectionId: sectionMemberships.sectionId })
+    .from(sectionMemberships)
+    .where(and(eq(sectionMemberships.userId, userId), isNull(sectionMemberships.endedAt)))
+    .orderBy(asc(sectionMemberships.sectionId))
+    .for('update');
+}
+
+/** Active sections the account leads, locked. */
+async function ledActiveSections(tx: Database, userId: string) {
+  return tx
+    .select({ id: sections.id, name: sections.name })
+    .from(sections)
+    .where(and(eq(sections.leadUserId, userId), eq(sections.active, true)))
+    .orderBy(asc(sections.id))
+    .for('update');
+}
+
+/**
+ * Whether the person owns any opportunity, open or closed, outside `sections`
+ * (BR-051 as amended by CR5: an owner must work in their record's section).
+ * Transfers lock the new owner's row, which the caller already holds, so this
+ * sees every committed transfer.
+ */
+async function ownsOutside(tx: Database, userId: string, sectionIds: readonly string[]): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: opportunities.id })
+    .from(opportunities)
+    .where(
+      and(
+        eq(opportunities.ownerId, userId),
+        sectionIds.length > 0 ? notInArray(opportunities.sectionId, [...sectionIds]) : undefined,
+      ),
+    )
+    .limit(1);
   return Boolean(row);
 }
 
@@ -247,12 +310,6 @@ async function assertEmailFree(tx: Database, email: string, exceptUserId?: strin
   if (row) throw validationFailed({ email: 'Another account already uses this email address.' });
 }
 
-async function assertActiveSection(tx: Database, sectionId: string | null | undefined, field = 'sectionId') {
-  if (!sectionId) throw validationFailed({ [field]: 'Salespeople and section leads belong to a section.' });
-  const [row] = await tx.select({ id: sections.id, active: sections.active }).from(sections).where(eq(sections.id, sectionId)).limit(1);
-  if (!row || !row.active) throw validationFailed({ [field]: 'Choose an active section.' });
-}
-
 /** A lead may report to an active management account, or to nobody. */
 async function assertLeadManager(tx: Database, managerId: string | null | undefined): Promise<string | null> {
   if (!managerId) return null;
@@ -266,43 +323,50 @@ async function assertLeadManager(tx: Database, managerId: string | null | undefi
 }
 
 /**
- * Makes `leadId` the section's lead and points every salesperson in it at
- * them. Each re-pointed reporting line is its own audit event (FR-062): it
- * changes that person's account, not just the section.
+ * Brings a salesperson's open memberships to `desired`, ending (never
+ * deleting) the ones left and opening the new ones. Each change is its own
+ * audit event, so the history names the section. Returns whether any
+ * membership ended.
  */
-async function installLead(
+async function applyMemberships(
   tx: Database,
-  sectionId: string,
-  leadId: string,
+  userId: string,
+  desired: readonly string[],
   context: { actor: Actor; requestId: string; reason?: string | null | undefined },
-): Promise<void> {
+): Promise<{ joined: number; left: number }> {
+  const current = await openMemberships(tx, userId);
+  const leaving = current.filter((row) => !desired.includes(row.sectionId));
+  const joining = desired.filter((id) => !current.some((row) => row.sectionId === id));
   const timestamp = now();
-  await tx
-    .update(sections)
-    .set({ leadUserId: leadId, updatedAt: timestamp, version: sql`${sections.version} + 1` })
-    .where(eq(sections.id, sectionId));
-  const repointed = await tx
-    .select({ id: users.id, managerId: users.managerId })
-    .from(users)
-    .where(and(eq(users.sectionId, sectionId), eq(users.role, 'sales'), sql`${users.managerId} IS DISTINCT FROM ${leadId}`))
-    .orderBy(asc(users.id))
-    .for('update');
-  if (repointed.length === 0) return;
-  await tx
-    .update(users)
-    .set({ managerId: leadId, updatedAt: timestamp, version: sql`${users.version} + 1` })
-    .where(inArray(users.id, repointed.map((row) => row.id)));
-  for (const row of repointed) {
+
+  for (const row of leaving) {
+    await tx
+      .update(sectionMemberships)
+      .set({ endedAt: timestamp, endedBy: context.actor.id, endReason: context.reason ?? null })
+      .where(eq(sectionMemberships.id, row.id));
     await audit(tx, context.actor, {
       entityType: 'user',
-      entityId: row.id,
-      action: 'account.manager_changed',
-      before: { managerId: row.managerId },
-      after: { managerId: leadId },
+      entityId: userId,
+      action: 'account.section_left',
+      before: { sectionId: row.sectionId },
+      after: null,
       reason: context.reason,
       requestId: context.requestId,
     });
   }
+  for (const sectionId of [...joining].sort()) {
+    await tx.insert(sectionMemberships).values({ userId, sectionId, startedAt: timestamp, startedBy: context.actor.id });
+    await audit(tx, context.actor, {
+      entityType: 'user',
+      entityId: userId,
+      action: 'account.section_joined',
+      before: null,
+      after: { sectionId },
+      reason: context.reason,
+      requestId: context.requestId,
+    });
+  }
+  return { joined: joining.length, left: leaving.length };
 }
 
 /**
@@ -312,7 +376,7 @@ async function installLead(
  * deactivation that committed while this transaction waited must still stop
  * the change.
  */
-async function beginAdministrativeChange(tx: Database, actor: Actor): Promise<string[]> {
+export async function beginAdministrativeChange(tx: Database, actor: Actor): Promise<string[]> {
   const activeAdmins = await lockAdministrators(tx);
   if (!activeAdmins.includes(actor.id)) throw forbidden('Your account is no longer an active administrator.');
   return activeAdmins;
@@ -344,6 +408,19 @@ function audit(
   });
 }
 
+/** Rejects section and reporting-line fields a role cannot carry. */
+function assertFieldsFitRole(role: UserRole, sectionIds: readonly string[] | undefined, managerId: string | null | undefined) {
+  if (role === 'sales') {
+    if (managerId) throw validationFailed({ managerId: 'Salespeople report to the lead of each of their sections.' });
+    return;
+  }
+  if (role === 'lead') {
+    if (sectionIds && sectionIds.length > 0) throw validationFailed({ sectionIds: LEAD_SECTIONS_ARE_APPOINTED });
+    return;
+  }
+  if ((sectionIds && sectionIds.length > 0) || managerId) throw validationFailed({ sectionIds: NO_SECTIONS_HERE });
+}
+
 // ---------------------------------------------------------------------------
 // Accounts
 // ---------------------------------------------------------------------------
@@ -362,31 +439,14 @@ export async function createUser(options: {
   const { userId, link } = await db.transaction(async (tx) => {
     await beginAdministrativeChange(tx, actor);
     await assertEmailFree(tx, command.email);
+    assertFieldsFitRole(command.role, command.sectionIds, command.managerId);
 
-    const inSection = SECTION_ROLES.includes(command.role);
-    let sectionId: string | null = null;
-    let managerId: string | null = null;
-
-    if (inSection) {
-      await assertActiveSection(tx, command.sectionId);
-      sectionId = command.sectionId as string;
-      await lockSection(tx, sectionId);
-      const lead = await activeLead(tx, sectionId);
-
-      if (command.role === 'sales') {
-        // BR-002: a salesperson reports to the section's lead — derived, not chosen.
-        if (!lead) throw blocked('This section has no active lead. Appoint a section lead before adding salespeople.');
-        if (command.managerId && command.managerId !== lead.id) {
-          throw validationFailed({ managerId: 'Salespeople report to their section’s lead.' });
-        }
-        managerId = lead.id;
-      } else {
-        if (lead) throw blocked('This section already has an active lead. Use Replace lead to change it.');
-        managerId = await assertLeadManager(tx, command.managerId);
-      }
-    } else if (command.sectionId || command.managerId) {
-      throw validationFailed({ sectionId: 'Management and administrator accounts have no section or reporting line.' });
+    const sectionIds = command.role === 'sales' ? [...(command.sectionIds ?? [])].sort() : [];
+    if (command.role === 'sales' && sectionIds.length === 0) {
+      throw validationFailed({ sectionIds: 'Choose at least one section for a salesperson.' });
     }
+    await lockActiveSections(tx, sectionIds);
+    const managerId = command.role === 'lead' ? await assertLeadManager(tx, command.managerId) : null;
 
     const timestamp = now();
     const [created] = await tx
@@ -396,7 +456,6 @@ export async function createUser(options: {
         email: command.email,
         passwordHash: null,
         role: command.role,
-        sectionId,
         managerId,
         active: true,
         createdAt: timestamp,
@@ -405,15 +464,14 @@ export async function createUser(options: {
       .returning({ id: users.id });
     if (!created) throw new Error('User insert returned no row.');
 
-    if (command.role === 'lead' && sectionId) await installLead(tx, sectionId, created.id, { actor, requestId });
-
     await audit(tx, actor, {
       entityType: 'user',
       entityId: created.id,
       action: 'account.created',
-      after: { fullName: command.fullName, email: command.email, role: command.role, sectionId, managerId },
+      after: { fullName: command.fullName, email: command.email, role: command.role, managerId },
       requestId,
     });
+    await applyMemberships(tx, created.id, sectionIds, { actor, requestId });
 
     const issued = await issueAccountLink(tx, { userId: created.id, purpose: 'invitation', createdBy: actor.id, appOrigin });
     await audit(tx, actor, {
@@ -457,14 +515,35 @@ export async function updateUser(options: {
     if (roleChanged && target.id === actor.id) {
       throw forbidden('You cannot change your own role. Another administrator must do it.');
     }
+    assertFieldsFitRole(role, command.sectionIds, command.managerId);
 
-    const inSection = SECTION_ROLES.includes(role);
-    const sectionId = inSection ? (command.sectionId !== undefined ? command.sectionId : target.sectionId) : null;
-    const sectionChanged = sectionId !== target.sectionId;
-    if (!inSection && (command.sectionId || command.managerId)) {
-      throw validationFailed({ sectionId: 'Management and administrator accounts have no section or reporting line.' });
+    // The sections the person will work in afterwards.
+    const memberships = await openMemberships(tx, target.id);
+    let desiredSections: string[] = [];
+    if (role === 'sales') {
+      desiredSections = [
+        ...(command.sectionIds ?? (target.role === 'sales' ? memberships.map((row) => row.sectionId) : [])),
+      ].sort();
+      if (desiredSections.length === 0) throw validationFailed({ sectionIds: 'Choose at least one section for a salesperson.' });
+      const added = desiredSections.filter((id) => !memberships.some((row) => row.sectionId === id));
+      await lockActiveSections(tx, added);
     }
-    if (inSection && (sectionChanged || roleChanged)) await assertActiveSection(tx, sectionId);
+    const led = target.role === 'lead' ? await ledActiveSections(tx, target.id) : [];
+    if (roleChanged && led.length > 0) {
+      throw blocked('This person leads an active section. Use Replace lead to appoint a successor for each of their sections first.');
+    }
+    const worksIn = role === 'sales' ? desiredSections : role === 'lead' ? led.map((row) => row.id) : [];
+    const membershipsChange =
+      role === 'sales'
+        ? desiredSections.join() !== memberships.map((row) => row.sectionId).join()
+        : memberships.length > 0;
+
+    if ((roleChanged || membershipsChange) && (await ownsOutside(tx, target.id, worksIn))) {
+      throw blocked(
+        'This person still owns opportunities in a section they would no longer work in. Management or the section lead must transfer them first.',
+      );
+    }
+    if (roleChanged && target.role === 'admin') assertNotLastAdministrator(activeAdmins, target.id);
 
     const changes: Record<string, unknown> = {};
     if (command.fullName !== undefined) changes.fullName = command.fullName;
@@ -472,55 +551,27 @@ export async function updateUser(options: {
       await assertEmailFree(tx, command.email, target.id);
       changes.email = command.email;
     }
-
-    const material = roleChanged || sectionChanged;
-    if (material) {
-      // BR-051: an owner's role and section cannot drift from their
-      // opportunities. Lead <-> salesperson within the same section keeps
-      // them eligible owners in that section, so it is allowed.
-      const staysEligibleHere = !sectionChanged && SECTION_ROLES.includes(role) && SECTION_ROLES.includes(target.role);
-      if (!staysEligibleHere && (await ownsAnyOpportunity(tx, target.id))) {
-        throw blocked(
-          'This person still owns opportunities. Management or the section lead must transfer them before the role or section changes.',
-        );
-      }
-      if (target.role === 'lead' && target.active && target.sectionId) {
-        const section = await lockSection(tx, target.sectionId);
-        if (section.leadUserId === target.id) {
-          throw blocked('This person is the section’s lead. Use Replace lead to appoint their successor first.');
-        }
-      }
-      if (target.role === 'admin' && role !== 'admin') assertNotLastAdministrator(activeAdmins, target.id);
-      changes.role = role;
-      changes.sectionId = sectionId;
-    }
-
-    // Reporting line.
-    let managerId: string | null = target.managerId;
-    if (role === 'sales' && sectionId) {
-      await lockSection(tx, sectionId);
-      const lead = await activeLead(tx, sectionId);
-      if (!lead) throw blocked('This section has no active lead. Appoint a section lead first.');
-      if (command.managerId !== undefined && command.managerId !== lead.id) {
-        throw validationFailed({ managerId: 'Salespeople report to their section’s lead.' });
-      }
-      managerId = lead.id;
-    } else if (role === 'lead') {
-      if (roleChanged || sectionChanged) {
-        await lockSection(tx, sectionId as string);
-        if (await activeLead(tx, sectionId as string)) {
-          throw blocked('This section already has an active lead. Use Replace lead to change it.');
-        }
-      }
-      if (command.managerId !== undefined) managerId = await assertLeadManager(tx, command.managerId);
-      else if (roleChanged) managerId = null;
-    } else {
-      managerId = null;
-    }
+    if (roleChanged) changes.role = role;
+    const managerId =
+      role === 'lead'
+        ? command.managerId !== undefined
+          ? await assertLeadManager(tx, command.managerId)
+          : roleChanged
+            ? null
+            : target.managerId
+        : null;
     if (managerId !== target.managerId) changes.managerId = managerId;
 
     const diff = diffRecords(target as unknown as Record<string, unknown>, changes);
-    if (diff.changed.length === 0) return;
+    if (diff.changed.length === 0 && !membershipsChange) return;
+
+    const moved = await applyMemberships(tx, target.id, role === 'sales' ? desiredSections : [], {
+      actor,
+      requestId,
+      reason: command.reason,
+    });
+    // SEC-005: a role change or a lost section ends live sessions.
+    const material = roleChanged || moved.left > 0;
 
     const updated = await tx
       .update(users)
@@ -528,26 +579,24 @@ export async function updateUser(options: {
         ...changes,
         updatedAt: now(),
         version: sql`${users.version} + 1`,
-        // SEC-005: a role or section change ends live sessions.
         ...(material ? { sessionVersion: sql`${users.sessionVersion} + 1` } : {}),
       })
       .where(and(eq(users.id, target.id), eq(users.version, command.version)))
       .returning({ id: users.id });
     if (updated.length === 0) throw versionConflict();
 
-    if (role === 'lead' && (roleChanged || sectionChanged) && target.active) {
-      await installLead(tx, sectionId as string, target.id, { actor, requestId });
+    if (diff.changed.length > 0) {
+      await audit(tx, actor, {
+        entityType: 'user',
+        entityId: target.id,
+        // Privileged role changes are audited as their own event (BR-052).
+        action: roleChanged ? 'account.role_changed' : 'account.updated',
+        before: diff.before,
+        after: diff.after,
+        reason: command.reason,
+        requestId,
+      });
     }
-
-    await audit(tx, actor, {
-      entityType: 'user',
-      entityId: target.id,
-      // Privileged role changes are audited as their own event (BR-052).
-      action: roleChanged ? 'account.role_changed' : 'account.updated',
-      before: diff.before,
-      after: diff.after,
-      requestId,
-    });
   });
 
   return readUser(db, userId);
@@ -571,11 +620,8 @@ export async function deactivateUser(options: {
     if (!target.active) throw blocked('This account is already inactive.');
 
     if (target.role === 'admin') assertNotLastAdministrator(activeAdmins, target.id);
-    if (target.role === 'lead' && target.sectionId) {
-      const section = await lockSection(tx, target.sectionId);
-      if (section.active && section.leadUserId === target.id) {
-        throw blocked('This person is the only lead of an active section. Use Replace lead first (BR-052).');
-      }
+    if (target.role === 'lead' && (await ledActiveSections(tx, target.id)).length > 0) {
+      throw blocked('This person is the lead of an active section. Use Replace lead for each of their sections first (BR-052).');
     }
     // BR-051. The opportunity check sees every committed transfer: transfers
     // lock the new owner's row, which this transaction already holds.
@@ -585,6 +631,8 @@ export async function deactivateUser(options: {
       );
     }
 
+    // Memberships stay open: they keep historical owner-section pairs valid,
+    // and an inactive account sees nothing whatever its memberships.
     await tx
       .update(users)
       .set({
@@ -626,34 +674,31 @@ export async function reactivateUser(options: {
     if (target.version !== command.version) throw versionConflict();
     if (target.active) throw blocked('This account is already active.');
 
-    const changes: Record<string, unknown> = { active: true };
-    if (target.sectionId && SECTION_ROLES.includes(target.role)) {
-      const section = await lockSection(tx, target.sectionId);
-      if (!section.active) throw blocked('This account’s section is inactive. Reactivate the section or move the account first.');
-      const lead = await activeLead(tx, target.sectionId);
-      if (target.role === 'lead' && lead) {
-        throw blocked('The section already has an active lead. Change this account’s role before reactivating it.');
-      }
-      if (target.role === 'sales') {
-        if (!lead) throw blocked('The section has no active lead. Appoint one before reactivating salespeople.');
-        changes.managerId = lead.id;
+    if (target.role === 'sales') {
+      const memberships = await openMemberships(tx, target.id);
+      const [inActiveSection] = memberships.length
+        ? await tx
+            .select({ id: sections.id })
+            .from(sections)
+            .where(and(inArray(sections.id, memberships.map((row) => row.sectionId)), eq(sections.active, true)))
+            .limit(1)
+        : [];
+      if (!inActiveSection) {
+        throw blocked('This salesperson belongs to no active section. Edit the account to choose a section, then reactivate it.');
       }
     }
 
     await tx
       .update(users)
-      .set({ ...changes, updatedAt: now(), version: sql`${users.version} + 1` })
+      .set({ active: true, updatedAt: now(), version: sql`${users.version} + 1` })
       .where(eq(users.id, target.id));
-    if (target.role === 'lead' && target.sectionId) {
-      await installLead(tx, target.sectionId, target.id, { actor, requestId, reason: command.reason });
-    }
 
     await audit(tx, actor, {
       entityType: 'user',
       entityId: target.id,
       action: 'account.reactivated',
       before: { active: false },
-      after: changes,
+      after: { active: true },
       reason: command.reason,
       requestId,
     });
@@ -705,25 +750,48 @@ async function assertSectionNameFree(tx: Database, name: string, exceptId?: stri
   if (row) throw validationFailed({ name: 'Another section already has this name.' });
 }
 
+/** An existing, active account with the lead role, locked. */
+async function lockExistingLead(tx: Database, userId: string, field: string) {
+  const [row] = await tx
+    .select({ id: users.id, role: users.role, active: users.active })
+    .from(users)
+    .where(eq(users.id, userId))
+    .for('update')
+    .limit(1);
+  if (!row || !row.active || row.role !== 'lead') {
+    throw validationFailed({ [field]: 'Choose an active section lead. To promote a salesperson, use Replace lead on one of their sections.' });
+  }
+  return row;
+}
+
+/** CR4: a section is created with its lead, an existing section lead who may already lead others. */
 export async function createSection(options: {
   db: Database;
   actor: Actor;
   name: string;
+  leadId: string;
   requestId: string;
   completeClaim: CompleteClaimInTransaction;
 }): Promise<AdminSectionDto> {
-  const { db, actor, name, requestId, completeClaim } = options;
+  const { db, actor, name, leadId, requestId, completeClaim } = options;
   assertAdministrator(actor);
   const id = await db.transaction(async (tx) => {
     await beginAdministrativeChange(tx, actor);
     await assertSectionNameFree(tx, name);
+    await lockExistingLead(tx, leadId, 'leadId');
     const timestamp = now();
     const [created] = await tx
       .insert(sections)
-      .values({ name, active: true, createdAt: timestamp, updatedAt: timestamp })
+      .values({ name, leadUserId: leadId, active: true, createdAt: timestamp, updatedAt: timestamp })
       .returning({ id: sections.id });
     if (!created) throw new Error('Section insert returned no row.');
-    await audit(tx, actor, { entityType: 'section', entityId: created.id, action: 'section.created', after: { name }, requestId });
+    await audit(tx, actor, {
+      entityType: 'section',
+      entityId: created.id,
+      action: 'section.created',
+      after: { name, leadUserId: leadId },
+      requestId,
+    });
     await completeClaim(tx, created.id);
     return created.id;
   });
@@ -768,11 +836,14 @@ export async function renameSection(options: {
 }
 
 /**
- * BR-052: appoints a salesperson of the section as its lead, in one
- * transaction. The previous lead, if any, becomes a salesperson in the same
- * section — so anything they own stays validly owned — and every salesperson
- * now reports to the new lead. Both accounts' sessions are revoked, because
- * both changed role.
+ * BR-052 / CR4: appoints the section's lead in one transaction.
+ *
+ * The candidate is either an existing lead, who gains this section, or a
+ * salesperson member of it, who is promoted: their memberships end, so they
+ * must own nothing outside this section. The outgoing lead keeps any other
+ * section they lead; if this was their only one they become a salesperson
+ * member of it (D-CR4-4), so anything they own here stays validly owned. An
+ * outgoing lead who keeps other sections must own nothing here.
  */
 export async function replaceSectionLead(options: {
   db: Database;
@@ -789,59 +860,82 @@ export async function replaceSectionLead(options: {
     const section = await lockSection(tx, sectionId);
     if (section.version !== command.version) throw versionConflict();
     if (!section.active) throw blocked('Reactivate the section before appointing its lead.');
+    if (section.leadUserId === command.newLeadId) throw blocked('This person already leads the section.');
 
     const candidate = await lockUser(tx, command.newLeadId);
-    if (!candidate.active || candidate.role !== 'sales' || candidate.sectionId !== sectionId) {
-      throw validationFailed({ newLeadId: 'Choose an active salesperson in this section.' });
+    const candidateMemberships = candidate.role === 'sales' ? await openMemberships(tx, candidate.id) : [];
+    const promoting = candidate.role === 'sales' && candidateMemberships.some((row) => row.sectionId === sectionId);
+    if (!candidate.active || !(candidate.role === 'lead' || promoting)) {
+      throw validationFailed({ newLeadId: 'Choose an active section lead, or an active salesperson in this section.' });
     }
 
-    const previous = await activeLead(tx, sectionId);
+    const previous = section.leadUserId ? await lockUser(tx, section.leadUserId) : null;
     const timestamp = now();
+    const context = { actor, requestId, reason: command.reason };
 
-    // Demote first: the one-active-lead-per-section index must never see two.
-    if (previous) {
+    if (promoting) {
+      if (await ownsOutside(tx, candidate.id, [sectionId])) {
+        throw blocked(
+          'This salesperson owns opportunities in another section. Transfer them before appointing them lead, because a lead works only in the sections they lead.',
+        );
+      }
+      await applyMemberships(tx, candidate.id, [], context);
       await tx
         .update(users)
         .set({
-          role: 'sales',
-          managerId: candidate.id,
+          role: 'lead',
+          managerId: previous?.managerId ?? null,
           sessionVersion: sql`${users.sessionVersion} + 1`,
           updatedAt: timestamp,
           version: sql`${users.version} + 1`,
         })
-        .where(eq(users.id, previous.id));
+        .where(eq(users.id, candidate.id));
       await audit(tx, actor, {
         entityType: 'user',
-        entityId: previous.id,
+        entityId: candidate.id,
         action: 'account.role_changed',
-        before: { role: 'lead', managerId: previous.managerId },
-        after: { role: 'sales', managerId: candidate.id },
+        before: { role: 'sales', managerId: candidate.managerId },
+        after: { role: 'lead', managerId: previous?.managerId ?? null },
         reason: command.reason,
         requestId,
       });
     }
 
-    await tx
-      .update(users)
-      .set({
-        role: 'lead',
-        managerId: previous?.managerId ?? null,
-        sessionVersion: sql`${users.sessionVersion} + 1`,
-        updatedAt: timestamp,
-        version: sql`${users.version} + 1`,
-      })
-      .where(eq(users.id, candidate.id));
-    await audit(tx, actor, {
-      entityType: 'user',
-      entityId: candidate.id,
-      action: 'account.role_changed',
-      before: { role: 'sales', managerId: candidate.managerId },
-      after: { role: 'lead', managerId: previous?.managerId ?? null },
-      reason: command.reason,
-      requestId,
-    });
+    if (previous) {
+      const othersLed = (await ledActiveSections(tx, previous.id)).filter((row) => row.id !== sectionId);
+      if (othersLed.length === 0 && previous.active) {
+        // Their only section: they stay in it, as a salesperson.
+        await tx
+          .update(users)
+          .set({
+            role: 'sales',
+            managerId: null,
+            sessionVersion: sql`${users.sessionVersion} + 1`,
+            updatedAt: timestamp,
+            version: sql`${users.version} + 1`,
+          })
+          .where(eq(users.id, previous.id));
+        await audit(tx, actor, {
+          entityType: 'user',
+          entityId: previous.id,
+          action: 'account.role_changed',
+          before: { role: 'lead', managerId: previous.managerId },
+          after: { role: 'sales', managerId: null },
+          reason: command.reason,
+          requestId,
+        });
+        await applyMemberships(tx, previous.id, [sectionId], context);
+      } else if (await ownsOutside(tx, previous.id, othersLed.map((row) => row.id))) {
+        throw blocked(
+          'The current lead owns opportunities in this section and leads other sections. Transfer those records before replacing them here.',
+        );
+      }
+    }
 
-    await installLead(tx, sectionId, candidate.id, { actor, requestId, reason: command.reason });
+    await tx
+      .update(sections)
+      .set({ leadUserId: candidate.id, updatedAt: timestamp, version: sql`${sections.version} + 1` })
+      .where(eq(sections.id, sectionId));
     await audit(tx, actor, {
       entityType: 'section',
       entityId: sectionId,
@@ -861,7 +955,7 @@ export async function setSectionActive(options: {
   actor: Actor;
   sectionId: string;
   active: boolean;
-  command: { version: number; reason?: string | undefined };
+  command: { version: number; reason?: string | undefined; leadId?: string | undefined };
   requestId: string;
 }): Promise<AdminSectionDto> {
   const { db, actor, sectionId, active, command, requestId } = options;
@@ -873,7 +967,9 @@ export async function setSectionActive(options: {
     if (section.version !== command.version) throw versionConflict();
     if (section.active === active) throw blocked(`This section is already ${active ? 'active' : 'inactive'}.`);
 
+    const changes: Record<string, unknown> = { active };
     if (!active) {
+      if (command.leadId) throw validationFailed({ leadId: 'A lead is chosen only when reactivating a section.' });
       // BR-052, without revealing what the open work is.
       const [open] = await tx
         .select({ id: opportunities.id })
@@ -890,23 +986,33 @@ export async function setSectionActive(options: {
         throw blocked('This section still has open opportunities. Management must transfer or close them first.');
       }
       const [member] = await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(and(eq(users.sectionId, sectionId), eq(users.active, true)))
+        .select({ id: sectionMemberships.id })
+        .from(sectionMemberships)
+        .innerJoin(users, eq(users.id, sectionMemberships.userId))
+        .where(and(eq(sectionMemberships.sectionId, sectionId), isNull(sectionMemberships.endedAt), eq(users.active, true)))
         .limit(1);
       if (member) throw blocked('This section still has active members. Move or deactivate them first.');
+      // The lead pointer stays as history. An inactive section grants its
+      // former lead nothing (scope reads active sections only).
+    } else {
+      // CR4: an active section has a lead. The former lead resumes unless
+      // another is named; either way it must be an active lead account now.
+      const leadId = command.leadId ?? section.leadUserId;
+      if (!leadId) throw validationFailed({ leadId: 'Choose the section’s lead.' });
+      await lockExistingLead(tx, leadId, 'leadId');
+      if (leadId !== section.leadUserId) changes.leadUserId = leadId;
     }
 
     await tx
       .update(sections)
-      .set({ active, updatedAt: now(), version: sql`${sections.version} + 1` })
+      .set({ ...changes, updatedAt: now(), version: sql`${sections.version} + 1` })
       .where(eq(sections.id, sectionId));
     await audit(tx, actor, {
       entityType: 'section',
       entityId: sectionId,
       action: active ? 'section.reactivated' : 'section.deactivated',
-      before: { active: !active },
-      after: { active },
+      before: { active: !active, ...('leadUserId' in changes ? { leadUserId: section.leadUserId } : {}) },
+      after: changes,
       reason: command.reason,
       requestId,
     });
@@ -918,6 +1024,15 @@ export async function setSectionActive(options: {
 // ---------------------------------------------------------------------------
 // Administrative audit (SEC-012)
 // ---------------------------------------------------------------------------
+
+/** What an email configuration event is about, for the audit list (CR2). */
+function configurationSubject(row: { entityType: string; afterData: unknown }): string | null {
+  const after = (row.afterData ?? {}) as Record<string, unknown>;
+  if (row.entityType === 'email_template' && typeof after.template === 'string') return after.template;
+  if (row.entityType === 'email_settings') return 'Mail server';
+  if (row.entityType === 'email_delivery' && typeof after.recipientAddress === 'string') return after.recipientAddress;
+  return null;
+}
 
 /** Administrative events only. Commercial history is never returned here. */
 export async function listAdminAudit(
@@ -973,7 +1088,7 @@ export async function listAdminAudit(
       id: row.id,
       action: row.action,
       actorName: row.actorName ?? 'System',
-      subject: subjects.get(row.entityId) ?? null,
+      subject: subjects.get(row.entityId) ?? configurationSubject(row) ?? null,
       occurredAt: row.occurredAt.toISOString(),
       reason: row.reason,
       changes: changes[index] ?? [],
@@ -983,4 +1098,3 @@ export async function listAdminAudit(
     pageSize,
   };
 }
-

@@ -8,12 +8,12 @@ import { Router, type NextFunction, type Request, type RequestHandler, type Resp
 
 import {
   accountStateSchema,
+  createSectionSchema,
   createUserSchema,
   listUsersQuerySchema,
   paginationQuerySchema,
   renameSectionSchema,
   replaceLeadSchema,
-  sectionNameSchema,
   sectionStateSchema,
   updateUserSchema,
   uuidField,
@@ -41,6 +41,8 @@ import {
   updateUser,
 } from '../services/admin.js';
 import { runIdempotent } from '../services/idempotency.js';
+import type { EmailRuntime } from '../email/runtime.js';
+import { createAdminEmailRouter } from './adminEmail.js';
 
 function handle(fn: (...args: Parameters<RequestHandler>) => Promise<void>): RequestHandler {
   return (req, res, next) => {
@@ -70,10 +72,12 @@ export function createAdminRouter(options: {
   db: Database;
   csrfGuard: RequestHandler;
   appOrigin: string;
+  email: EmailRuntime;
 }): Router {
   const { db, csrfGuard, appOrigin } = options;
   const router = Router();
   router.use(requireAuth, requireAdministrator);
+  router.use('/email', createAdminEmailRouter({ db, csrfGuard, email: options.email }));
 
   const actorOf = (req: Request) => {
     if (!req.actor) throw unauthenticated();
@@ -161,7 +165,7 @@ export function createAdminRouter(options: {
     csrfGuard,
     handle(async (req, res) => {
       const actor = actorOf(req);
-      const { name } = parseOrThrow(sectionNameSchema, req.body);
+      const { name, leadId } = parseOrThrow(createSectionSchema, req.body);
       const key = requireIdempotencyKey(req);
       const { result, replayed } = await runIdempotent({
         db,
@@ -169,7 +173,7 @@ export function createAdminRouter(options: {
         operation: 'admin.section.create',
         key,
         payload: req.body,
-        execute: (completeClaim) => createSection({ db, actor, name, requestId: req.requestId, completeClaim }),
+        execute: (completeClaim) => createSection({ db, actor, name, leadId, requestId: req.requestId, completeClaim }),
         replay: (entityId) => getSection(db, actor, entityId),
       });
       res.status(replayed ? 200 : 201).json(result);

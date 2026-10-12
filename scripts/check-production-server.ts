@@ -7,6 +7,7 @@
  * return in isolation:
  *
  *   - the development TEST scanner is refused at start-up;
+ *   - EMAIL_TRANSPORT=capture is refused (it would silently lose real email);
  *   - with DOCUMENT_SCANNER=none it starts, and says files stay unavailable;
  *   - security headers are present (HSTS among them);
  *   - cookies are Secure and SameSite=Strict, and no session cookie is sent
@@ -42,7 +43,7 @@ function check(label: string, ok: boolean, detail = ''): void {
   (ok ? passes : failures).push(ok ? label : `${label}${detail ? ` — ${detail}` : ''}`);
 }
 
-function productionEnv(scanner: string): NodeJS.ProcessEnv {
+function productionEnv(scanner: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
@@ -56,11 +57,12 @@ function productionEnv(scanner: string): NodeJS.ProcessEnv {
     DOCUMENT_SCANNER: scanner,
     DOCUMENT_STORAGE_DIR: mkdtempSync(path.join(os.tmpdir(), 'penta-prodcheck-')),
     JOBS_ENABLED: 'false',
+    ...extra,
   };
 }
 
-function start(scanner: string): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
-  const child = spawn(process.execPath, [ENTRY], { env: productionEnv(scanner), stdio: ['ignore', 'pipe', 'pipe'] });
+function start(scanner: string, extra: NodeJS.ProcessEnv = {}): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
+  const child = spawn(process.execPath, [ENTRY], { env: productionEnv(scanner, extra), stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   child.stdout?.on('data', (chunk: Buffer) => (output += chunk.toString()));
   child.stderr?.on('data', (chunk: Buffer) => (output += chunk.toString()));
@@ -92,6 +94,16 @@ async function main(): Promise<void> {
     refused.output().slice(0, 200),
   );
 
+  // 1b. The development mail capture is refused (CR2): it would lose real email.
+  const capture = start('none', { EMAIL_TRANSPORT: 'capture' });
+  const captureCode = await Promise.race([capture.exited, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 15_000))]);
+  if (captureCode === 'timeout') capture.child.kill();
+  check(
+    'refuses EMAIL_TRANSPORT=capture in production',
+    captureCode !== 'timeout' && captureCode !== 0 && /EMAIL_TRANSPORT=capture/.test(capture.output()),
+    capture.output().slice(0, 200),
+  );
+
   // 2. With no scanner it starts, and warns that files stay unavailable.
   const server = start('none');
   try {
@@ -116,7 +128,9 @@ async function main(): Promise<void> {
     const csrf = await fetch(`${base}/api/auth/csrf`);
     const cookies = csrf.headers.getSetCookie();
     check('sets cookies only with Secure and SameSite=Strict', cookies.length > 0 && cookies.every((c) => /;\s*Secure/i.test(c) && /SameSite=Strict/i.test(c)), cookies.join(' | '));
-    check('sends no session cookie over plain HTTP', !cookies.some((c) => c.startsWith('penta.sid=')), cookies.join(' | '));
+    // A deletion (empty value, expired) carries no session id; the stale-cookie
+    // recovery sends those on purpose. Any session id at all fails.
+    check('sends no session cookie over plain HTTP', !cookies.some((c) => c.startsWith('penta.sid=') && !c.startsWith('penta.sid=;')), cookies.join(' | '));
 
     for (const probe of ['/api/demo/reset', '/api/dev/seed', '/api/auth/switch-user', '/api/auth/demo-login', '/api/reset']) {
       const response = await fetch(`${base}${probe}`, { method: 'POST', headers: { Origin: ORIGIN } });

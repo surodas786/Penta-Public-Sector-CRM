@@ -27,8 +27,6 @@ import { formatInstant } from '../ui/dates.js';
 import { useSubmission } from '../useSubmission.js';
 import { DialogAlert } from './FormBits.js';
 
-const SECTION_ROLES: readonly UserRole[] = ['sales', 'lead'];
-
 // ---------------------------------------------------------------------------
 // Add / edit user
 // ---------------------------------------------------------------------------
@@ -56,7 +54,7 @@ export function UserDialog({
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<UserRole>('sales');
-  const [sectionId, setSectionId] = useState('');
+  const [sectionIds, setSectionIds] = useState<string[]>([]);
   const [managerId, setManagerId] = useState('');
 
   useEffect(() => {
@@ -65,13 +63,15 @@ export function UserDialog({
     setFullName(user?.fullName ?? '');
     setEmail(user?.email ?? '');
     setRole(user?.role ?? 'sales');
-    setSectionId(user?.sectionId ?? activeSections[0]?.id ?? '');
+    // A salesperson's sections; a lead's sections come from appointment (CR4, CR5).
+    setSectionIds(user?.role === 'sales' ? user.sections.map((item) => item.id) : activeSections[0] ? [activeSections[0].id] : []);
     setManagerId(user?.managerId ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, user?.id]);
 
-  const inSection = SECTION_ROLES.includes(role);
-  const section = sections.find((item) => item.id === sectionId);
+  const chosenSections = sections.filter((item) => sectionIds.includes(item.id));
+  const toggleSection = (id: string, checked: boolean) =>
+    setSectionIds((current) => (checked ? [...current, id] : current.filter((value) => value !== id)));
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -79,8 +79,8 @@ export function UserDialog({
       fullName,
       email,
       role,
-      sectionId: inSection ? sectionId || null : null,
-      // A salesperson's reporting line is derived from the section's lead.
+      // Only salespeople are members; their reporting line is each section's lead.
+      ...(role === 'sales' ? { sectionIds } : {}),
       managerId: role === 'lead' ? managerId || null : null,
     };
     const result = await submission.run(async (key) =>
@@ -99,7 +99,7 @@ export function UserDialog({
       open={open}
       onClose={onClose}
       title={user ? 'Edit user' : 'Add user'}
-      description="This version supports one section lead per section, with salespeople reporting directly to that lead."
+      description="Each active section has one lead, who may lead several sections. A salesperson may belong to several sections and reports to the lead of each."
       footer={
         <>
           <Button onClick={onClose} disabled={submission.submitting}>
@@ -149,20 +149,63 @@ export function UserDialog({
             ))}
           </select>
         </Field>
-        {inSection && (
-          <Field label="Section" htmlFor="u-sec" required error={errors.sectionId}>
-            <select id="u-sec" className={inputCls(errors.sectionId)} value={sectionId} onChange={(event) => setSectionId(event.target.value)}>
+        {role === 'sales' && (
+          <fieldset className="sm:col-span-2">
+            <legend className="mb-1 block text-xs font-semibold text-slate-700">
+              Sections<span className="text-red-600"> *</span>
+            </legend>
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
               {activeSections.map((item) => (
-                <option key={item.id} value={item.id}>
+                <label key={item.id} className="flex items-center gap-2 text-[13px] text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={sectionIds.includes(item.id)}
+                    onChange={(event) => toggleSection(item.id, event.target.checked)}
+                  />
                   {item.name}
-                </option>
+                </label>
               ))}
-            </select>
-          </Field>
+            </div>
+            {errors.sectionIds ? (
+              <p className="mt-1 text-xs font-medium text-red-600" role="alert">
+                {errors.sectionIds}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-slate-500">
+                Leaving a section is refused while they own opportunities there, and ends their sessions.
+              </p>
+            )}
+          </fieldset>
         )}
         {role === 'sales' && (
-          <Field label="Reports to" htmlFor="u-mgr-sales" error={errors.managerId} hint="Salespeople report to their section’s lead.">
-            <input id="u-mgr-sales" className={inputCls()} value={section?.leadName ?? 'No active lead — appoint one first'} disabled />
+          <Field
+            label="Reports to"
+            htmlFor="u-mgr-sales"
+            className="sm:col-span-2"
+            error={errors.managerId}
+            hint="Salespeople report to the lead of each of their sections."
+          >
+            <input
+              id="u-mgr-sales"
+              className={inputCls()}
+              value={chosenSections.map((item) => `${item.leadName ?? 'No lead'} (${item.name})`).join(', ') || 'Choose a section'}
+              disabled
+            />
+          </Field>
+        )}
+        {role === 'lead' && (
+          <Field
+            label="Sections led"
+            htmlFor="u-led"
+            error={errors.sectionIds}
+            hint="Appoint a lead from a section’s Replace lead action, or name them when adding a section."
+          >
+            <input
+              id="u-led"
+              className={inputCls()}
+              value={user?.role === 'lead' ? user.sections.map((item) => item.name).join(', ') || 'None yet' : 'None yet'}
+              disabled
+            />
           </Field>
         )}
         {role === 'lead' && (
@@ -347,6 +390,7 @@ export function SectionDialog({
   const errors = submission.fieldErrors;
   const [name, setName] = useState('');
   const [newLeadId, setNewLeadId] = useState('');
+  const [leadId, setLeadId] = useState('');
   const [reason, setReason] = useState('');
 
   useEffect(() => {
@@ -354,6 +398,7 @@ export function SectionDialog({
     submission.reset();
     setName(action.kind === 'rename' ? action.section.name : '');
     setNewLeadId('');
+    setLeadId('');
     setReason('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [action]);
@@ -361,7 +406,12 @@ export function SectionDialog({
   if (!action) return <Modal open={false} onClose={onClose} title="">{null}</Modal>;
 
   const section = action.kind === 'create' ? null : action.section;
-  const candidates = users.filter((user) => user.active && user.role === 'sales' && user.sectionId === section?.id);
+  // CR4: an existing lead may take on this section; a salesperson in it may be promoted.
+  const activeLeads = users.filter((user) => user.active && user.role === 'lead');
+  const leadCandidates = activeLeads.filter((user) => user.id !== section?.leadId);
+  const memberCandidates = users.filter(
+    (user) => user.active && user.role === 'sales' && user.sections.some((item) => item.id === section?.id),
+  );
 
   const title =
     action.kind === 'create'
@@ -381,7 +431,7 @@ export function SectionDialog({
     const result = await submission.run((key) => {
       switch (action.kind) {
         case 'create':
-          return createAdminSection({ name }, key);
+          return createAdminSection({ name, leadId }, key);
         case 'rename':
           return renameAdminSection(action.section.id, { version: action.section.version, name });
         case 'lead':
@@ -390,6 +440,7 @@ export function SectionDialog({
           return setAdminSectionActive(action.section.id, !action.section.active, {
             version: action.section.version,
             reason: reason || undefined,
+            ...(!action.section.active && leadId ? { leadId } : {}),
           });
       }
     });
@@ -428,24 +479,57 @@ export function SectionDialog({
             <input id="s-name" className={inputCls(errors.name)} value={name} onChange={(event) => setName(event.target.value)} />
           </Field>
         )}
+        {action.kind === 'create' && (
+          <Field
+            label="Section lead"
+            htmlFor="s-new-lead"
+            required
+            error={errors.leadId}
+            hint="An active section always has a lead. To make a salesperson the lead, add them to the section and use Replace lead."
+          >
+            <select id="s-new-lead" className={inputCls(errors.leadId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}>
+              <option value="">Select a section lead…</option>
+              {activeLeads.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.fullName}
+                  {user.sections.length > 0 ? ` — leads ${user.sections.map((item) => item.name).join(', ')}` : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         {action.kind === 'lead' && (
           <>
             <p>
-              The chosen salesperson becomes the section lead.{' '}
+              Choose an existing section lead, who keeps their other sections, or a salesperson in this section, who is promoted.{' '}
               {section?.leadName
-                ? `${section.leadName} becomes a salesperson in the same section and keeps the opportunities they own. `
+                ? `${section.leadName} keeps any other section they lead; if this is their only one, they stay in it as a salesperson. `
                 : ''}
-              Every salesperson in the section then reports to the new lead, in one step. The sessions of everyone whose role
-              changes end, so their access is recalculated.
+              Every salesperson in the section then reports to the new lead. The sessions of everyone whose role changes end, so
+              their access is recalculated.
             </p>
             <Field label="New lead" htmlFor="s-lead" required error={errors.newLeadId}>
               <select id="s-lead" className={inputCls(errors.newLeadId)} value={newLeadId} onChange={(event) => setNewLeadId(event.target.value)}>
-                <option value="">Select a salesperson in this section…</option>
-                {candidates.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.fullName}
-                  </option>
-                ))}
+                <option value="">Select the new lead…</option>
+                {leadCandidates.length > 0 && (
+                  <optgroup label="Section leads">
+                    {leadCandidates.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.fullName}
+                        {user.sections.length > 0 ? ` — leads ${user.sections.map((item) => item.name).join(', ')}` : ''}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {memberCandidates.length > 0 && (
+                  <optgroup label="Salespeople in this section">
+                    {memberCandidates.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.fullName}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </Field>
             <Field label="Reason" htmlFor="s-reason" required error={errors.reason}>
@@ -457,9 +541,21 @@ export function SectionDialog({
           <>
             <p>
               {section?.active
-                ? 'A section with open opportunities or active members cannot be deactivated.'
-                : 'The section can receive a lead and salespeople again.'}
+                ? 'A section with open opportunities or active members cannot be deactivated. Its lead keeps any other section they lead.'
+                : 'An active section always has a lead. Its former lead resumes unless you choose another.'}
             </p>
+            {!section?.active && (
+              <Field label="Section lead" htmlFor="s-reactivate-lead" error={errors.leadId}>
+                <select id="s-reactivate-lead" className={inputCls(errors.leadId)} value={leadId} onChange={(event) => setLeadId(event.target.value)}>
+                  <option value="">The former lead</option>
+                  {activeLeads.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.fullName}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Reason" htmlFor="s-state-reason" hint="Optional — recorded in the administrative audit.">
               <textarea id="s-state-reason" rows={2} className={inputCls()} value={reason} onChange={(event) => setReason(event.target.value)} />
             </Field>

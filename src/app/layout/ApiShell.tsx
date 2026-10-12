@@ -14,6 +14,7 @@ import {
   Building2Icon,
   CalendarCheckIcon,
   FileTextIcon,
+  KeyRoundIcon,
   KanbanSquareIcon,
   LayoutDashboardIcon,
   LockIcon,
@@ -26,6 +27,7 @@ import {
 
 import { ROLE_LABELS } from '../../../shared/enums.js';
 import { useAuth } from '../AuthContext.js';
+import { ChangePasswordDialog } from '../components/ChangePasswordDialog.js';
 import { Avatar } from '../ui/ApiBadges.js';
 import { BUSINESS_TIME_LABEL } from '../ui/dates.js';
 import { GlobalSearch } from './GlobalSearch.js';
@@ -45,6 +47,7 @@ export function ApiShell() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   if (!user) return null;
 
@@ -185,10 +188,19 @@ export function ApiShell() {
               <p className="text-[12.5px] font-semibold text-slate-900">{user.fullName}</p>
               <p className="text-[10.5px] text-slate-500">
                 {ROLE_LABELS[user.role]}
-                {user.section ? ` — ${user.section.name}` : ''}
+                {user.sections.length > 0 ? ` — ${user.sections.map((section) => section.name).join(', ')}` : ''}
               </p>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setChangingPassword(true)}
+            className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition-colors duration-150 hover:bg-slate-50 sm:px-3"
+            title="Change password"
+          >
+            <KeyRoundIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="sr-only sm:not-sr-only">Change password</span>
+          </button>
           <button
             type="button"
             onClick={() => void handleSignOut()}
@@ -202,6 +214,7 @@ export function ApiShell() {
         <main className="flex-1 overflow-y-auto" id="main-content">
           <Outlet />
         </main>
+        <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} />
       </div>
     </div>
   );

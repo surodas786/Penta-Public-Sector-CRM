@@ -11,6 +11,9 @@
  *   report_export          produces one queued CSV export.
  *   housekeeping           daily: expired exports, expired idempotency
  *                          records, finished jobs older than 30 days.
+ *   email.send             sends one queued email (CR2), re-checking that
+ *                          delivery, the template and the recipient are
+ *                          still on; marked failed after the last attempt.
  *
  * Every handler is idempotent, so a retry after a partial failure is safe.
  */
@@ -19,7 +22,9 @@ import { and, inArray, lt, sql } from 'drizzle-orm';
 import { dhakaDateOf, now } from '../clock.js';
 import type { Database } from '../db/client.js';
 import { backgroundJobs } from '../db/schema.js';
+import { NO_EMAIL, type EmailRuntime } from '../email/runtime.js';
 import type { JobsConfig } from '../env.js';
+import { deliverEmail, failEmailAfterRetries } from '../services/email.js';
 import { failExportAfterRetries, generateExport, purgeExpiredExports } from '../services/exports.js';
 import { pruneExpiredIdempotencyRecords } from '../services/idempotency.js';
 import { generateDeadlineAlerts, generateOwnershipAlerts, runNotificationScan } from '../services/notifications.js';
@@ -27,7 +32,11 @@ import { enqueueJob, type JobHandlers } from './queue.js';
 
 const FINISHED_JOB_RETENTION_DAYS = 30;
 
-export function createJobHandlers(db: Database, config: Pick<JobsConfig, 'exportTtlHours' | 'exportMaxRows'>): JobHandlers {
+export function createJobHandlers(
+  db: Database,
+  config: Pick<JobsConfig, 'exportTtlHours' | 'exportMaxRows'>,
+  email: EmailRuntime = NO_EMAIL,
+): JobHandlers {
   return {
     'notifications.scan': {
       async run() {
@@ -49,6 +58,14 @@ export function createJobHandlers(db: Database, config: Pick<JobsConfig, 'export
       },
       async onFinalFailure(job) {
         await failExportAfterRetries(db, String(job.payload.exportId));
+      },
+    },
+    'email.send': {
+      async run(job) {
+        await deliverEmail(db, email, String(job.payload.deliveryId));
+      },
+      async onFinalFailure(job) {
+        await failEmailAfterRetries(db, String(job.payload.deliveryId));
       },
     },
     housekeeping: {

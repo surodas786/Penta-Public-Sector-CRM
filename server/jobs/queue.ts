@@ -19,7 +19,7 @@ import type { Database } from '../db/client.js';
 import { backgroundJobs } from '../db/schema.js';
 import { ApiError, describeForLog } from '../http/errors.js';
 
-export const JOB_KINDS = ['notifications.scan', 'notifications.refresh', 'report_export', 'housekeeping'] as const;
+export const JOB_KINDS = ['notifications.scan', 'notifications.refresh', 'report_export', 'housekeeping', 'email.send'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 /** A claimed job that has not reported back within this time is presumed lost. */

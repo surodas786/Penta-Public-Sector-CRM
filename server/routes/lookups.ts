@@ -7,7 +7,7 @@
  * list can never advertise an owner the caller may not actually assign.
  */
 import { Router, type RequestHandler } from 'express';
-import { asc, eq } from 'drizzle-orm';
+import { asc } from 'drizzle-orm';
 
 import type { OwnerOptionDto } from '../../shared/api.js';
 import { requireSalesAccess } from '../auth/sessionGuard.js';
@@ -34,26 +34,18 @@ export function createLookupsRouter(options: { db: Database }): Router {
       const actor = req.actor;
       if (!actor) throw unauthenticated();
 
-      const rows = await db
+      // One option per owner and section: a salesperson in two sections, or a
+      // lead of two sections, is offered once in each (CR4, CR5).
+      const items: OwnerOptionDto[] = await db
         .select({
           id: users.id,
           fullName: users.fullName,
-          sectionId: users.sectionId,
+          sectionId: sections.id,
           sectionName: sections.name,
         })
         .from(users)
-        .innerJoin(sections, eq(sections.id, users.sectionId))
-        .where(eligibleOwnerScope(actor))
+        .innerJoin(sections, eligibleOwnerScope(actor, sections.id))
         .orderBy(asc(sections.name), asc(users.fullName));
-
-      // sectionId is non-null for every row because the eligibility predicate
-      // requires it and the join enforces it.
-      const items: OwnerOptionDto[] = rows.map((row) => ({
-        id: row.id,
-        fullName: row.fullName,
-        sectionId: row.sectionId as string,
-        sectionName: row.sectionName,
-      }));
 
       res.json({ items });
     }),

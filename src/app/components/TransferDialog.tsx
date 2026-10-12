@@ -2,7 +2,9 @@
  * Ownership transfer (FR-070, BR-050) — the approved two-step ReassignModal:
  * choose the new owner, then confirm with current and new owner and section,
  * and a reason. The owner list comes from the same scoped lookup the server
- * re-applies, so a lead only ever sees their own section.
+ * re-applies, so a lead only ever sees the sections they lead. Each choice is
+ * an owner in a section (CR4, CR5): someone in two sections is offered in
+ * each, and the chosen section is sent with the request.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -33,7 +35,8 @@ export function TransferDialog({
   onReload: () => void;
 }) {
   const submission = useSubmission();
-  const [ownerId, setOwnerId] = useState('');
+  /** `${ownerId}|${sectionId}` of the chosen owner-and-section pair. */
+  const [choice, setChoice] = useState('');
   const [reason, setReason] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [choiceError, setChoiceError] = useState('');
@@ -44,16 +47,20 @@ export function TransferDialog({
   useEffect(() => {
     if (!subject) return;
     submission.reset();
-    setOwnerId('');
+    setChoice('');
     setReason('');
     setConfirming(false);
     setChoiceError('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subject?.id]);
 
+  // Everything except the record's current owner in its current section.
   const options = useMemo(
-    () => (owners.data?.items ?? []).filter((owner) => owner.id !== subject?.ownerId),
-    [owners.data, subject?.ownerId],
+    () =>
+      (owners.data?.items ?? []).filter(
+        (owner) => !(owner.id === subject?.ownerId && owner.sectionId === subject?.sectionId),
+      ),
+    [owners.data, subject?.ownerId, subject?.sectionId],
   );
   const sectionsInOrder = useMemo(
     () => [...new Map(options.map((owner) => [owner.sectionId, owner.sectionName])).entries()],
@@ -62,11 +69,11 @@ export function TransferDialog({
 
   if (!subject) return <Modal open={false} onClose={onClose} title="">{null}</Modal>;
 
-  const newOwner = options.find((owner) => owner.id === ownerId);
+  const newOwner = options.find((owner) => `${owner.id}|${owner.sectionId}` === choice);
   const crossSection = Boolean(newOwner && newOwner.sectionId !== subject.sectionId);
 
   const next = () => {
-    if (!ownerId) {
+    if (!newOwner) {
       setChoiceError('Select a new owner.');
       return;
     }
@@ -76,14 +83,18 @@ export function TransferDialog({
   const confirm = async (event: React.FormEvent) => {
     event.preventDefault();
     const result = await submission.run((key) =>
-      transferOpportunity(subject.id, { version: subject.version, newOwnerId: ownerId, reason }, key),
+      transferOpportunity(
+        subject.id,
+        { version: subject.version, newOwnerId: newOwner!.id, newSectionId: newOwner!.sectionId, reason },
+        key,
+      ),
     );
     if (result) {
       toast.success(crossSection ? 'Opportunity transferred across sections' : 'Opportunity reassigned', {
         description: `${subject.name} → ${result.ownerName} (${result.sectionName})`,
       });
       onDone(result);
-    } else if (submission.fieldErrors.newOwnerId) {
+    } else if (submission.fieldErrors.newOwnerId || submission.fieldErrors.newSectionId) {
       setConfirming(false);
     }
   };
@@ -139,19 +150,19 @@ export function TransferDialog({
             label="New owner"
             htmlFor="t-owner"
             required
-            error={choiceError || submission.fieldErrors.newOwnerId}
+            error={choiceError || submission.fieldErrors.newOwnerId || submission.fieldErrors.newSectionId}
             hint={
               isManagement
                 ? 'Choosing an owner in another section transfers the opportunity to that section.'
-                : 'Section leads can reassign within their own section.'
+                : 'Section leads can reassign within the sections they lead.'
             }
           >
             <select
               id="t-owner"
               className={inputCls(choiceError)}
-              value={ownerId}
+              value={choice}
               onChange={(event) => {
-                setOwnerId(event.target.value);
+                setChoice(event.target.value);
                 setChoiceError('');
               }}
             >
@@ -161,7 +172,7 @@ export function TransferDialog({
                   {options
                     .filter((owner) => owner.sectionId === sectionId)
                     .map((owner) => (
-                      <option key={owner.id} value={owner.id}>
+                      <option key={owner.id} value={`${owner.id}|${owner.sectionId}`}>
                         {owner.fullName}
                       </option>
                     ))}

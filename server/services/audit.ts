@@ -119,6 +119,19 @@ export const OPPORTUNITY_FIELD_LABELS: Record<string, string> = {
   scanState: 'Scan result',
   scanner: 'Scanner',
   archived: 'Archived',
+  // Email administration (CR2).
+  enabled: 'Turned on',
+  host: 'Mail server',
+  port: 'Port',
+  security: 'Connection security',
+  username: 'User name',
+  smtpCredential: 'SMTP password',
+  fromName: 'Sender name',
+  fromAddress: 'Sender address',
+  replyTo: 'Reply-to address',
+  template: 'Email',
+  bodyText: 'Message',
+  recipientAddress: 'Recipient',
 };
 
 /**

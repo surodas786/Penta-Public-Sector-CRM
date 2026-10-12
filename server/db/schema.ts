@@ -37,6 +37,7 @@ import {
   SOLUTION_CATEGORIES,
   USER_ROLES,
 } from '../../shared/enums.js';
+import { EMAIL_DELIVERY_STATUSES, EMAIL_SECURITY_MODES, EMAIL_TEMPLATE_KEYS } from '../../shared/email.js';
 import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/reporting.js';
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,9 @@ export const notificationTypeEnum = pgEnum('notification_type', NOTIFICATION_TYP
 export const reportExportStatusEnum = pgEnum('report_export_status', EXPORT_STATUSES);
 export const reportExportKindEnum = pgEnum('report_export_kind', EXPORT_KINDS);
 export const backgroundJobStatusEnum = pgEnum('background_job_status', ['queued', 'running', 'succeeded', 'failed']);
+export const emailSecurityEnum = pgEnum('email_security', EMAIL_SECURITY_MODES);
+export const emailTemplateKeyEnum = pgEnum('email_template_key', EMAIL_TEMPLATE_KEYS);
+export const emailDeliveryStatusEnum = pgEnum('email_delivery_status', EMAIL_DELIVERY_STATUSES);
 
 // ---------------------------------------------------------------------------
 // Sections and users
@@ -72,13 +76,23 @@ export const sections = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
     // FK added in a follow-up migration: sections and users reference each other.
+    /**
+     * The section's lead: the single source of truth since migration 0008
+     * (CR4). One person may lead several sections. An active section always
+     * has an active lead (CHECK below, plus a deferred trigger on the lead's
+     * account); deactivating a section clears it.
+     */
     leadUserId: uuid('lead_user_id'),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     version: integer('version').notNull().default(1),
   },
-  (table) => [uniqueIndex('sections_name_unique').on(table.name)],
+  (table) => [
+    uniqueIndex('sections_name_unique').on(table.name),
+    index('sections_lead_idx').on(table.leadUserId),
+    check('sections_active_has_lead', sql`NOT ${table.active} OR ${table.leadUserId} IS NOT NULL`),
+  ],
 );
 
 export const users = pgTable(
@@ -94,7 +108,13 @@ export const users = pgTable(
      */
     passwordHash: text('password_hash'),
     role: userRoleEnum('role').notNull(),
-    sectionId: uuid('section_id').references(() => sections.id, { onDelete: 'restrict' }),
+    /**
+     * Superseded by `section_memberships` and `sections.lead_user_id` (CR4,
+     * CR5; migration 0008). Kept, unread and unwritten, so the migration can
+     * be rolled back; a later migration drops it. Never use it for access.
+     */
+    legacySectionId: uuid('section_id').references(() => sections.id, { onDelete: 'restrict' }),
+    /** A lead's management manager. Salespeople report to the lead of each of their sections. */
     managerId: uuid('manager_id').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
     active: boolean('active').notNull().default(true),
     /**
@@ -108,10 +128,42 @@ export const users = pgTable(
   },
   (table) => [
     uniqueIndex('users_email_unique').on(table.email),
-    index('users_section_idx').on(table.sectionId),
+    index('users_section_idx').on(table.legacySectionId),
     index('users_manager_idx').on(table.managerId),
     index('users_role_active_idx').on(table.role, table.active),
     check('users_email_lowercase', sql`${table.email} = lower(${table.email})`),
+  ],
+);
+
+/**
+ * A salesperson's sections (CR5). History is kept: leaving a section ends the
+ * row rather than deleting it, and a re-join opens a new row. Only an open row
+ * (ended_at null) counts for access; former membership grants nothing.
+ * Leads are not members; the sections they lead come from `sections`.
+ */
+export const sectionMemberships = pgTable(
+  'section_memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    sectionId: uuid('section_id')
+      .notNull()
+      .references(() => sections.id, { onDelete: 'restrict' }),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    startedBy: uuid('started_by').references(() => users.id, { onDelete: 'restrict' }),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    endedBy: uuid('ended_by').references(() => users.id, { onDelete: 'restrict' }),
+    endReason: text('end_reason'),
+  },
+  (table) => [
+    uniqueIndex('section_memberships_open_unique')
+      .on(table.userId, table.sectionId)
+      .where(sql`${table.endedAt} IS NULL`),
+    index('section_memberships_open_section_idx').on(table.sectionId).where(sql`${table.endedAt} IS NULL`),
+    index('section_memberships_user_idx').on(table.userId),
+    check('section_memberships_ended_consistent', sql`(${table.endedAt} IS NULL) = (${table.endedBy} IS NULL)`),
   ],
 );
 
@@ -837,6 +889,100 @@ export const backgroundJobs = pgTable(
 // ---------------------------------------------------------------------------
 
 /**
+ * The mail server an administrator configured (CR2). One row at most; until
+ * an administrator saves settings there is no row and delivery is off. The
+ * SMTP password is stored only encrypted (AES-256-GCM with EMAIL_SECRET_KEY,
+ * which never enters the database) and is never returned by the API.
+ */
+export const emailSettings = pgTable(
+  'email_settings',
+  {
+    id: integer('id').primaryKey().default(1),
+    enabled: boolean('enabled').notNull().default(false),
+    host: text('host'),
+    port: integer('port'),
+    security: emailSecurityEnum('security').notNull().default('starttls'),
+    username: text('username'),
+    passwordCiphertext: text('password_ciphertext'),
+    fromName: text('from_name'),
+    fromAddress: text('from_address'),
+    replyTo: text('reply_to'),
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'restrict' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    check('email_settings_single_row', sql`${table.id} = 1`),
+    check('email_settings_port_range', sql`${table.port} IS NULL OR ${table.port} BETWEEN 1 AND 65535`),
+    check(
+      'email_settings_enabled_complete',
+      sql`NOT ${table.enabled} OR (${table.host} IS NOT NULL AND ${table.port} IS NOT NULL AND ${table.fromAddress} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * An administrator's wording for one email (CR2). A template with no row uses
+ * the default in shared/email.ts, so default wording lives in one place.
+ */
+export const emailTemplates = pgTable(
+  'email_templates',
+  {
+    key: emailTemplateKeyEnum('key').primaryKey(),
+    subject: text('subject').notNull(),
+    bodyText: text('body_text').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'restrict' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    check('email_templates_subject_length', sql`char_length(${table.subject}) BETWEEN 1 AND 200`),
+    // A line break in a subject would be a header injection.
+    check(
+      'email_templates_subject_single_line',
+      sql`position(chr(10) in ${table.subject}) = 0 AND position(chr(13) in ${table.subject}) = 0`,
+    ),
+    check('email_templates_body_length', sql`char_length(${table.bodyText}) BETWEEN 1 AND 10000`),
+  ],
+);
+
+/**
+ * One email the system means to send, and what became of it (CR2). The
+ * message body is never stored: it is rendered when sent, from the current
+ * template, and may carry a single-use link that must not rest in a table.
+ * `context` holds only non-sensitive references needed to render it.
+ */
+export const emailDeliveries = pgTable(
+  'email_deliveries',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** A template key, or `test` for an administrator's test message. */
+    templateKey: text('template_key').notNull(),
+    recipientUserId: uuid('recipient_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    /** The address used, recorded when the message is attempted. */
+    recipientAddress: text('recipient_address'),
+    status: emailDeliveryStatusEnum('status').notNull().default('queued'),
+    /** Log-safe outcome, e.g. why it was suppressed or the SMTP error class. */
+    statusDetail: text('status_detail'),
+    attempts: integer('attempts').notNull().default(0),
+    dedupeKey: text('dedupe_key'),
+    context: jsonb('context').notNull().default({}),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('email_deliveries_dedupe_unique').on(table.dedupeKey),
+    index('email_deliveries_created_idx').on(table.createdAt),
+    index('email_deliveries_status_idx').on(table.status),
+    check('email_deliveries_has_recipient', sql`${table.recipientUserId} IS NOT NULL OR ${table.recipientAddress} IS NOT NULL`),
+    check('email_deliveries_sent_has_time', sql`(${table.status} = 'sent') = (${table.sentAt} IS NOT NULL)`),
+  ],
+);
+
+/**
  * Owned by the migrations rather than created at runtime: the application role
  * has no DDL privileges.
  */
@@ -864,3 +1010,5 @@ export type DocumentRevisionRow = typeof documentRevisions.$inferSelect;
 export type NotificationRow = typeof notifications.$inferSelect;
 export type ReportExportRow = typeof reportExports.$inferSelect;
 export type BackgroundJobRow = typeof backgroundJobs.$inferSelect;
+export type EmailSettingsRow = typeof emailSettings.$inferSelect;
+export type EmailDeliveryRow = typeof emailDeliveries.$inferSelect;

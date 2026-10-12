@@ -364,12 +364,13 @@ describe('reports and CSV exports (M6)', () => {
     });
 
     it('fails an export whose requester lost access before it was produced', async () => {
-      const lead = await as(emails.leadGA);
-      const requested = (await send(lead, '/api/exports', { kind: 'pipeline', filters: {} }, nextIdempotencyKey('export')).expect(202))
+      const rafiq = await as(emails.salesGA1);
+      const requested = (await send(rafiq, '/api/exports', { kind: 'pipeline', filters: {} }, nextIdempotencyKey('export')).expect(202))
         .body as ReportExportDto;
-      // Deactivate the requester directly before the job runs.
+      // Deactivate the requester directly before the job runs. (A salesperson:
+      // a section's lead cannot be deactivated, even directly, since CR4.)
       const { users } = await import('../db/schema.js');
-      await ctx.database.db.update(users).set({ active: false }).where(eq(users.id, ids.leadGA));
+      await ctx.database.db.update(users).set({ active: false }).where(eq(users.id, ids.salesGA1));
       await runJobs();
       const [row] = await ctx.database.db.select().from(reportExports).where(eq(reportExports.id, requested.id));
       expect(row?.status).toBe('failed');

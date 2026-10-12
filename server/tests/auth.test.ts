@@ -2,13 +2,16 @@
  * Plan 7.6 scenarios 1-5: authentication, session lifetime, revocation,
  * cookie and CSRF controls.
  */
+import connectPgSimple from 'connect-pg-simple';
 import { eq } from 'drizzle-orm';
+import session from 'express-session';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CSRF_HEADER } from '../../shared/api.js';
+import { createSessionStore } from '../auth/sessionStore.js';
 import { FixedClock, resetClock, setClock } from '../clock.js';
-import { opportunities, users } from '../db/schema.js';
+import { opportunities, sectionMemberships, users } from '../db/schema.js';
 import {
   TEST_ORIGIN,
   TEST_PASSWORD,
@@ -172,6 +175,32 @@ describe('authentication and session controls', () => {
       expect((await agent.get('/api/opportunities')).status).toBe(401);
     });
 
+    it('stays signed out when a request that began before logout saves its session afterwards', async () => {
+      // Found by the CR3 browser check: a page still loading when "Sign out"
+      // was pressed saved its copy of the session after the logout, and the
+      // store's upsert brought the deleted row back.
+      const { agent, csrfToken } = await signIn(ctx.app, emails.salesGA1);
+      const rowsFor = () =>
+        ctx.database.pool.query<{ sid: string; sess: session.SessionData }>(
+          `SELECT sid, sess FROM "session" WHERE sess->'passport'->>'user' = $1`,
+          [ids.salesGA1],
+        );
+      const [live] = (await rowsFor()).rows;
+      expect(live).toBeDefined();
+
+      await agent.post('/api/auth/logout').set('Origin', TEST_ORIGIN).set(CSRF_HEADER, csrfToken).expect(204);
+
+      // The late save of the in-flight request, through the same store class
+      // the app uses.
+      const store = createSessionStore(connectPgSimple(session), { pool: ctx.database.pool, pruneSessionInterval: false });
+      await new Promise<void>((resolve, reject) =>
+        store.set(live!.sid, live!.sess as session.SessionData, (error) => (error ? reject(error as Error) : resolve())),
+      );
+
+      expect((await rowsFor()).rows).toHaveLength(0);
+      expect((await agent.get('/api/auth/me')).status).toBe(401);
+    });
+
     it('expires an idle session using the test clock', async () => {
       const clock = new FixedClock('2026-10-04T06:00:00+06:00');
       setClock(clock);
@@ -233,25 +262,26 @@ describe('authentication and session controls', () => {
       const { agent } = await signIn(ctx.app, emails.salesGA1);
       expect((await agent.get('/api/auth/me')).status).toBe(200);
 
-      // Promotion to management, with the section cleared. Promoting to `lead`
-      // would instead be refused by the one-active-lead-per-section index,
-      // which is correct but is not what this test is about.
+      // Promotion to management. (A new lead would need a section to lead,
+      // which is not what this test is about.)
       await ctx.database.db
         .update(users)
-        .set({ role: 'management', sectionId: null, managerId: null, sessionVersion: 2 })
+        .set({ role: 'management', managerId: null, sessionVersion: 2 })
         .where(eq(users.id, ids.salesGA1));
 
       expect((await agent.get('/api/auth/me')).status).toBe(401);
     });
 
-    it('rejects the next request after a section change bumps the session version', async () => {
+    it('rejects the next request after a lost section bumps the session version', async () => {
       const { agent } = await signIn(ctx.app, emails.salesIS1);
       expect((await agent.get('/api/auth/me')).status).toBe(200);
 
       await ctx.database.db
-        .update(users)
-        .set({ sectionId: ids.sectionGA, managerId: ids.leadGA, sessionVersion: 2 })
-        .where(eq(users.id, ids.salesIS1));
+        .update(sectionMemberships)
+        .set({ endedAt: new Date(), endedBy: ids.admin })
+        .where(eq(sectionMemberships.userId, ids.salesIS1));
+      await ctx.database.db.insert(sectionMemberships).values({ userId: ids.salesIS1, sectionId: ids.sectionGA });
+      await ctx.database.db.update(users).set({ sessionVersion: 2 }).where(eq(users.id, ids.salesIS1));
 
       expect((await agent.get('/api/auth/me')).status).toBe(401);
     });

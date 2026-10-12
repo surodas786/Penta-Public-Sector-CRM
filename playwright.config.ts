@@ -92,6 +92,11 @@ export default defineConfig({
         // development TEST scanner, whatever a developer's .env says.
         DOCUMENT_STORAGE_DIR: './var/e2e-documents',
         DOCUMENT_SCANNER: 'test',
+        // Email is captured to a private folder, never sent (CR2). The key is
+        // a fixed test value so a stored SMTP password can be exercised.
+        EMAIL_TRANSPORT: 'capture',
+        EMAIL_CAPTURE_DIR: './var/e2e-mailbox',
+        EMAIL_SECRET_KEY: '7'.repeat(64),
       },
     },
     {

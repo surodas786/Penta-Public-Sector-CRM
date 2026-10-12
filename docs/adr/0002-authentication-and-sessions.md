@@ -119,3 +119,33 @@ launch (requirements §18):
 - Argon2 verification is intentionally expensive. The integration suite hashes
   the shared fixture password once and reuses it, so reseeding between tests
   stays fast.
+
+## Addendum (12 October 2026) — CR3 and the session store
+
+**Changing one's own password (CR3).** `POST /api/auth/password` takes the
+current and the new password and never an account id. Its rules:
+
+- The current password is verified outside the transaction, because argon2 is
+  slow. The UPDATE then repeats the verified hash in its predicate, so a
+  concurrent change cannot be overwritten by a caller who never knew the new
+  password.
+- Success bumps `session_version`, which ends every other session on its next
+  request (SEC-005). It also spends outstanding invitation and reset links;
+  otherwise an old link could overwrite the new password.
+- The caller's own session continues under a regenerated id with its
+  **original** absolute expiry, so the change never extends the 12-hour limit.
+  The response carries the new CSRF token (decision D-CR3-1).
+- It has its own rate limiter, counted per account rather than per address.
+  Repeated guesses from a hijacked session are therefore limited without
+  spending colleagues' attempts behind one office address.
+- It is audited as `account.password_changed` (administrative domain, no
+  password data).
+
+**Session rows are created only on purpose.** connect-pg-simple saves with an
+upsert. A request that was already running when the user signed out saved
+its session afterwards and brought the deleted row back, so the person stayed
+signed in. The CR3 browser check found this; it predates CR3. Only the CSRF
+bootstrap and `establishSession` (sign-in, password change) may now insert
+a row; they mark the session `insertOnSave`. Every other save is an UPDATE,
+which does nothing once the row is gone (`server/auth/sessionStore.ts`;
+regression test in `auth.test.ts`, scenario 3).

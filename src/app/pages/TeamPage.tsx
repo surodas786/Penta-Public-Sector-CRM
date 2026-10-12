@@ -95,7 +95,7 @@ export function TeamPage() {
                     </span>
                   </td>
                   <td className={tdCls}>{ROLE_LABELS[row.role]}</td>
-                  <td className={tdCls}>{row.sectionName}</td>
+                  <td className={tdCls}>{row.sectionNames.join(', ')}</td>
                   <td className={`${tdCls} text-right tabular-nums`}>{row.activeOpportunities}</td>
                   <td className={`${tdCls} text-right tabular-nums`}>{formatBdtShort(row.estimatedPipeline)}</td>
                   <td className={`${tdCls} text-right tabular-nums`}>{row.openTasks}</td>
@@ -188,9 +188,6 @@ export function TeamPage() {
                     <li key={member.id} className="flex items-center gap-2 py-1 text-[13px]">
                       <Avatar name={member.fullName} />
                       <span className={member.active ? 'text-slate-700' : 'text-slate-400 line-through'}>{member.fullName}</span>
-                      {member.active && !member.reportsToLead && (
-                        <span className="text-[11px] text-amber-700">reporting line needs review</span>
-                      )}
                     </li>
                   ))}
                   {section.members.length === 0 && <li className="py-1 text-[13px] text-slate-400">No salespeople</li>}

@@ -234,7 +234,7 @@ export function TeamWorkload({
                       {r.userId === currentUserId && <span className="font-normal text-slate-400"> (me)</span>}
                       {!r.active && <span className="ml-1 text-[11px] font-normal text-slate-400">Inactive</span>}
                     </span>
-                    {showSection && <span className="block text-[11px] text-slate-500">{r.sectionName}</span>}
+                    {showSection && <span className="block text-[11px] text-slate-500">{r.sectionNames.join(', ')}</span>}
                   </span>
                 </button>
               </td>
