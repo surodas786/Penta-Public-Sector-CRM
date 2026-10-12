@@ -9,7 +9,7 @@
 -- Everything below is one transaction: any failure, including a pre-flight
 -- check, leaves the database exactly as it was.
 --
--- migration file sha256: e8a53d58ad0d59ed9699e3935f4614ffd13169812ad811f93639798de4e6174d
+-- migration file sha256: 41d2ac9264acf901382c7df9b7b49a4d997782ad1b634bb46271f10195ba377c
 -- journal timestamp:     1791792829758
 
 \set ON_ERROR_STOP on
@@ -18,7 +18,7 @@ BEGIN;
 -- Guard 1: not already applied.
 DO $guard$
 BEGIN
-  IF EXISTS (SELECT 1 FROM drizzle.__drizzle_migrations WHERE hash = 'e8a53d58ad0d59ed9699e3935f4614ffd13169812ad811f93639798de4e6174d') THEN
+  IF EXISTS (SELECT 1 FROM drizzle.__drizzle_migrations WHERE hash = '41d2ac9264acf901382c7df9b7b49a4d997782ad1b634bb46271f10195ba377c') THEN
     RAISE EXCEPTION 'Migration 0010_software_procurement_workflow is already applied.';
   END IF;
 END $guard$;
@@ -92,6 +92,6 @@ ALTER TABLE "tenders" ADD CONSTRAINT "tenders_eoi_outcome_dated" CHECK (("tender
 ALTER TABLE "tenders" ADD CONSTRAINT "tenders_closed_has_outcome" CHECK ("tenders"."notice_state"::text <> 'closed' OR "tenders"."eoi_outcome" IS NOT NULL);
 
 -- Record it exactly as drizzle's migrator does.
-INSERT INTO drizzle.__drizzle_migrations ("hash", "created_at") VALUES ('e8a53d58ad0d59ed9699e3935f4614ffd13169812ad811f93639798de4e6174d', 1791792829758);
+INSERT INTO drizzle.__drizzle_migrations ("hash", "created_at") VALUES ('41d2ac9264acf901382c7df9b7b49a4d997782ad1b634bb46271f10195ba377c', 1791792829758);
 
 COMMIT;

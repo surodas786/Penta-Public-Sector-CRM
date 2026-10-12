@@ -9,7 +9,7 @@
 -- Everything below is one transaction: any failure, including a pre-flight
 -- check, leaves the database exactly as it was.
 --
--- migration file sha256: a650274b93026bac33d903c710f527beb96a07db2f3dbe349518a28cd1de54d1
+-- migration file sha256: 646a7eb435abde9bb3a335b07e7b6b106cda677364ca917b76a9a9566ae56320
 -- journal timestamp:     1791788309890
 
 \set ON_ERROR_STOP on
@@ -18,7 +18,7 @@ BEGIN;
 -- Guard 1: not already applied.
 DO $guard$
 BEGIN
-  IF EXISTS (SELECT 1 FROM drizzle.__drizzle_migrations WHERE hash = 'a650274b93026bac33d903c710f527beb96a07db2f3dbe349518a28cd1de54d1') THEN
+  IF EXISTS (SELECT 1 FROM drizzle.__drizzle_migrations WHERE hash = '646a7eb435abde9bb3a335b07e7b6b106cda677364ca917b76a9a9566ae56320') THEN
     RAISE EXCEPTION 'Migration 0009_email_settings_templates_and_deliveries is already applied.';
   END IF;
 END $guard$;
@@ -125,6 +125,6 @@ BEGIN
 END $$;
 
 -- Record it exactly as drizzle's migrator does.
-INSERT INTO drizzle.__drizzle_migrations ("hash", "created_at") VALUES ('a650274b93026bac33d903c710f527beb96a07db2f3dbe349518a28cd1de54d1', 1791788309890);
+INSERT INTO drizzle.__drizzle_migrations ("hash", "created_at") VALUES ('646a7eb435abde9bb3a335b07e7b6b106cda677364ca917b76a9a9566ae56320', 1791788309890);
 
 COMMIT;

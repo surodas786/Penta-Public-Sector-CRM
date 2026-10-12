@@ -267,7 +267,7 @@ browser checks use the capture transport.
 
 **Database: production SQL.** This step changes the database.
 `docs/operations/sql/0009_email_settings_templates_and_deliveries.production.sql`
-(file sha256 `a650274b…de54d1`). Apply it after 0008. Runbook §3.2 covers
+(file sha256 `646a7eb4…e56320`). Apply it after 0008. Runbook §3.2 covers
 turning email on afterwards.
 
 **Evidence:** `docs/evidence/cr/` holds `cr2-email-settings.png`,
@@ -428,7 +428,7 @@ defaults. Design and reasons: ADR 0012.
 
 **Database: production SQL.** This step changes the database.
 `docs/operations/sql/0010_software_procurement_workflow.production.sql`
-(file sha256 `e8a53d58…de6174d`). Apply it after 0009. Runbook §3.3 covers it.
+(file sha256 `41d2ac92…ba377c`). Apply it after 0009. Runbook §3.3 covers it.
 
 **Evidence:** `docs/evidence/cr/` holds
 `cr6-create-software-procurement.png`, `cr6-eoi-outcome.png`,
