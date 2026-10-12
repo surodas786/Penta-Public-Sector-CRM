@@ -16,6 +16,8 @@ import { forbidden, unauthenticated } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { canAccessSalesRecords } from '../policy/scope.js';
 
+export const SESSION_COOKIE_NAME = 'penta.sid';
+
 export interface SessionGuardOptions {
   db: Database;
   idleMinutes: number;

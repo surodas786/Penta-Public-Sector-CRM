@@ -14,7 +14,7 @@ import helmet from 'helmet';
 
 import type { DatabaseHandle } from './db/client.js';
 import type { ServerConfig } from './env.js';
-import { resolveActor } from './auth/sessionGuard.js';
+import { SESSION_COOKIE_NAME, resolveActor } from './auth/sessionGuard.js';
 import { configurePassport } from './auth/passport.js';
 import { createCsrfProtection, createOriginGuard } from './http/csrf.js';
 import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
@@ -45,7 +45,7 @@ import { createScanner, type DocumentScanner } from './documents/scanner.js';
 import { LocalDocumentStorage, type DocumentStorage } from './documents/storage.js';
 import type { DocumentServices } from './services/documents.js';
 
-export const SESSION_COOKIE_NAME = 'penta.sid';
+export { SESSION_COOKIE_NAME };
 
 export interface LoginRateLimitOptions {
   windowMs: number;

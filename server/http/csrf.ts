@@ -15,6 +15,7 @@
 import { doubleCsrf } from 'csrf-csrf';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
+import { cookieValues } from './duplicateCookies.js';
 import { ApiError } from './errors.js';
 
 export const CSRF_COOKIE_NAME = 'penta.csrf';
@@ -48,6 +49,17 @@ export function createCsrfProtection(options: CsrfOptions) {
 
   /** Normalises the library's http-error into the SEC-020 envelope. */
   const guard: RequestHandler = (req, res, next) => {
+    // A stale duplicate token cookie (see duplicateCookies.ts) is sent before
+    // ours and would be the one compared. Compare the copy that equals the
+    // header instead: the check below still demands cookie === header and an
+    // HMAC bound to this session, so nothing passes that would fail if it
+    // were the browser's only cookie.
+    const candidates = cookieValues(req, CSRF_COOKIE_NAME);
+    const headerToken = req.headers['x-csrf-token'];
+    if (candidates.length > 1 && typeof headerToken === 'string' && candidates.includes(headerToken)) {
+      req.cookies[CSRF_COOKIE_NAME] = headerToken;
+    }
+
     doubleCsrfProtection(req, res, (error?: unknown) => {
       if (!error) {
         next();

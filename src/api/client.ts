@@ -95,7 +95,27 @@ export interface ApiRequestOptions {
   suppressUnauthenticatedNotice?: boolean;
 }
 
+const CSRF_BOOTSTRAP_PATH = '/api/auth/csrf';
+
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  try {
+    return await send<T>(path, options);
+  } catch (error) {
+    // A rejected token never reaches a handler, so nothing was applied. Take
+    // a fresh token (that request also expires stale duplicate cookies) and
+    // try once more with the same idempotency key, rather than asking the
+    // person to reload or clear site data.
+    if (!(error instanceof ApiRequestError) || error.code !== 'invalid_csrf') throw error;
+    if (options.method === undefined || options.method === 'GET') throw error;
+    const { csrfToken: fresh } = await send<{ csrfToken: string }>(CSRF_BOOTSTRAP_PATH, {
+      signal: options.signal,
+    });
+    setCsrfToken(fresh);
+    return send<T>(path, options);
+  }
+}
+
+async function send<T>(path: string, options: ApiRequestOptions): Promise<T> {
   const { method = 'GET', body, file, signal, idempotencyKey, suppressUnauthenticatedNotice } = options;
 
   const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };

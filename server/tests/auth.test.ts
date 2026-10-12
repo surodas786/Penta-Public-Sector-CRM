@@ -3,6 +3,7 @@
  * cookie and CSRF controls.
  */
 import { eq } from 'drizzle-orm';
+import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CSRF_HEADER } from '../../shared/api.js';
@@ -320,6 +321,76 @@ describe('authentication and session controls', () => {
 
       const after = await ctx.database.db.select({ id: opportunities.id }).from(opportunities);
       expect(after).toHaveLength(before.length);
+    });
+
+    // A stale same-name cookie on a longer path is sent first and used to
+    // shadow ours, so sign-in failed with invalid_csrf until site data was
+    // cleared (the Chrome-only report).
+    describe('stale duplicate cookies', () => {
+      const STALE_TOKEN = `${'d'.repeat(64)}.${'e'.repeat(64)}`;
+
+      function cookieFrom(response: request.Response, name: string): string {
+        const cookies = response.headers['set-cookie'] as unknown as string[];
+        const issued = cookies.find((cookie) => cookie.startsWith(`${name}=`) && !/Expires=Thu, 01 Jan 1970/.test(cookie));
+        if (!issued) throw new Error(`no ${name} cookie issued`);
+        return issued.split(';')[0]!.slice(name.length + 1);
+      }
+
+      async function bootstrap(cookie: string) {
+        const response = await request(ctx.app).get('/api/auth/csrf').set('Cookie', cookie).expect(200);
+        return {
+          response,
+          token: response.body.csrfToken as string,
+          sid: cookieFrom(response, 'penta.sid'),
+        };
+      }
+
+      it('expires a shadowing session cookie, so the next sign-in succeeds', async () => {
+        // Before ours exists, the stale copy is the only one sent.
+        const { response, token, sid } = await bootstrap('penta.sid=s%3Astale.sig');
+
+        const cookies = response.headers['set-cookie'] as unknown as string[];
+        const expired = cookies.filter((cookie) => cookie.startsWith('penta.sid=;') && /Expires=Thu, 01 Jan 1970/.test(cookie));
+        for (const path of ['/api', '/api/auth', '/api/auth/csrf']) {
+          expect(expired.some((cookie) => cookie.includes(`Path=${path};`))).toBe(true);
+        }
+        expect(expired.some((cookie) => /Domain=/.test(cookie))).toBe(true);
+        // Our own host-only cookie on "/" is re-issued, never expired.
+        expect(expired.some((cookie) => /Path=\/;/.test(cookie) && !/Domain=/.test(cookie))).toBe(false);
+
+        const login = await request(ctx.app)
+          .post('/api/auth/login')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, token)
+          .set('Cookie', `penta.csrf=${token}; penta.sid=${sid}`)
+          .send({ email: emails.salesGA1, password: TEST_PASSWORD });
+        expect(login.status).toBe(200);
+      });
+
+      it('accepts the token that matches the header when a stale token cookie is sent first', async () => {
+        const { token, sid } = await bootstrap('');
+
+        const login = await request(ctx.app)
+          .post('/api/auth/login')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, token)
+          .set('Cookie', `penta.csrf=${STALE_TOKEN}; penta.csrf=${token}; penta.sid=${sid}`)
+          .send({ email: emails.salesGA1, password: TEST_PASSWORD });
+        expect(login.status).toBe(200);
+      });
+
+      it('still rejects a token not bound to this session, whichever duplicate it matches', async () => {
+        const { sid } = await bootstrap('');
+
+        const login = await request(ctx.app)
+          .post('/api/auth/login')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, STALE_TOKEN)
+          .set('Cookie', `penta.csrf=${STALE_TOKEN}; penta.csrf=other; penta.sid=${sid}`)
+          .send({ email: emails.salesGA1, password: TEST_PASSWORD });
+        expect(login.status).toBe(403);
+        expect(login.body.code).toBe('invalid_csrf');
+      });
     });
 
     it('rejects a mutation with no Origin header at all', async () => {

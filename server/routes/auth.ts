@@ -11,9 +11,16 @@ import { eq } from 'drizzle-orm';
 import type { CurrentUserDto } from '../../shared/api.js';
 import { loginSchema, setPasswordSchema } from '../../shared/validation.js';
 import { GENERIC_LOGIN_FAILURE, type ConfiguredPassport } from '../auth/passport.js';
-import { destroySession, requireAuth, stampSessionLifetimes } from '../auth/sessionGuard.js';
+import {
+  SESSION_COOKIE_NAME,
+  destroySession,
+  requireAuth,
+  stampSessionLifetimes,
+} from '../auth/sessionGuard.js';
 import type { Database } from '../db/client.js';
 import { users } from '../db/schema.js';
+import { CSRF_COOKIE_NAME } from '../http/csrf.js';
+import { expireShadowingCookies } from '../http/duplicateCookies.js';
 import { ApiError, unauthenticated } from '../http/errors.js';
 import { parseOrThrow } from '../http/validate.js';
 import type { Actor } from '../policy/actor.js';
@@ -66,6 +73,9 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
    * gives an anonymous visitor a stable session id for the token to bind to.
    */
   router.get('/csrf', (req, res) => {
+    // Sign-in always starts here, so this is where stale copies of our
+    // cookies are removed; both are re-issued below in the same response.
+    expireShadowingCookies(req, res, [SESSION_COOKIE_NAME, CSRF_COOKIE_NAME]);
     req.session.bootstrapped = true;
     res.json({ csrfToken: generateCsrfToken(req, res, { overwrite: true }) });
   });
@@ -147,7 +157,7 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
           }
         });
         await destroySession(req);
-        res.clearCookie('penta.sid', { path: '/' });
+        res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
         res.status(204).end();
       } catch (error) {
         next(error);
