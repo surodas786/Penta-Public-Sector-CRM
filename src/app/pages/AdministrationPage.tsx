@@ -56,6 +56,7 @@ const AUDIT_LABELS: Record<string, string> = {
   'email.settings_updated': 'Email settings changed',
   'email.template_updated': 'Email wording changed',
   'email.test_sent': 'Test email sent',
+  'email.delivery_retried': 'Failed email queued again',
   'section.created': 'Section created',
   'section.renamed': 'Section renamed',
   'section.lead_replaced': 'Section lead replaced',

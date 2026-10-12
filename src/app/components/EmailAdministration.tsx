@@ -5,18 +5,31 @@
  * Built from the page's existing Panel, table, Modal and form primitives. The
  * SMTP password is write-only: the server says whether one is stored, never
  * what it is. Previews use synthetic sample values, never real records.
+ * "Accepted by mail server" is all the CRM can know: it never claims an email
+ * reached an inbox.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { MailIcon, PencilIcon, SendIcon } from 'lucide-react';
+import { HistoryIcon, MailIcon, PencilIcon, PlugZapIcon, RotateCcwIcon, SendIcon } from 'lucide-react';
 
-import type { EmailDeliveryDto, EmailPreviewDto, EmailSettingsDto, EmailTemplateDto } from '../../../shared/api.js';
+import {
+  EMAIL_MANUAL_RETRY_LIMIT,
+  type EmailConnectionCheckDto,
+  type EmailDeliveryDto,
+  type EmailPreviewDto,
+  type EmailSettingsDto,
+  type EmailTemplateDto,
+  type EmailTemplateVersionDto,
+} from '../../../shared/api.js';
 import { EMAIL_SECURITY_LABELS, EMAIL_SECURITY_MODES, type EmailSecurityMode } from '../../../shared/email.js';
 import {
+  checkEmailConnection,
   fetchEmailDeliveries,
   fetchEmailSettings,
+  fetchEmailTemplateHistory,
   fetchEmailTemplates,
   previewEmailTemplate,
+  retryEmailDelivery,
   sendTestEmail,
   updateEmailSettings,
   updateEmailTemplate,
@@ -46,15 +59,15 @@ const STATUS_STYLES: Record<EmailDeliveryDto['status'], string> = {
 
 const STATUS_LABELS: Record<EmailDeliveryDto['status'], string> = {
   queued: 'Queued',
-  sent: 'Sent',
+  sent: 'Accepted by mail server',
   failed: 'Failed',
   suppressed: 'Not sent',
 };
 
-function StatusBadge({ status }: { status: EmailDeliveryDto['status'] }) {
+function StatusBadge({ delivery }: { delivery: Pick<EmailDeliveryDto, 'status' | 'captured'> }) {
   return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${STATUS_STYLES[status]}`}>
-      {STATUS_LABELS[status]}
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${STATUS_STYLES[delivery.status]}`}>
+      {delivery.captured ? 'Captured, not sent' : STATUS_LABELS[delivery.status]}
     </span>
   );
 }
@@ -71,6 +84,14 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
   const [editingSettings, setEditingSettings] = useState(false);
   const [testing, setTesting] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<EmailTemplateDto | null>(null);
+  const connection = useSubmission();
+  const [connectionResult, setConnectionResult] = useState<EmailConnectionCheckDto | null>(null);
+
+  const checkConnection = async () => {
+    setConnectionResult(null);
+    const result = await connection.run(() => checkEmailConnection());
+    if (result) setConnectionResult(result);
+  };
 
   const current = settings.data;
 
@@ -81,7 +102,15 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
         subtitle="The mail server used for invitations, password emails and notifications."
         action={
           current && (
-            <span className="flex gap-1.5">
+            <span className="flex flex-wrap gap-1.5">
+              <Button
+                size="sm"
+                icon={<PlugZapIcon className="h-3.5 w-3.5" />}
+                onClick={() => void checkConnection()}
+                disabled={!current.host || connection.submitting}
+              >
+                {connection.submitting ? 'Checking…' : 'Check connection'}
+              </Button>
               <Button size="sm" icon={<SendIcon className="h-3.5 w-3.5" />} onClick={() => setTesting(true)} disabled={!current.host}>
                 Send test email
               </Button>
@@ -119,6 +148,27 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
             {current.passwordSet && !current.passwordReadable && (
               <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] font-medium text-red-700">
                 The stored SMTP password can no longer be decrypted (the server’s EMAIL_SECRET_KEY changed). Enter it again.
+              </p>
+            )}
+            {connectionResult && (
+              <p role="status" className="text-[12.5px] text-slate-700">
+                <span
+                  className={`mr-2 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${
+                    connectionResult.status === 'ok'
+                      ? STATUS_STYLES.sent
+                      : connectionResult.status === 'failed'
+                        ? STATUS_STYLES.failed
+                        : STATUS_STYLES.suppressed
+                  }`}
+                >
+                  {connectionResult.status === 'ok' ? 'Connected' : connectionResult.status === 'failed' ? 'Connection failed' : 'Not checked'}
+                </span>
+                {connectionResult.detail}
+              </p>
+            )}
+            {connection.formError && (
+              <p role="alert" className="text-[12.5px] font-medium text-red-700">
+                {connection.fieldErrors.host ?? connection.formError}
               </p>
             )}
             {current.updatedAt && (
@@ -190,7 +240,8 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
                     <th className={`${thCls} pl-4`}>Email</th>
                     <th className={thCls}>Recipient</th>
                     <th className={thCls}>Status</th>
-                    <th className={`${thCls} pr-4`}>When</th>
+                    <th className={thCls}>When</th>
+                    <th className={`${thCls} pr-4 text-right`}>Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -204,10 +255,15 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
                         )}
                       </td>
                       <td className={tdCls}>
-                        <StatusBadge status={delivery.status} />
+                        <StatusBadge delivery={delivery} />
                         {delivery.statusDetail && <span className="mt-0.5 block text-[11.5px] text-slate-500">{delivery.statusDetail}</span>}
                       </td>
-                      <td className={`${tdCls} pr-4 tabular-nums`}>{formatInstant(delivery.sentAt ?? delivery.createdAt)}</td>
+                      <td className={`${tdCls} tabular-nums`}>{formatInstant(delivery.sentAt ?? delivery.createdAt)}</td>
+                      <td className={`${tdCls} pr-4 text-right`}>
+                        {delivery.status === 'failed' && delivery.templateKey !== 'test' && (
+                          <RetryDeliveryButton delivery={delivery} onRetried={deliveries.reload} />
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -253,6 +309,43 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
         }}
       />
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Queues one failed email again. The server allows it a limited number of
+ * times and re-checks the recipient and the email's reason before sending.
+ */
+function RetryDeliveryButton({ delivery, onRetried }: { delivery: EmailDeliveryDto; onRetried: () => void }) {
+  const submission = useSubmission();
+  const retry = async () => {
+    const result = await submission.run(() => retryEmailDelivery(delivery.id));
+    if (result) {
+      toast.success(`${delivery.label} queued again`);
+      onRetried();
+    }
+  };
+  return (
+    <span className="inline-flex flex-col items-end gap-1">
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={<RotateCcwIcon className="h-3.5 w-3.5" />}
+        onClick={() => void retry()}
+        disabled={submission.submitting}
+        aria-label={`Retry ${delivery.label} to ${delivery.recipientName ?? delivery.recipientAddress ?? 'recipient'}`}
+        title={`Queue it again (at most ${EMAIL_MANUAL_RETRY_LIMIT} times)`}
+      >
+        Retry
+      </Button>
+      {submission.formError && (
+        <span role="alert" className="max-w-[220px] text-left text-[11.5px] font-medium text-red-700">
+          {submission.formError}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -452,7 +545,12 @@ function TestEmailDialog({ open, onClose, onDone }: { open: boolean; onClose: ()
       {result ? (
         <div className="flex flex-col gap-2 text-[13px] text-slate-700" role="status">
           <p>
-            <StatusBadge status={result.status} /> {result.status === 'sent' ? `Test message to ${result.recipientAddress}.` : 'The test message was not sent.'}
+            <StatusBadge delivery={result} />{' '}
+            {result.captured
+              ? `Test message to ${result.recipientAddress} written to the local capture folder.`
+              : result.status === 'sent'
+              ? `The mail server accepted the test message for ${result.recipientAddress}. Check that it arrived: acceptance does not confirm delivery to the inbox.`
+              : 'The test message was not sent.'}
           </p>
           {result.statusDetail && <p className="text-[12.5px] text-slate-600">{result.statusDetail}</p>}
         </div>
@@ -486,6 +584,8 @@ function EmailTemplateDialog({
   const [bodyText, setBodyText] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [preview, setPreview] = useState<EmailPreviewDto | null>(null);
+  const [history, setHistory] = useState<EmailTemplateVersionDto[] | null>(null);
+  const historyLoad = useSubmission();
 
   useEffect(() => {
     if (!template) return;
@@ -494,6 +594,7 @@ function EmailTemplateDialog({
     setBodyText(template.bodyText);
     setEnabled(template.enabled);
     setPreview(null);
+    setHistory(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [template?.key]);
 
@@ -502,6 +603,11 @@ function EmailTemplateDialog({
   const showPreview = async () => {
     const result = await submission.run(() => previewEmailTemplate(template.key, { subject, bodyText }));
     if (result) setPreview(result);
+  };
+
+  const showHistory = async () => {
+    const result = await historyLoad.run(() => fetchEmailTemplateHistory(template.key));
+    if (result) setHistory(result.items);
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -534,6 +640,14 @@ function EmailTemplateDialog({
             disabled={submission.submitting}
           >
             Restore default wording
+          </Button>
+          <Button
+            variant="ghost"
+            icon={<HistoryIcon className="h-3.5 w-3.5" />}
+            onClick={() => void showHistory()}
+            disabled={submission.submitting || historyLoad.submitting}
+          >
+            History
           </Button>
           <Button onClick={() => void showPreview()} disabled={submission.submitting}>
             Preview
@@ -572,6 +686,42 @@ function EmailTemplateDialog({
             <p className="text-[11px] font-semibold uppercase text-slate-500">Preview with sample values</p>
             <p className="mt-1 font-semibold text-slate-900">{preview.subject}</p>
             <pre className="mt-2 whitespace-pre-wrap font-sans">{preview.text}</pre>
+          </section>
+        )}
+        {historyLoad.formError && <DialogAlert message={historyLoad.formError} />}
+        {history && (
+          <section aria-label="Saved versions" className="rounded-md border border-slate-200 p-3 text-[13px] text-slate-700">
+            <p className="text-[11px] font-semibold uppercase text-slate-500">Saved versions, newest first</p>
+            {history.length === 0 ? (
+              <p className="mt-1 text-slate-500">Never changed: this email uses the default wording.</p>
+            ) : (
+              <ol className="mt-1 divide-y divide-slate-100">
+                {history.map((version) => (
+                  <li key={`${version.occurredAt}-${version.subject}`} className="flex flex-wrap items-start justify-between gap-2 py-2">
+                    <span className="min-w-0">
+                      <span className="block font-semibold text-slate-900">{version.subject}</span>
+                      <span className="block text-[11.5px] text-slate-500">
+                        {formatInstant(version.occurredAt)}
+                        {version.actorName ? ` by ${version.actorName}` : ''} · changed{' '}
+                        {version.changed.map((field) => (field === 'bodyText' ? 'message' : field === 'enabled' ? 'on/off' : 'subject')).join(', ')}
+                        {version.enabled ? '' : ' · turned off'}
+                      </span>
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setSubject(version.subject);
+                        setBodyText(version.bodyText);
+                        setPreview(null);
+                      }}
+                    >
+                      Use this wording
+                    </Button>
+                  </li>
+                ))}
+              </ol>
+            )}
           </section>
         )}
       </form>

@@ -38,6 +38,8 @@ export interface MailServer {
 export interface MailTransport {
   readonly kind: EmailTransportKind;
   send(server: MailServer, message: OutgoingMessage): Promise<void>;
+  /** Connects and signs in without sending anything; throws on failure. */
+  verify(server: MailServer): Promise<void>;
 }
 
 /** A sending failure that is safe to log and show to an administrator. */
@@ -81,14 +83,17 @@ export class CaptureTransport implements MailTransport {
       flag: 'wx',
     });
   }
+
+  /** There is no server to reach; the capture folder is created on first use. */
+  async verify(_server: MailServer): Promise<void> {}
 }
 
 export class SmtpTransport implements MailTransport {
   readonly kind = 'smtp' as const;
   constructor(private readonly timeoutMs: number) {}
 
-  async send(server: MailServer, message: OutgoingMessage): Promise<void> {
-    const transporter = nodemailer.createTransport({
+  private connect(server: MailServer) {
+    return nodemailer.createTransport({
       host: server.host,
       port: server.port,
       secure: server.security === 'tls',
@@ -99,6 +104,10 @@ export class SmtpTransport implements MailTransport {
       greetingTimeout: this.timeoutMs,
       socketTimeout: this.timeoutMs,
     });
+  }
+
+  async send(server: MailServer, message: OutgoingMessage): Promise<void> {
+    const transporter = this.connect(server);
     try {
       await transporter.sendMail({
         from: fromHeader(server),
@@ -107,6 +116,15 @@ export class SmtpTransport implements MailTransport {
         subject: message.subject,
         text: message.text,
       });
+    } finally {
+      transporter.close();
+    }
+  }
+
+  async verify(server: MailServer): Promise<void> {
+    const transporter = this.connect(server);
+    try {
+      await transporter.verify();
     } finally {
       transporter.close();
     }

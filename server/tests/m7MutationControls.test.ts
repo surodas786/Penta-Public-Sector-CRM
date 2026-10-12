@@ -27,7 +27,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { FILE_NAME_HEADER } from '../../shared/api.js';
 import { FixedClock, resetClock, setClock } from '../clock.js';
-import { auditEvents, emailSettings } from '../db/schema.js';
+import { auditEvents, emailDeliveries, emailSettings } from '../db/schema.js';
 import { createJobHandlers } from '../jobs/handlers.js';
 import { runDueJobs } from '../jobs/queue.js';
 import { runNotificationScan } from '../services/notifications.js';
@@ -960,6 +960,23 @@ describe('Milestone 7: audit and mutation controls', () => {
       },
       status: 200,
       events: [{ action: 'email.test_sent', domain: 'administrative', changes: ['recipientAddress', 'status'] }],
+    },
+    {
+      name: 'retry of a failed email (CR2)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: true, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        const [failed] = await ctx.database.db
+          .insert(emailDeliveries)
+          .values({ templateKey: 'password_changed', recipientUserId: ids.salesGA1, status: 'failed', attempts: 5 })
+          .returning({ id: emailDeliveries.id });
+        return send(c, `/api/admin/email/deliveries/${failed!.id}/retry`, {}, null);
+      },
+      status: 200,
+      events: [{ action: 'email.delivery_retried', domain: 'administrative', changes: ['status', 'retry'] }],
     },
     {
       name: 'CSV export request',

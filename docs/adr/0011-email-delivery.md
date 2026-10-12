@@ -52,8 +52,15 @@ name, dates and a link into the CRM.
 - An unknown placeholder, an unclosed brace, or a line break in the subject
   is refused. The database also refuses a line break in a stored subject,
   because it would be a header injection.
-- Messages are plain text only.
+- **Plain text only.** No HTML is accepted or sent. Placeholders are
+  replaced with server-computed text, never markup or code, so there is no
+  HTML to escape or sanitise and no template logic to run.
 - Previews render with synthetic sample values, never a real record.
+- **Version history** is the administrative audit: each save records the
+  fields it changed. Replaying them over the default wording rebuilds every
+  saved version in full, newest first. An administrator can load an earlier
+  wording into the editor and save it; "Restore default wording" does the
+  same with the default. No extra table is needed.
 
 ### Sending
 
@@ -79,6 +86,22 @@ name, dates and a link into the CRM.
 - **Test message.** It is sent synchronously and logged and audited, so an
   administrator learns at once whether the settings work, even while
   delivery is still off.
+- **Connection check.** It connects and signs in to the saved server (SMTP
+  `verify`) and sends nothing. It is not audited, because it changes
+  nothing. With `capture` or `none` it contacts no server and says so.
+- **What "sent" means.** The stored status `sent` means the mail server
+  accepted the message. The interface says "Accepted by mail server",
+  because the CRM cannot know whether the message reached an inbox. A
+  message written by the development capture transport shows "Captured, not
+  sent".
+- **Controlled retry.** An administrator can queue a failed email again:
+  - failed emails only, never a test message;
+  - at most three times;
+  - only while delivery is on;
+  - audited as `email.delivery_retried`.
+
+  The job then re-checks everything, exactly as the first time. An account
+  link is issued afresh, voiding the earlier one.
 
 ### Library
 

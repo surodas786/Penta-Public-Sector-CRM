@@ -22,11 +22,20 @@
  */
 import { createHash } from 'node:crypto';
 
-import { and, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { z } from 'zod';
 
-import type { EmailDeliveryDto, EmailPreviewDto, EmailSettingsDto, EmailTemplateDto, Paginated } from '../../shared/api.js';
+import {
+  EMAIL_MANUAL_RETRY_LIMIT,
+  type EmailConnectionCheckDto,
+  type EmailDeliveryDto,
+  type EmailPreviewDto,
+  type EmailSettingsDto,
+  type EmailTemplateDto,
+  type EmailTemplateVersionDto,
+  type Paginated,
+} from '../../shared/api.js';
 import {
   EMAIL_APP_NAME,
   EMAIL_TEMPLATE_KEYS,
@@ -38,11 +47,11 @@ import {
 import type { emailTemplateContentSchema, updateEmailSettingsSchema, updateEmailTemplateSchema } from '../../shared/validation.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { emailDeliveries, emailSettings, emailTemplates, users } from '../db/schema.js';
+import { auditEvents, emailDeliveries, emailSettings, emailTemplates, users } from '../db/schema.js';
 import type { EmailRuntime } from '../email/runtime.js';
 import { decryptSecret, encryptSecret } from '../email/secretBox.js';
 import { describeDeliveryFailure, type MailServer } from '../email/transport.js';
-import { forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
+import { conflict, forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
 import { enqueueJob } from '../jobs/queue.js';
 import type { Actor } from '../policy/actor.js';
 import { canAdministerAccounts } from '../policy/scope.js';
@@ -56,6 +65,9 @@ function assertAdministrator(actor: Actor): void {
 }
 
 const TEST_LABEL = 'Test message';
+
+/** The detail of a message the capture transport wrote to a folder instead of sending. */
+const CAPTURED_DETAIL = 'Captured locally (EMAIL_TRANSPORT=capture); not sent.';
 
 /**
  * A stable audit entity id for a piece of configuration that has no UUID of
@@ -325,6 +337,47 @@ export async function updateEmailTemplate(options: {
   return readTemplate(db, key);
 }
 
+/**
+ * Every saved version of one email's wording, newest first. The history is the
+ * administrative audit itself: each save records the fields it changed, so
+ * replaying them over the default wording gives each version in full.
+ */
+export async function listEmailTemplateHistory(db: Database, actor: Actor, key: EmailTemplateKey): Promise<EmailTemplateVersionDto[]> {
+  assertAdministrator(actor);
+  const editor = alias(users, 'editor');
+  const rows = await db
+    .select({ occurredAt: auditEvents.occurredAt, actorName: editor.fullName, after: auditEvents.afterData })
+    .from(auditEvents)
+    .leftJoin(editor, eq(editor.id, auditEvents.actorId))
+    .where(
+      and(
+        eq(auditEvents.entityType, 'email_template'),
+        eq(auditEvents.entityId, configurationEntityId(`email_template:${key}`)),
+        eq(auditEvents.action, 'email.template_updated'),
+      ),
+    )
+    .orderBy(asc(auditEvents.occurredAt), asc(auditEvents.sequence));
+
+  const definition = EMAIL_TEMPLATES[key];
+  let state = { subject: definition.defaultSubject, bodyText: definition.defaultBody, enabled: true };
+  const versions: EmailTemplateVersionDto[] = [];
+  for (const row of rows) {
+    const after = (row.after ?? {}) as Record<string, unknown>;
+    state = {
+      subject: typeof after.subject === 'string' ? after.subject : state.subject,
+      bodyText: typeof after.bodyText === 'string' ? after.bodyText : state.bodyText,
+      enabled: typeof after.enabled === 'boolean' ? after.enabled : state.enabled,
+    };
+    versions.push({
+      ...state,
+      changed: (['subject', 'bodyText', 'enabled'] as const).filter((field) => field in after),
+      occurredAt: row.occurredAt.toISOString(),
+      actorName: row.actorName ?? null,
+    });
+  }
+  return versions.reverse();
+}
+
 const SAMPLE_INSTANT = new Date('2026-10-15T09:30:00Z');
 
 /** Synthetic values for a preview. Never a real person, record or link. */
@@ -391,6 +444,7 @@ function toDeliveryDto(row: Awaited<ReturnType<typeof readDeliveries>>[number]):
     recipientAddress: row.recipientAddress,
     status: row.status,
     statusDetail: row.statusDetail,
+    captured: row.status === 'sent' && row.statusDetail === CAPTURED_DETAIL,
     attempts: row.attempts,
     createdAt: row.createdAt.toISOString(),
     sentAt: row.sentAt?.toISOString() ?? null,
@@ -458,7 +512,7 @@ export async function sendTestEmail(options: {
         subject: `${EMAIL_APP_NAME} test message`,
         text: `This is a test message from ${EMAIL_APP_NAME}, sent by ${actor.fullName} to check the email settings.\n\nNo action is needed.`,
       });
-      outcome = { status: 'sent', detail: runtime.transport.kind === 'capture' ? 'Captured locally (EMAIL_TRANSPORT=capture); not sent.' : null };
+      outcome = { status: 'sent', detail: runtime.transport.kind === 'capture' ? CAPTURED_DETAIL : null };
     } catch (error) {
       outcome = { status: 'failed', detail: describeDeliveryFailure(error) };
     }
@@ -483,6 +537,104 @@ export async function sendTestEmail(options: {
   });
 
   return readDelivery(db, delivery.id);
+}
+
+/**
+ * Connects to the saved mail server and signs in, sending nothing, so an
+ * administrator can check the settings without a message. Not audited: it
+ * changes nothing. It works while delivery is turned off.
+ */
+export async function checkEmailConnection(options: { db: Database; actor: Actor; runtime: EmailRuntime }): Promise<EmailConnectionCheckDto> {
+  const { db, actor, runtime } = options;
+  assertAdministrator(actor);
+  const settings = await readSettingsRow(db);
+  if (!settings?.host || !settings.port || !settings.fromAddress) {
+    throw validationFailed({ host: 'Save the mail server, port and sender address before checking the connection.' });
+  }
+  if (!runtime.transport) {
+    return { status: 'not_sending', detail: 'This server is not configured to send email (EMAIL_TRANSPORT=none).' };
+  }
+  const server = toMailServer(settings, runtime.config.secretKey);
+  if ('unreadablePassword' in server) return { status: 'failed', detail: UNREADABLE_PASSWORD };
+  if (runtime.transport.kind === 'capture') {
+    return { status: 'not_sending', detail: 'Messages are captured locally (EMAIL_TRANSPORT=capture); no mail server is contacted.' };
+  }
+  try {
+    await runtime.transport.verify(server);
+    return { status: 'ok', detail: 'The mail server answered and accepted the connection settings. Nothing was sent.' };
+  } catch (error) {
+    return { status: 'failed', detail: describeDeliveryFailure(error) };
+  }
+}
+
+/**
+ * Queues a failed email again (CR2, controlled retry): only a failed email,
+ * never a test message, at most EMAIL_MANUAL_RETRY_LIMIT times, and only while
+ * delivery is on. The job re-checks everything before sending, as the first
+ * time: the recipient still active, an alert still true and permitted, an
+ * invitation still unaccepted; an account link is issued afresh.
+ */
+export async function retryEmailDelivery(options: {
+  db: Database;
+  actor: Actor;
+  deliveryId: string;
+  requestId: string;
+}): Promise<EmailDeliveryDto> {
+  const { db, actor, deliveryId, requestId } = options;
+  assertAdministrator(actor);
+
+  await db.transaction(async (tx) => {
+    await beginAdministrativeChange(tx, actor);
+    const [delivery] = await tx
+      .select({ id: emailDeliveries.id, status: emailDeliveries.status, templateKey: emailDeliveries.templateKey })
+      .from(emailDeliveries)
+      .where(eq(emailDeliveries.id, deliveryId))
+      .for('update')
+      .limit(1);
+    if (!delivery) throw notFound(`email delivery ${deliveryId} not found`);
+    if (delivery.templateKey === 'test') throw conflict('A test message is not retried. Send a new test message instead.');
+    if (delivery.status !== 'failed') throw conflict('Only a failed email can be retried.');
+
+    const [previous] = await tx
+      .select({ value: count() })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.entityType, 'email_delivery'),
+          eq(auditEvents.entityId, delivery.id),
+          eq(auditEvents.action, 'email.delivery_retried'),
+        ),
+      );
+    const retries = previous?.value ?? 0;
+    if (retries >= EMAIL_MANUAL_RETRY_LIMIT) {
+      throw conflict(
+        `This email has already been retried ${EMAIL_MANUAL_RETRY_LIMIT} times. Fix the mail server settings, then send a new email from where it started.`,
+      );
+    }
+    if (!(await isEmailDeliveryOn(tx))) throw conflict('Turn email delivery on before retrying.');
+
+    await tx
+      .update(emailDeliveries)
+      .set({ status: 'queued', statusDetail: null, updatedAt: now() })
+      .where(eq(emailDeliveries.id, delivery.id));
+    await enqueueJob(tx, {
+      kind: 'email.send',
+      payload: { deliveryId: delivery.id },
+      dedupeKey: `email.send:${delivery.id}:retry:${retries + 1}`,
+    });
+    await recordAuditEvent(tx, {
+      actorId: actor.id,
+      entityType: 'email_delivery',
+      entityId: delivery.id,
+      action: 'email.delivery_retried',
+      domain: 'administrative',
+      before: { status: 'failed' },
+      after: { status: 'queued', retry: retries + 1 },
+      requestId,
+    });
+  });
+
+  return readDelivery(db, deliveryId);
 }
 
 // ---------------------------------------------------------------------------
@@ -699,7 +851,7 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
   }
   await settle(db, deliveryId, {
     status: 'sent',
-    detail: runtime.transport.kind === 'capture' ? 'Captured locally (EMAIL_TRANSPORT=capture); not sent.' : null,
+    detail: runtime.transport.kind === 'capture' ? CAPTURED_DETAIL : null,
   });
 }
 

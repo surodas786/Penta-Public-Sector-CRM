@@ -477,7 +477,86 @@ apply in this order, once each, after a backup:
 2. `docs/operations/sql/0009_email_settings_templates_and_deliveries.production.sql`
 3. `docs/operations/sql/0010_software_procurement_workflow.production.sql`
 
-### 13. Next task
+### 13. Step 3 reviewed against the full CR2 instruction (12 October 2026)
+
+The step 3 instruction was checked again, point by point, against the code.
+Four gaps were found and closed. **No database change**: everything uses the
+existing tables and the audit.
+
+**Gaps closed**
+
+| Instruction | Before | Now |
+| --- | --- | --- |
+| Connection validation | Only a test email exercised the connection | **Check connection** (`POST /api/admin/email/verify`) connects and signs in without sending. It reports a failure without credentials, and with `capture` or `none` says that no server is contacted. Not audited, because it changes nothing |
+| Template version history | Edits were audited, but not shown per template | **History** in the template editor (`GET /api/admin/email/templates/:key/history`). It rebuilds every saved version in full from the audit, newest first, with who and when. **Use this wording** loads one into the editor; Restore default wording is unchanged |
+| Controlled retry | None | **Retry** on a failed delivery (`POST /api/admin/email/deliveries/:id/retry`): failed emails only, never a test message, at most three times, only while delivery is on. Audited as `email.delivery_retried` (labelled in the administrative audit). The job re-checks everything before sending, as the first time |
+| SMTP acceptance is not inbox delivery | The log said "Sent" | **"Accepted by mail server"**, and the test email says acceptance does not confirm inbox delivery. Development captures read **"Captured, not sent"** (a new `captured` flag on the delivery DTO). The stored status value `sent` is unchanged |
+
+**Already met, confirmed in the code:**
+
+- delivery on/off;
+- host, port, TLS mode, credentials, sender and reply-to;
+- the write-only, encrypted password;
+- refusal of incomplete settings and line breaks;
+- allowlisted placeholders and a synthetic preview;
+- the outbox in the same transaction, with bounded retries and a dedupe key;
+- re-checks at send time;
+- a log with no message bodies or tokens;
+- the required templates (the procurement deadline reminder is "Tender deadline within 72 hours");
+- the capture transport for verification.
+
+**HTML.** Email is plain text only, so there is no HTML to escape or
+sanitise and no template code can run. That meets "sanitize permitted HTML"
+by permitting none (ADR 0011).
+
+**Tests added**
+
+- `email.test.ts`: 8 new tests, and the existing role test extended:
+  - the new endpoints refused for every non-administrator;
+  - the connection check: before settings; with capture and none; against a closed port, without credentials and recording nothing;
+  - template history: full versions, newest first, per template, an unknown key returning 404;
+  - retry: only when failed, re-sent once, attempts counted, audited;
+  - retry: the limit of three;
+  - retry: the recipient re-checked, so a deactivated recipient's email is suppressed;
+  - retry: a test message, delivery turned off, and unknown and malformed ids (an identical 404) all refused;
+  - **job restart**: a worker stops after claiming; nothing is sent while the lease holds; after it, another worker sends once; a duplicate job sends nothing.
+- The audit matrix gained a case for `email.delivery_retried`.
+- `e2e/cr2.spec.ts` now covers the connection check, the history (new screenshot `cr2-template-history.png`) and the new wording.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **729 passed, 0 failed** (720 + 9 new) |
+| `e2e/cr2.spec.ts`, `e2e/cr1.spec.ts` | Passed |
+| `npm run build`, `npm run check:production-server` | Pass; 20 passed, 0 failed |
+
+**Configuration and startup (unchanged).** Run `npm run db:migrate`, then set
+`EMAIL_TRANSPORT`:
+
+- `capture` in development: files in `EMAIL_CAPTURE_DIR`;
+- `none` in production until the mail server is decided.
+
+Set `EMAIL_SECRET_KEY` (64 hex, `openssl rand -hex 32`) before saving an SMTP
+password. Then, as administrator:
+
+1. **Email delivery → Edit settings.**
+2. **Check connection.**
+3. **Send test email.**
+4. Turn delivery on.
+
+**Unresolved deployment settings:**
+
+- D-EM-1, the mail server: host, port and TLS, credentials, sender and
+  reply-to, IP allowlisting, SPF/DKIM/DMARC;
+- custody and rotation of `EMAIL_SECRET_KEY`;
+- D-EM-2 (content) and D-EM-4 (recipients).
+
+The retry button was not driven in the browser, because capture mode cannot
+produce a failure. The backend tests cover it.
+
+### 14. Next task
 
 Penta's decisions:
 

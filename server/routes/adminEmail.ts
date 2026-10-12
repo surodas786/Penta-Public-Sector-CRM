@@ -13,16 +13,21 @@ import {
   sendTestEmailSchema,
   updateEmailSettingsSchema,
   updateEmailTemplateSchema,
+  uuidField,
 } from '../../shared/validation.js';
 import type { Database } from '../db/client.js';
 import type { EmailRuntime } from '../email/runtime.js';
 import { notFound, unauthenticated } from '../http/errors.js';
+import { signalJobsEnqueued } from '../jobs/queue.js';
 import { parseOrThrow, singleValueQuery } from '../http/validate.js';
 import {
+  checkEmailConnection,
   getEmailSettings,
   listEmailDeliveries,
+  listEmailTemplateHistory,
   listEmailTemplates,
   previewEmailTemplate,
+  retryEmailDelivery,
   sendTestEmail,
   updateEmailSettings,
   updateEmailTemplate,
@@ -39,6 +44,12 @@ const templateKey = z.enum(EMAIL_TEMPLATE_KEYS);
 function readTemplateKey(value: unknown): EmailTemplateKey {
   const result = templateKey.safeParse(value);
   if (!result.success) throw notFound('unknown email template');
+  return result.data;
+}
+
+function readId(value: unknown): string {
+  const result = uuidField.safeParse(value);
+  if (!result.success) throw notFound('malformed id parameter');
   return result.data;
 }
 
@@ -76,6 +87,15 @@ export function createAdminEmailRouter(options: { db: Database; csrfGuard: Reque
     }),
   );
 
+  // A POST because it reaches out to the mail server; it changes nothing.
+  router.post(
+    '/verify',
+    csrfGuard,
+    handle(async (req, res) => {
+      res.json(await checkEmailConnection({ db, actor: actorOf(req), runtime: email }));
+    }),
+  );
+
   router.get(
     '/templates',
     handle(async (req, res) => {
@@ -90,6 +110,13 @@ export function createAdminEmailRouter(options: { db: Database; csrfGuard: Reque
       const key = readTemplateKey(req.params.key);
       const command = parseOrThrow(updateEmailTemplateSchema, req.body);
       res.json(await updateEmailTemplate({ db, actor: actorOf(req), key, command, requestId: req.requestId }));
+    }),
+  );
+
+  router.get(
+    '/templates/:key/history',
+    handle(async (req, res) => {
+      res.json({ items: await listEmailTemplateHistory(db, actorOf(req), readTemplateKey(req.params.key)) });
     }),
   );
 
@@ -109,6 +136,16 @@ export function createAdminEmailRouter(options: { db: Database; csrfGuard: Reque
     handle(async (req, res) => {
       const { page, pageSize } = parseOrThrow(paginationQuerySchema, singleValueQuery(req.query));
       res.json(await listEmailDeliveries(db, actorOf(req), page, pageSize));
+    }),
+  );
+
+  router.post(
+    '/deliveries/:id/retry',
+    csrfGuard,
+    handle(async (req, res) => {
+      const delivery = await retryEmailDelivery({ db, actor: actorOf(req), deliveryId: readId(req.params.id), requestId: req.requestId });
+      signalJobsEnqueued();
+      res.json({ delivery });
     }),
   );
 

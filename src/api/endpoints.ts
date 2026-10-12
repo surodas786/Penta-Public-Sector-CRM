@@ -42,10 +42,12 @@ import type {
   ReportDto,
   ReportExportDto,
   SearchResponseDto,
+  EmailConnectionCheckDto,
   EmailDeliveryDto,
   EmailPreviewDto,
   EmailSettingsDto,
   EmailTemplateDto,
+  EmailTemplateVersionDto,
   EmailTestResultDto,
 } from '../../shared/api.js';
 import type { ExportKind, ReportKey } from '../../shared/reporting.js';
@@ -354,6 +356,20 @@ export function updateEmailSettings(body: Record<string, unknown>): Promise<Emai
 
 export function sendTestEmail(to: string): Promise<EmailTestResultDto> {
   return apiRequest('/api/admin/email/test', { method: 'POST', body: { to } });
+}
+
+/** Connects and signs in to the saved mail server; sends nothing. */
+export function checkEmailConnection(): Promise<EmailConnectionCheckDto> {
+  return apiRequest('/api/admin/email/verify', { method: 'POST', body: {} });
+}
+
+export function fetchEmailTemplateHistory(key: string, signal?: AbortSignal): Promise<{ items: EmailTemplateVersionDto[] }> {
+  return apiRequest(`/api/admin/email/templates/${key}/history`, { signal });
+}
+
+/** Queues a failed email again; the server re-checks it before sending. */
+export function retryEmailDelivery(id: string): Promise<EmailTestResultDto> {
+  return apiRequest(`/api/admin/email/deliveries/${id}/retry`, { method: 'POST', body: {} });
 }
 
 export function fetchEmailTemplates(signal?: AbortSignal): Promise<{ items: EmailTemplateDto[] }> {

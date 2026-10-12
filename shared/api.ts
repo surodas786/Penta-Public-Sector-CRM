@@ -904,8 +904,14 @@ export interface EmailDeliveryDto {
   label: string;
   recipientName: string | null;
   recipientAddress: string | null;
+  /**
+   * `sent` means the mail server accepted the message, which does not confirm
+   * it reached an inbox; `captured` marks one the development capture
+   * transport wrote to a folder instead.
+   */
   status: EmailDeliveryStatus;
   statusDetail: string | null;
+  captured: boolean;
   attempts: number;
   createdAt: string;
   sentAt: string | null;
@@ -914,3 +920,26 @@ export interface EmailDeliveryDto {
 export interface EmailTestResultDto {
   delivery: EmailDeliveryDto;
 }
+
+/**
+ * A connection check (CR2): the mail server answered and accepted the sign-in,
+ * or why not. Nothing is sent.
+ */
+export interface EmailConnectionCheckDto {
+  status: 'ok' | 'failed' | 'not_sending';
+  detail: string;
+}
+
+/** One saved version of an email's wording, newest first, from the administrative audit. */
+export interface EmailTemplateVersionDto {
+  occurredAt: string;
+  actorName: string | null;
+  subject: string;
+  bodyText: string;
+  enabled: boolean;
+  /** Which fields this save changed. */
+  changed: ('subject' | 'bodyText' | 'enabled')[];
+}
+
+/** At most this many administrator retries of one failed email (CR2). */
+export const EMAIL_MANUAL_RETRY_LIMIT = 3;

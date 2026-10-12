@@ -1,7 +1,8 @@
 /**
- * CR2 browser check: an administrator configures email, sends a test message
- * and edits a template with a preview; a salesperson changes their password
- * and the "password changed" email appears in the delivery log.
+ * CR2 browser check: an administrator configures email, checks the
+ * connection, sends a test message, and edits a template with a preview and
+ * its saved versions; a salesperson changes their password and the "password
+ * changed" email appears in the delivery log (captured, never sent).
  *
  * The server captures every message to a private folder (EMAIL_TRANSPORT=
  * capture in playwright.config.ts): nothing is sent. Three sign-ins.
@@ -51,12 +52,16 @@ test('an administrator sets up email and the password-changed email is delivered
   await expect(page.getByRole('dialog').getByText('A password is stored. Leave empty to keep it.')).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
 
+  // The connection check says plainly that capture mode contacts no server.
+  await delivery.getByRole('button', { name: 'Check connection' }).click();
+  await expect(delivery.getByRole('status').getByText(/no mail server is contacted/)).toBeVisible();
+
   // A test message is captured, and its result shown at once.
   await delivery.getByRole('button', { name: 'Send test email' }).click();
   const testDialog = page.getByRole('dialog');
   await testDialog.getByLabel(/Send to/).fill('it.desk@example.test');
   await testDialog.getByRole('button', { name: 'Send test' }).click();
-  await expect(testDialog.getByText('Test message to it.desk@example.test.')).toBeVisible();
+  await expect(testDialog.getByText('Test message to it.desk@example.test written to the local capture folder.')).toBeVisible();
   await testDialog.getByRole('button', { name: 'Done' }).click();
 
   // Template wording, with a preview made of sample values.
@@ -73,6 +78,15 @@ test('an administrator sets up email and the password-changed email is delivered
   await editor.getByRole('button', { name: 'Save' }).click();
   await expect(editor).toBeHidden();
   await expect(templates.getByRole('row').filter({ hasText: 'Password changed' }).getByText(/edited/)).toBeVisible();
+
+  // Its saved versions, newest first, from the audit.
+  await templates.getByRole('row').filter({ hasText: 'Password changed' }).getByRole('button', { name: 'Edit' }).click();
+  await editor.getByRole('button', { name: 'History' }).click();
+  const versions = editor.getByLabel('Saved versions');
+  await expect(versions.getByRole('listitem')).toHaveCount(1);
+  await expect(versions.getByText(/changed message/)).toBeVisible();
+  await page.screenshot({ path: 'docs/evidence/cr/cr2-template-history.png' });
+  await editor.getByRole('button', { name: 'Cancel' }).click();
   await page.getByRole('button', { name: 'Sign out' }).click();
 
   // A salesperson changes their password: the email is queued and sent by the worker.
@@ -91,10 +105,10 @@ test('an administrator sets up email and the password-changed email is delivered
   const row = log.getByRole('row').filter({ hasText: 'Password changed' });
   await expect(async () => {
     await page.reload();
-    await expect(row.getByText('Sent', { exact: true })).toBeVisible({ timeout: 2_000 });
+    await expect(row.getByText('Captured, not sent', { exact: true })).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 30_000 });
   await expect(row.getByText('Tasnia Karim')).toBeVisible();
-  await expect(log.getByRole('row').filter({ hasText: 'Test message' }).getByText('Sent', { exact: true })).toBeVisible();
+  await expect(log.getByRole('row').filter({ hasText: 'Test message' }).getByText('Captured, not sent', { exact: true })).toBeVisible();
   await row.scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'docs/evidence/cr/cr2-delivery-log.png' });
 });

@@ -207,6 +207,11 @@ checks named below.
 | CR2-AC6 | Retries with backoff; permanent failure recorded and visible in job health | Complete | `email.test.ts`, `invitations.test.ts` | — |
 | CR2-AC7 | Settings and wording versioned and audited; administrators gain no commercial access; no message bodies stored | Complete | `email.test.ts`, audit matrix | — |
 | CR2-AC8 | No development, test or CI run reaches a real mail server; production refuses capture | Complete | test harness capture folders; `email.test.ts`; `check:production-server` | — |
+| CR2 connection check | Connects and signs in without sending; failures reported without credentials | Complete | `email.test.ts` (closed port; capture and none contact nothing); `e2e/cr2.spec.ts` | Against a real server once D-EM-1 is settled |
+| CR2 template history | Every saved version in full, newest first; earlier wording can be reused; restore to default | Complete | `email.test.ts`; `e2e/cr2.spec.ts` (`cr2-template-history.png`) | — |
+| CR2 delivery states | Queued, accepted by the mail server (never called "delivered"), failed with a sanitised reason, not sent | Complete | `email.test.ts`; `e2e/cr2.spec.ts` | — |
+| CR2 controlled retry | A failed email queued again by an administrator, at most three times, re-checked before sending, audited | Complete | `email.test.ts`, audit matrix | Not driven in the browser: a failure cannot be produced in capture mode |
+| CR2 job restart | A job left by a stopped worker is taken over after its lease and sends once; a duplicate job sends nothing | Complete | `email.test.ts` | At least once by design: a crash after sending but before recording can repeat one message (ADR 0011) |
 | CR2 content | Alert emails carry no commercial detail (D-EM-2) | Partial | `notificationEmails.test.ts` (no names, references, organizations or amounts) | Proposed default, not yet confirmed |
 | CR2 real sending | Email reaches real inboxes | Partial | — | **D-EM-1**: Penta's mail server, then `EMAIL_TRANSPORT=smtp` and a test email |
 | CR3-AC1 | Every role can change their own password from the top bar | Complete | `ownPassword.test.ts`, `e2e/cr3.spec.ts` | — |

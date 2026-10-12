@@ -12,13 +12,13 @@ import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { EMAIL_TEMPLATE_KEYS } from '../../shared/email.js';
-import { resetClock } from '../clock.js';
+import { FixedClock, resetClock, setClock } from '../clock.js';
 import { auditEvents, backgroundJobs, emailDeliveries, emailSettings, users } from '../db/schema.js';
 import { createEmailRuntime } from '../email/runtime.js';
 import { decryptSecret } from '../email/secretBox.js';
 import { loadServerConfig } from '../env.js';
 import { createJobHandlers } from '../jobs/handlers.js';
-import { runDueJobs } from '../jobs/queue.js';
+import { claimNextJob, enqueueJob, runDueJobs } from '../jobs/queue.js';
 import {
   TEST_EMAIL_SECRET_KEY,
   TEST_ORIGIN,
@@ -114,6 +114,9 @@ describe('CR2: email foundation', () => {
         await client.agent.get('/api/admin/email/templates').expect(403);
         await client.agent.get('/api/admin/email/deliveries').expect(403);
         expect((await put(client, '/api/admin/email/settings', VALID_SETTINGS)).status).toBe(403);
+        await client.agent.get('/api/admin/email/templates/invitation/history').expect(403);
+        expect((await send(client, '/api/admin/email/verify', {}, null)).status).toBe(403);
+        expect((await send(client, `/api/admin/email/deliveries/${ids.salesGA1}/retry`, {}, null)).status).toBe(403);
       }
     });
   });
@@ -295,7 +298,7 @@ describe('CR2: email foundation', () => {
       await configure(ctx, { enabled: false });
       const response = await send(admin, '/api/admin/email/test', { to: 'IT.Desk@example.test' }, null);
       expect(response.status).toBe(200);
-      expect(response.body.delivery).toMatchObject({ status: 'sent', label: 'Test message', recipientAddress: 'it.desk@example.test' });
+      expect(response.body.delivery).toMatchObject({ status: 'sent', captured: true, label: 'Test message', recipientAddress: 'it.desk@example.test' });
       const [message] = captured(ctx);
       expect(message).toMatchObject({ to: 'it.desk@example.test', subject: 'Penta CRM test message' });
 
@@ -311,7 +314,7 @@ describe('CR2: email foundation', () => {
       const { admin } = await configure(smtp, { host: '127.0.0.1', port: 1, security: 'none' });
       const response = await send(admin, '/api/admin/email/test', { to: 'it.desk@example.test' }, null);
       expect(response.status).toBe(200);
-      expect(response.body.delivery.status).toBe('failed');
+      expect(response.body.delivery).toMatchObject({ status: 'failed', captured: false });
       expect(response.body.delivery.statusDetail).toBeTruthy();
       expect(response.body.delivery.statusDetail).not.toContain(SMTP_PASSWORD);
     });
@@ -401,6 +404,196 @@ describe('CR2: email foundation', () => {
       await runJobs(ctx);
       const [row] = await ctx.database.db.select().from(emailDeliveries);
       expect(row).toMatchObject({ status: 'suppressed', statusDetail: 'The recipient account is inactive.' });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('connection check', () => {
+    it('needs saved settings, and contacts no server when capturing or sending nothing', async () => {
+      const admin = await signIn(ctx.app, emails.admin);
+      const early = await send(admin, '/api/admin/email/verify', {}, null);
+      expect(early.status).toBe(422);
+      expect(early.body.fieldErrors.host).toBeTruthy();
+
+      await configure(ctx, { enabled: false });
+      const captureCheck = await send(admin, '/api/admin/email/verify', {}, null);
+      expect(captureCheck.status).toBe(200);
+      expect(captureCheck.body).toMatchObject({ status: 'not_sending' });
+      expect(captureCheck.body.detail).toMatch(/EMAIL_TRANSPORT=capture/);
+
+      const silent = app({ email: { transport: 'none' } });
+      const silentAdmin = await signIn(silent.app, emails.admin);
+      const silentCheck = await send(silentAdmin, '/api/admin/email/verify', {}, null);
+      expect(silentCheck.body).toMatchObject({ status: 'not_sending' });
+      expect(silentCheck.body.detail).toMatch(/EMAIL_TRANSPORT=none/);
+    });
+
+    it('reports a mail server that cannot be reached, without credentials, sending and recording nothing', async () => {
+      const smtp = app({ email: { transport: 'smtp', sendTimeoutMs: 3_000 } });
+      const { admin } = await configure(smtp, { host: '127.0.0.1', port: 1, security: 'none' });
+      const response = await send(admin, '/api/admin/email/verify', {}, null);
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('failed');
+      expect(response.body.detail).toBeTruthy();
+      expect(JSON.stringify(response.body)).not.toContain(SMTP_PASSWORD);
+      expect(await smtp.database.db.select().from(emailDeliveries)).toHaveLength(0);
+      const audits = await smtp.database.db.select({ action: auditEvents.action }).from(auditEvents);
+      expect(audits.map((row) => row.action)).toEqual(['email.settings_updated']);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('template history', () => {
+    it('lists every saved version in full, newest first, from the audit', async () => {
+      const { admin } = await configure(ctx);
+      const url = '/api/admin/email/templates/ownership_changed/history';
+      expect((await admin.agent.get(url).expect(200)).body.items).toEqual([]);
+
+      await put(admin, '/api/admin/email/templates/ownership_changed', {
+        version: 0,
+        subject: 'A record is now yours',
+        bodyText: 'Open it: {{link}}',
+        enabled: true,
+      }).expect(200);
+      await put(admin, '/api/admin/email/templates/ownership_changed', {
+        version: 1,
+        subject: 'A record is now yours',
+        bodyText: 'Open it: {{link}}',
+        enabled: false,
+      }).expect(200);
+
+      const history = (await admin.agent.get(url).expect(200)).body.items;
+      expect(history).toHaveLength(2);
+      // The newest save changed only the switch, yet carries the full wording.
+      expect(history[0]).toMatchObject({ subject: 'A record is now yours', bodyText: 'Open it: {{link}}', enabled: false, changed: ['enabled'] });
+      expect(history[1]).toMatchObject({ subject: 'A record is now yours', enabled: true, changed: ['subject', 'bodyText'] });
+      expect(history[0].actorName).toBeTruthy();
+
+      // Other emails keep their own history.
+      expect((await admin.agent.get('/api/admin/email/templates/invitation/history').expect(200)).body.items).toEqual([]);
+      await admin.agent.get('/api/admin/email/templates/not_an_email/history').expect(404);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('controlled retry', () => {
+    /** Runs the queued email jobs once, as their last attempt, against a closed port. */
+    async function failQueued(context: TestContext) {
+      await context.database.db
+        .update(backgroundJobs)
+        .set({ maxAttempts: 1, runAfter: new Date(0) })
+        .where(and(eq(backgroundJobs.kind, 'email.send'), eq(backgroundJobs.status, 'queued')));
+      await runJobs(context);
+    }
+
+    async function failedPasswordEmail() {
+      const smtp = app({ email: { transport: 'smtp', sendTimeoutMs: 3_000 } });
+      const { admin } = await configure(smtp, { host: '127.0.0.1', port: 1, security: 'none' });
+      await changePassword(smtp);
+      const [queued] = await smtp.database.db.select().from(emailDeliveries);
+      return { smtp, admin, delivery: queued! };
+    }
+
+    const retryUrl = (id: string) => `/api/admin/email/deliveries/${id}/retry`;
+
+    it('queues only a failed email again; the job re-checks it and sends it once', async () => {
+      const { smtp, admin, delivery } = await failedPasswordEmail();
+      const early = await send(admin, retryUrl(delivery.id), {}, null);
+      expect(early.status).toBe(409);
+      expect(early.body.message).toBe('Only a failed email can be retried.');
+
+      await failQueued(smtp);
+      const [failed] = await smtp.database.db.select().from(emailDeliveries);
+      expect(failed).toMatchObject({ status: 'failed', attempts: 1 });
+
+      const retried = await send(admin, retryUrl(delivery.id), {}, null);
+      expect(retried.status).toBe(200);
+      expect(retried.body.delivery).toMatchObject({ id: delivery.id, status: 'queued', statusDetail: null });
+      const [audit] = await smtp.database.db.select().from(auditEvents).where(eq(auditEvents.action, 'email.delivery_retried'));
+      expect(audit).toMatchObject({ domain: 'administrative', entityId: delivery.id, opportunityId: null });
+      expect(audit!.afterData).toEqual({ status: 'queued', retry: 1 });
+
+      // The mail server is fixed (the capture transport stands in for it): one message.
+      await runJobs(ctx);
+      const [sent] = await ctx.database.db.select().from(emailDeliveries);
+      expect(sent).toMatchObject({ status: 'sent', attempts: 2 });
+      expect(captured(ctx)).toHaveLength(1);
+      expect((await send(admin, retryUrl(delivery.id), {}, null)).status).toBe(409);
+    });
+
+    it('stops after the retry limit', async () => {
+      const { smtp, admin, delivery } = await failedPasswordEmail();
+      await failQueued(smtp);
+      for (let retry = 1; retry <= 3; retry += 1) {
+        expect((await send(admin, retryUrl(delivery.id), {}, null)).status).toBe(200);
+        await failQueued(smtp);
+      }
+      const [row] = await smtp.database.db.select().from(emailDeliveries);
+      expect(row).toMatchObject({ status: 'failed', attempts: 4 });
+      const refused = await send(admin, retryUrl(delivery.id), {}, null);
+      expect(refused.status).toBe(409);
+      expect(refused.body.message).toMatch(/already been retried 3 times/);
+    });
+
+    it('re-checks the recipient before sending again', async () => {
+      const { smtp, admin, delivery } = await failedPasswordEmail();
+      await failQueued(smtp);
+      await smtp.database.db.update(users).set({ active: false }).where(eq(users.id, ids.salesGA1));
+      expect((await send(admin, retryUrl(delivery.id), {}, null)).status).toBe(200);
+      await runJobs(ctx);
+      const [row] = await ctx.database.db.select().from(emailDeliveries);
+      expect(row).toMatchObject({ status: 'suppressed', statusDetail: 'The recipient account is inactive.' });
+      expect(captured(ctx)).toHaveLength(0);
+    });
+
+    it('refuses a test message, a retry while delivery is off, and unknown ids alike', async () => {
+      const { smtp, admin, delivery } = await failedPasswordEmail();
+      await failQueued(smtp);
+
+      const test = await send(admin, '/api/admin/email/test', { to: 'it.desk@example.test' }, null);
+      expect(test.body.delivery.status).toBe('failed');
+      expect((await send(admin, retryUrl(test.body.delivery.id), {}, null)).status).toBe(409);
+
+      const settings = (await admin.agent.get('/api/admin/email/settings').expect(200)).body;
+      await put(admin, '/api/admin/email/settings', { ...VALID_SETTINGS, host: '127.0.0.1', port: 1, security: 'none', version: settings.version, enabled: false, password: undefined }).expect(200);
+      const off = await send(admin, retryUrl(delivery.id), {}, null);
+      expect(off.status).toBe(409);
+      expect(off.body.message).toBe('Turn email delivery on before retrying.');
+
+      const missing = await send(admin, retryUrl('00000000-0000-4000-8000-000000000000'), {}, null);
+      const malformed = await send(admin, retryUrl('not-an-id'), {}, null);
+      expect(missing.status).toBe(404);
+      expect(malformed.status).toBe(404);
+      expect({ ...missing.body, requestId: null }).toEqual({ ...malformed.body, requestId: null });
+      expect(await smtp.database.db.select().from(auditEvents).where(eq(auditEvents.action, 'email.delivery_retried'))).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe('job restart', () => {
+    it('sends once after a worker stops mid-job, and a duplicate job sends nothing', async () => {
+      const clock = new FixedClock(new Date());
+      setClock(clock);
+      await configure(ctx);
+      await changePassword(ctx);
+
+      // A worker claims the job and stops responding before sending.
+      const claimed = await claimNextJob(ctx.database.db, 'crashed-worker');
+      expect(claimed?.kind).toBe('email.send');
+      await runJobs(ctx);
+      expect(captured(ctx)).toHaveLength(0);
+
+      // After the lease, another worker takes it over and sends it.
+      clock.advanceMinutes(11);
+      await runJobs(ctx);
+      const [row] = await ctx.database.db.select().from(emailDeliveries);
+      expect(row).toMatchObject({ status: 'sent', attempts: 1 });
+      expect(captured(ctx)).toHaveLength(1);
+
+      // Another job for the same delivery finds it sent and does nothing.
+      await enqueueJob(ctx.database.db, { kind: 'email.send', payload: { deliveryId: row!.id } });
+      await runJobs(ctx);
+      expect(captured(ctx)).toHaveLength(1);
     });
   });
 
