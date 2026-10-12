@@ -24,6 +24,7 @@ import {
   PRIORITY_LABELS,
   SOLUTION_CATEGORY_LABELS,
   STAGE_LABELS,
+  WORKFLOW_LABELS,
   STATUS_LABELS,
 } from '../../shared/enums.js';
 import { EXPORT_KIND_LABELS, type ExportKind, type ReportKey } from '../../shared/reporting.js';
@@ -156,6 +157,7 @@ const OPPORTUNITY_EXPORT_COLUMNS: CsvColumn[] = [
   { key: 'name', label: 'Opportunity', kind: 'text' },
   { key: 'organization', label: 'Procuring organization', kind: 'text' },
   { key: 'solutionCategory', label: 'Solution category', kind: 'text' },
+  { key: 'workflow', label: 'Workflow', kind: 'text' },
   { key: 'stage', label: 'Stage', kind: 'text' },
   { key: 'status', label: 'Status', kind: 'text' },
   { key: 'priority', label: 'Priority', kind: 'text' },
@@ -187,6 +189,7 @@ async function produceRows(
         name: item.name,
         organization: item.organization.name,
         solutionCategory: SOLUTION_CATEGORY_LABELS[item.solutionCategory],
+        workflow: WORKFLOW_LABELS[item.workflow],
         stage: STAGE_LABELS[item.stage],
         status: STATUS_LABELS[item.status],
         priority: PRIORITY_LABELS[item.priority],

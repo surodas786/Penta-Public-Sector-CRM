@@ -1,7 +1,8 @@
 # Pilot handover
 
-**Date:** 06 October 2026 · **Branch:** `m8-release-preparation` (stacked on
-Milestones 3–7, nothing merged) · **For:** Penta's project owner, the pilot
+**Date:** 06 October 2026, updated 12 October 2026 for change requests
+CR1–CR6 · **Branch:** `cr-change-requests` (from `m8-release-preparation` and
+its fixes, nothing merged) · **For:** Penta's project owner, the pilot
 users and whoever will host the system.
 
 **Readiness:** ready for a **synthetic-data pilot and user-acceptance testing**
@@ -105,6 +106,52 @@ Record pass/fail with the date and the person.
 4. Replace a section lead; the administrative audit lists the role changes and each "Reporting line changed".
 5. Type an opportunity URL: "Not available".
 
+### Change requests CR1–CR6
+
+Run these after the role scenarios above. Set `EMAIL_TRANSPORT=capture` on the
+local server, so emails are written as files to `EMAIL_CAPTURE_DIR`
+(`./var/mail-outbox` in `.env.example`) and never sent.
+
+1. **CR3. Change your own password** (any account).
+   1. In the top bar, choose **Change password**.
+   2. A wrong current password is refused.
+   3. A correct change keeps you signed in.
+   4. Another browser signed in as the same person is signed out on its next
+      click.
+   5. A "Password changed" email is captured.
+2. **CR4. A lead leads two sections** (administrator, then lead).
+   1. In **Administration → Sections and reporting lines**, use **Replace lead** to make Nadia the
+      lead of Infrastructure and Security as well.
+   2. Nadia now sees both sections' records, dashboards and reports.
+   3. The previous lead loses that section's records on their next click.
+   4. Deactivating a section's only lead is refused.
+3. **CR5. A salesperson in two sections** (administrator, then salesperson).
+   1. Add Infrastructure and Security to Rafiq's sections.
+   2. Rafiq's **New opportunity** form now asks for the section.
+   3. Remove him from that section again: his records there disappear from his
+      view on the next click, although they still name him as owner.
+4. **CR1. Invitation by email** (administrator).
+   1. Turn email delivery on in **Administration → Email delivery**.
+   2. Add a user. The status line says the invitation was emailed.
+   3. The captured email holds the link, and the link works once.
+   4. **Copy link** instead gives a manual link and cancels the queued email.
+5. **CR2. Email settings, templates and alerts** (administrator, then
+   salesperson).
+   1. Send a test email.
+   2. Edit the "Follow-up due" wording, preview it, then restore the default.
+   3. Run `npm run jobs:run` after a follow-up falls due. The owner, and only
+      the owner, receives one email: a link and a date, no commercial detail.
+   4. The delivery log lists it without the message body.
+6. **CR6. Software Procurement** (salesperson).
+   1. Create an opportunity with **Workflow: Software Procurement**.
+   2. Record an EOI notice and mark it submitted (the stage offered is EOI
+      Submitted).
+   3. Record the EOI outcome as Shortlisted and move the stage.
+   4. Record the RFP and continue to Proposal Submitted.
+   5. On a second record, record "Not shortlisted": it closes as Lost, with
+      the reason Not shortlisted.
+   6. The board's Workflow switch shows the software lanes.
+
 ### Everyone
 
 - Use the keyboard only for one full task; focus is always visible.
@@ -121,8 +168,11 @@ Record pass/fail with the date and the person.
 | No calendar view for Activities & Follow-ups | The Tender Tracker calendar exists | FR-043 |
 | No organization, owner or section selector on the Opportunities list | Owner/section filters reachable from dashboard drill-downs and reports | FR-022 |
 | No screen for directory or export audit | Recorded, not viewable | ADR 0008 |
-| In-app notifications only | No email/SMS (excluded from release one) | §1.3 |
-| Management receives every alert; business day starts 00:00 Dhaka | May be noisy | M6 decisions |
+| Alert emails go only to the responsible person and carry a link and dates, no commercial detail | Management still receives every alert in the app; no per-person opt-out | D-EM-2, D-EM-3, D-EM-4 (change-requests.md) |
+| No SMS | Excluded | §1.3 |
+| Email is sent only once Penta's mail server is configured | Until then `EMAIL_TRANSPORT=none` (nothing sent) or `capture` (local files, refused in production) | D-EM-1, ADR 0011 |
+| Management receives every alert in the app; business day starts 00:00 Dhaka | May be noisy | M6 decisions |
+| The Software Procurement workflow is fixed when the record is created | To change it, close the record and create a new one | D-CR6-5, ADR 0012 |
 | At 360 px the search box shows only "Se…" | Cosmetic | interface-quality.md |
 | Performance measured on a laptop | Staging figures pending | capacity-and-performance.md |
 
@@ -137,9 +187,26 @@ Record pass/fail with the date and the person.
 | 5 | **User acceptance and visual sign-off (AT-17)** | Penta's management, a lead, a salesperson | §4 above, on staging |
 | 6 | **Operational targets and retention** | Penta | Confirm daily backups, 30-day retention, 24 h RPO, 4 h RTO; define sales, audit, document and log retention (docs/operations/README.md) |
 | 7 | **Support ownership and on-call** | Penta | Who receives monitoring alerts and user reports |
-| 8 | Product decisions (not blocking a pilot) | Penta product owner | FR-042 follow-up edit/reassign; FR-043 calendar; FR-022 list selectors; FR-090 alert recipients and start of day; who sees export/directory audit |
+| 8 | **Mail server and email decisions (CR1, CR2)** | Penta (IT, product owner) | D-EM-1: SMTP host, port/TLS, sender, credentials (entered only on the Administration page), SPF/DKIM/DMARC, IP allowlisting, `EMAIL_SECRET_KEY` in the secret store. Confirm D-EM-2 (content) and D-EM-4 (recipients). Then send a test email on staging |
+| 9 | Product decisions (not blocking a pilot) | Penta product owner | FR-042 follow-up edit/reassign; FR-043 calendar; FR-022 list selectors; FR-090 alert recipients and start of day; who sees export/directory audit |
 
-## 7. Release checklist
+## 7. Upgrading an existing database (change requests)
+
+An existing release-one database is upgraded in this order, each script once,
+by the schema-owner role. Every script is one transaction with pre-flight
+checks, and stops without changing anything if a check fails:
+
+1. `docs/operations/sql/0008_section_memberships_and_multi_section_leads.production.sql`
+2. `docs/operations/sql/0009_email_settings_templates_and_deliveries.production.sql`
+3. `docs/operations/sql/0010_software_procurement_workflow.production.sql`
+
+`npm run db:migrate` applies the same migrations. Use one method, not both.
+Take a backup first (`docs/operations/backup-and-restore.md`). After 0009, set
+`EMAIL_SECRET_KEY` and `EMAIL_TRANSPORT` before an administrator saves an SMTP
+password. Details and rollback notes are in
+`docs/operations/deployment-and-migrations.md` and ADRs 0010–0012.
+
+## 8. Release checklist
 
 Production deployment and live data are **not authorized**. Before asking for
 that authorization, every box must be ticked with evidence:
@@ -149,7 +216,9 @@ that authorization, every box must be ticked with evidence:
 - [x] Production build and server exclude demo controls, reset/seed endpoints, synthetic accounts and mock authentication
 - [x] Backup and restore implemented and drilled locally
 - [x] Capacity measured at the proposed envelope (laptop)
+- [x] Change requests CR1–CR6 implemented with tests and evidence (`docs/change-requests.md`, acceptance-matrix.md)
 - [ ] Blockers 1–3 resolved and their integrations tested
+- [ ] Mail server configured (D-EM-1) and a test email received on staging
 - [ ] Staging deployed from the runbooks; first administrator created by the bootstrap command
 - [ ] On staging: capacity repeated, restore drill passed, monitoring wired and an alert test received
 - [ ] Independent security review done; findings closed or accepted by Penta

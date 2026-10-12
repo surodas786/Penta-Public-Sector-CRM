@@ -37,6 +37,40 @@ checks use desktop engines at that width.
 | Offline while saving an edit: error, never a confirmation | NFR-012 | Pass |
 | From a filtered list, open a record, then **Back to Opportunities**: the same filters, sort and view | FR-013 | Pass (fixed in M8) |
 
+## Change requests CR1–CR6 (12 October 2026)
+
+**Same five checks, three browsers.** The five `e2e/m8.spec.ts` checks were
+re-run with `npm run test:browsers` on branch `cr-change-requests` (Playwright
+1.63.0). All five passed in each browser: Chromium, Microsoft Edge and
+Firefox. The run refreshed the screenshots in `docs/evidence/m8/`. They now show the
+Workflow filter and the Change password button, in the existing layout,
+at all three widths.
+
+**New screens.** They reuse the existing components (dialogs, form fields,
+tables, status lines, panels, the board) and introduce no new styles:
+
+- the Change password dialog;
+- multi-section membership and Replace lead in Administration;
+- the Section field on New opportunity when the owner has several sections;
+- the Email delivery, Email templates and Email delivery log panels;
+- the Workflow field and filter, and the software board lanes;
+- the tender phase and the Record EOI outcome dialog.
+
+**Browser checks.** Each new screen has one, in Chromium:
+
+| Change | Spec | Result |
+| --- | --- | --- |
+| CR3 | `e2e/cr3.spec.ts` | Passed |
+| CR4/CR5 | `e2e/cr45.spec.ts` | Passed |
+| CR2 | `e2e/cr2.spec.ts` | Passed |
+| CR1 | `e2e/cr1.spec.ts` | Passed |
+| CR6 | `e2e/cr6.spec.ts` | Passed |
+
+Screenshots are in `docs/evidence/cr/`. The new screens were **not** run at
+360 px or in Edge and Firefox. They follow the responsive patterns already
+checked above, and are part of the visual sign-off and UAT (pilot-handover.md
+§4).
+
 ## Defects found and fixed in M8
 
 1. **The navigation landmark had no name.** "Main navigation" labelled the

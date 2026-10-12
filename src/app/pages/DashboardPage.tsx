@@ -8,7 +8,7 @@ import { useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import type { DashboardDto } from '../../../shared/api.js';
-import { PIPELINE_STAGES, type OpportunityStage } from '../../../shared/enums.js';
+import { isWorkingStage, type OpportunityStage } from '../../../shared/enums.js';
 import { DASHBOARD_RANGES, DASHBOARD_RANGE_LABELS, type DashboardRange } from '../../../shared/reporting.js';
 import { fetchDashboard } from '../../api/endpoints.js';
 import { FilterSelect } from '../../components/ui/FormFields';
@@ -83,7 +83,7 @@ export function DashboardPage() {
 
   const openStage = (dashboard: DashboardDto) => (stage: OpportunityStage) => {
     const bounds = dashboard.rangeBounds;
-    if (PIPELINE_STAGES.includes(stage)) navigate(toOpportunities({ stage, pipeline: 'active' }));
+    if (isWorkingStage(stage)) navigate(toOpportunities({ stage, pipeline: 'active' }));
     else if (stage === 'awarded') navigate(toOpportunities({ stage, ...(bounds ? { awardFrom: bounds.from, awardTo: bounds.to } : {}) }));
     else navigate(toOpportunities({ stage, ...(bounds ? { closedFrom: bounds.from, closedTo: bounds.to } : {}) }));
   };

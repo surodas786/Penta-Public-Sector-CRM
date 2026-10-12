@@ -109,5 +109,18 @@ supports Node 22, and added no production audit findings.
     a newer link and void the copied one.
   - While delivery is off, or `EMAIL_TRANSPORT=none`, the copy-the-link path
     is the only one, exactly as in release one.
-- **CR2 notifications** (step 5) add alert emails, with access rechecked at
-  send time.
+- **CR2 notifications** (step 5, implemented) add alert emails:
+  - When an alert is created, an email is queued in the same transaction,
+    only for the person responsible (D-EM-4, proposed default). That is the
+    task's assignee, the tender's owner, or the new owner after a transfer.
+    Leads and management keep their in-app alerts without an email for each.
+  - One email per alert: the dedupe key is the alert id, so repeated scans
+    send nothing new.
+  - At send time `deliverableAlert` applies the same `stillValid` definition
+    as every inbox read. The alert must still be true, still unread and still
+    permitted; otherwise the email is suppressed with the reason.
+  - The message gives the kind of alert, the date or deadline and a link to
+    the record, where access is checked again. It carries no name, value or
+    organization (D-EM-2).
+  - Dates use the interface's own format (`notifications.ts`), so
+    "29 Sep 2026" reads the same in the app and in an email.

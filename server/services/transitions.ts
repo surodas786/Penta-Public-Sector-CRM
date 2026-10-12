@@ -18,8 +18,12 @@ import type { OpportunityDetailDto } from '../../shared/api.js';
 import {
   STAGE_LABELS,
   STATUS_LABELS,
+  WORKFLOW_LABELS,
   classifyStageMove,
   isTerminalStage,
+  lossReasonsFor,
+  stageInWorkflow,
+  type OpportunityStage,
 } from '../../shared/enums.js';
 import { canonicalMoney } from '../../shared/money.js';
 import type {
@@ -74,6 +78,49 @@ async function applyOpportunityUpdate(
   if (rows.length === 0) throw versionConflict();
 }
 
+/**
+ * A validated stage move, inside the caller's transaction after its
+ * opportunity lock: the update (version-checked), its audit event, and for
+ * Awarded or Lost the cancellation of open tasks (BR-014). Shared by the
+ * stage-change service and the EOI outcome (CR6), so both moves are recorded
+ * the same way.
+ */
+export async function applyStageMove(
+  tx: Database,
+  move: {
+    actor: Actor;
+    current: LockedOpportunity;
+    version: number;
+    changes: Partial<typeof opportunities.$inferInsert> & { stage: OpportunityStage };
+    after: Record<string, unknown>;
+    reason: string | null;
+    requestId: string;
+  },
+): Promise<void> {
+  const { actor, current, version, changes, after, reason, requestId } = move;
+  await applyOpportunityUpdate(tx, actor, current, version, changes);
+  await recordAuditEvent(tx, {
+    actorId: actor.id,
+    opportunityId: current.id,
+    entityType: 'opportunity',
+    entityId: current.id,
+    action: 'opportunity.stage_changed',
+    before: { stage: current.stage },
+    after,
+    reason,
+    requestId,
+  });
+  if (isTerminalStage(changes.stage)) {
+    // BR-014: terminal closure cancels open tasks, never marks them done.
+    await cancelOpenFollowUps(tx, {
+      actor,
+      opportunityId: current.id,
+      reason: closureReason(`marked ${STAGE_LABELS[changes.stage]}`),
+      requestId,
+    });
+  }
+}
+
 function closureReason(label: string, explanation?: string): string {
   return explanation
     ? `Closed automatically: opportunity ${label}. ${explanation}`
@@ -113,7 +160,13 @@ export async function changeStage(options: {
       );
     }
 
-    const move = classifyStageMove(current.stage, command.stage);
+    // CR6: a record moves only among its own workflow's stages.
+    if (!stageInWorkflow(command.stage, current.workflow)) {
+      throw validationFailed({
+        stage: `${STAGE_LABELS[command.stage]} is not a stage of the ${WORKFLOW_LABELS[current.workflow]} workflow.`,
+      });
+    }
+    const move = classifyStageMove(current.stage, command.stage, current.workflow);
     if (move === 'same') {
       throw validationFailed({ stage: `The opportunity is already at ${STAGE_LABELS[current.stage]}.` });
     }
@@ -144,6 +197,9 @@ export async function changeStage(options: {
     } else if (command.stage === 'lost') {
       // BR-011: a preset reason and a closed date; "Other" must be explained.
       if (!command.lossReason) errors.lossReason = 'Choose the reason the opportunity was lost.';
+      else if (!lossReasonsFor(current.workflow).includes(command.lossReason)) {
+        errors.lossReason = 'Not shortlisted applies only to Software Procurement opportunities.';
+      }
       if (command.lossReason === 'other' && !command.lossNote) {
         errors.lossNote = 'Explain the reason when choosing Other.';
       }
@@ -167,28 +223,17 @@ export async function changeStage(options: {
 
     if (Object.keys(errors).length > 0) throw validationFailed(errors);
 
-    await applyOpportunityUpdate(tx, actor, current, command.version, changes);
-    await recordAuditEvent(tx, {
-      actorId: actor.id,
-      opportunityId: current.id,
-      entityType: 'opportunity',
-      entityId: current.id,
-      action: 'opportunity.stage_changed',
-      before: { stage: current.stage },
+    await applyStageMove(tx, {
+      actor,
+      current,
+      version: command.version,
+      changes: { ...changes, stage: command.stage },
       after,
       reason: command.explanation ?? null,
       requestId,
     });
 
-    if (isTerminalStage(command.stage)) {
-      // BR-014: terminal closure cancels open tasks, never marks them done.
-      await cancelOpenFollowUps(tx, {
-        actor,
-        opportunityId: current.id,
-        reason: closureReason(`marked ${STAGE_LABELS[command.stage]}`),
-        requestId,
-      });
-    } else if (command.nextFollowUp) {
+    if (!isTerminalStage(command.stage) && command.nextFollowUp) {
       await insertFollowUp(tx, {
         actor,
         opportunity: current,
@@ -342,6 +387,11 @@ export async function reopenOpportunity(options: {
     if (current.version !== command.version) throw versionConflict();
     if (!isTerminalStage(current.stage)) {
       throw invalidTransition('Only Awarded or Lost opportunities can be reopened.');
+    }
+    if (!stageInWorkflow(command.stage, current.workflow)) {
+      throw validationFailed({
+        stage: `${STAGE_LABELS[command.stage]} is not a stage of the ${WORKFLOW_LABELS[current.workflow]} workflow.`,
+      });
     }
 
     await applyOpportunityUpdate(tx, actor, current, command.version, {

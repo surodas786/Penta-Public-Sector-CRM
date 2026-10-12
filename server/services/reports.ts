@@ -15,6 +15,7 @@ import type { ReportDto, ReportRowDto, ReportSummaryItemDto } from '../../shared
 import {
   BID_STATUS_LABELS,
   BOARD_LANES,
+  SOFTWARE_ONLY_STAGES,
   LOSS_REASON_LABELS,
   PRIORITY_LABELS,
   STAGE_LABELS,
@@ -149,8 +150,14 @@ const pipelineReport: ReportSpec = {
       .from(opportunities)
       .where(where)
       .groupBy(laneExpression);
-    // Every lane is listed, empty ones included, in board order.
-    const all = BOARD_LANES.map((lane, index) => {
+    // Every lane is listed, empty ones included, in board order. CR6: the
+    // Software Procurement stages only when such records are in the report.
+    const [software] = await context.db
+      .select({ present: sql<boolean>`count(*) > 0` })
+      .from(opportunities)
+      .where(and(where, eq(opportunities.workflow, 'software_procurement')));
+    const lanes = BOARD_LANES.filter((lane) => software?.present || !(SOFTWARE_ONLY_STAGES as readonly string[]).includes(lane));
+    const all = lanes.map((lane, index) => {
       const row = grouped.find((candidate) => candidate.lane === lane);
       return {
         index,

@@ -526,6 +526,15 @@ export function submitTender(
   return apiRequest(`/api/tenders/${id}/submit`, { method: 'POST', body, idempotencyKey });
 }
 
+/** CR6: an EOI's shortlisting outcome; closes the notice and may move the opportunity. */
+export function recordEoiOutcome(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<TenderSubmissionResultDto> {
+  return apiRequest(`/api/tenders/${id}/eoi-outcome`, { method: 'POST', body, idempotencyKey });
+}
+
 export function designateCurrentTender(id: string, version: number): Promise<TenderDto> {
   return apiRequest(`/api/tenders/${id}/designate-current`, { method: 'POST', body: { version } });
 }

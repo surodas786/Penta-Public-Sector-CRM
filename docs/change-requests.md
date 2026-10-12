@@ -3,10 +3,26 @@
 **Branch:** `cr-change-requests`, created from `changemade` at `e9a8e1b`
 (Milestone 8 plus the Vite host fix and the Chrome stale-cookie fix)
 **Date:** 12 October 2026
-**Status:** Steps 1–4 are implemented: CR3; CR4 + CR5 (migration 0008); the
-CR2 email foundation (migration 0009); and CR1 invitation and reset emails
-(no migration). See `docs/progress.md` and ADRs 0010–0011. Steps 5–7 have
-not started. No email
+**Status:** Steps 1–7 are done. Steps 1–6 implemented CR3; CR4 + CR5 (migration 0008); the
+CR2 email foundation (migration 0009); CR1 invitation and reset emails; CR2
+alert emails; and CR6, the Software Procurement workflow (migration 0010).
+Penta confirmed D-CR6-2, -3, -4 and -6 on 12 October 2026; D-CR6-1 and
+D-CR6-5 use the proposed defaults. See `docs/progress.md` and ADRs
+0010–0012. Step 7 is complete: the final regression passed, apart from the
+aged m5 fixture, and the release documents are updated. Still open:
+D-EM-1, D-EM-2 and D-EM-4, and the three release blockers. Nothing is
+deployed.
+
+**Changes from this plan made during step 6:**
+
+- **One current notice.** The EOI notice's new state is `closed`. The plan
+  kept a single current notice, and this keeps the existing
+  `tenders_one_current_per_opportunity` index unchanged.
+- **RFP without an EOI.** An RFP may be recorded without any EOI on the
+  record (an opportunity found at the RFP stage). If EOIs exist, one must be
+  Shortlisted first.
+- **Endpoint path.** The EOI outcome endpoint is
+  `POST /api/tenders/:id/eoi-outcome`. No email
 has been sent outside the development capture folder, and nothing is
 deployed.
 
@@ -416,6 +432,7 @@ built if Penta confirms it. None weakens access control.
 | D-EM-1 | Which mail server will production use (Penta's Exchange or Microsoft 365, Google Workspace, or a relay service), and with which sender address? | Configured by the administrator; none is assumed. **Sending real email is a deployment decision, like storage and scanning** |
 | D-EM-2 | May commercial details (project name, deadline, owner) appear in notification emails, which leave the system? | Minimal: alert type, due date and a link. The project name appears only if Penta approves. The record itself is always opened in the app, where access is rechecked |
 | D-EM-3 | Can users opt out of notification emails, per type? | No opt-out in this change; administrators can disable a template globally |
+| D-EM-4 | Who is emailed about an alert? (Added in step 5.) Leads and management already receive every alert for their scope in the app | Only the person responsible: the task's assignee, the tender's owner, the new owner after a transfer. Leads and management keep the in-app alert |
 | D-CR1-1 | When email is enabled, should the administrator still be able to see or copy a link manually? | Yes, as an explicit "Copy link instead" action, audited separately, for when delivery fails |
 | D-CR1-2 | Should self-service "Forgot password" on the sign-in page be added now that email exists? It is not in CR1–CR6 | Not added; it can be a separate request |
 | D-CR3-1 | After a password change, keep the current session or sign out everywhere? | Keep the current session (regenerated id); end every other session |

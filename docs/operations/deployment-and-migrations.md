@@ -50,6 +50,7 @@ the dependency notes in `docs/release/security-review.md` §2).
 | `0002`–`0007` | The `Rollback:` steps in each file's header, or restore | All additive (columns, tables, constraints, indexes) |
 | `0008` (CR4, CR5) | The `Rollback:` steps in its header, or restore | **Not compatible with the previous code**: see §3.1 |
 | `0009` (CR2 email) | The `Rollback:` steps in its header, or restore | Additive; compatible with the previous code. Rolling back loses saved email settings, wording and the delivery log |
+| `0010` (CR6 workflow) | The `Rollback:` steps in its header, or restore | Additive; existing records become Standard and are unchanged. The eight new stage values cannot be dropped and stay unused after a rollback |
 
 ### 3.1 Migration 0008: multi-section leads and section memberships
 
@@ -133,6 +134,32 @@ It was rehearsed on 12 October 2026 on a scratch database at `0008`:
 **Rotating `EMAIL_SECRET_KEY`.** After the change the stored SMTP password can
 no longer be read. The Administration page says so, and the administrator
 enters the password again. Nothing else depends on this key.
+
+### 3.3 Migration 0010: Software Procurement workflow
+
+This migration adds the workflow column, eight stage values, the tender
+phase and EOI outcome, the notice state `closed`, and the rules that tie
+them together (ADR 0012). Every existing record becomes Standard; its stage,
+lost reason and tenders are unchanged. The database checks the new rules
+against all existing rows when they are added; release-one data passes.
+
+Apply it with `npm run db:migrate`, or have a database administrator run the
+reviewed script
+`docs/operations/sql/0010_software_procurement_workflow.production.sql` as
+`penta_migrator`. It runs as one transaction and refuses to run unless
+`0009` is the latest applied migration.
+
+It was rehearsed on 12 October 2026 on a scratch database brought from
+`0007`, with release-one records (including a Lost one), through `0008` and
+`0009`:
+
+- the script applied cleanly;
+- the existing records became Standard, with their stages and lost reason
+  unchanged;
+- the new stages were placed before Awarded and Lost;
+- all five new rules were created;
+- a rerun was refused;
+- `db:migrate` then skipped it.
 
 Rules for future migrations (unchanged from earlier milestones): additive
 first; a destructive change ships in a later release after the code no

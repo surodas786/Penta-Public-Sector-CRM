@@ -22,13 +22,14 @@ import {
 
 import type { ActivityDto, FollowUpDto, HistoryEntryDto, OpportunityDetailDto } from '../../../shared/api.js';
 import {
-  BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
   LOSS_REASON_LABELS,
   SOLUTION_CATEGORY_LABELS,
   STAGE_LABELS,
+  WORKFLOW_LABELS,
   STATUS_LABELS,
   boardLane,
+  boardLanesFor,
   boardLaneTitle,
   isTerminalStage,
   type BoardLane,
@@ -328,7 +329,7 @@ export function OpportunityDetailPage() {
                 aria-label="Change stage"
               >
                 <option value="">{moving ? 'Saving…' : 'Change Stage…'}</option>
-                {BOARD_LANES.filter((lane) => lane !== currentLane).map((lane) => (
+                {boardLanesFor(opportunity.workflow).filter((lane) => lane !== currentLane).map((lane) => (
                   <option key={lane} value={lane}>
                     {boardLaneTitle(lane)}
                   </option>
@@ -456,6 +457,7 @@ export function OpportunityDetailPage() {
                 organizationId: opportunity.organization.id,
                 organizationName: opportunity.organization.name,
                 ownerName: opportunity.ownerName,
+                workflow: opportunity.workflow,
               }}
               onChanged={reloadAll}
             />
@@ -564,6 +566,7 @@ function OverviewTab({ opportunity, today }: { opportunity: OpportunityDetailDto
       <DetailItem label="Procuring organization">{opportunity.organization.name}</DetailItem>
       <DetailItem label="Department / office">{opportunity.department}</DetailItem>
       <DetailItem label="Solution category">{SOLUTION_CATEGORY_LABELS[opportunity.solutionCategory]}</DetailItem>
+      <DetailItem label="Workflow">{WORKFLOW_LABELS[opportunity.workflow]}</DetailItem>
       <DetailItem label="Pipeline stage">{STAGE_LABELS[opportunity.stage]}</DetailItem>
       <DetailItem label="Status">{STATUS_LABELS[opportunity.status]}</DetailItem>
       <DetailItem label="Funding source">{opportunity.fundingSource}</DetailItem>

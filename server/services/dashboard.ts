@@ -16,7 +16,7 @@ import type {
   DashboardStageDto,
   DashboardWorkloadRowDto,
 } from '../../shared/api.js';
-import { PIPELINE_STAGES } from '../../shared/enums.js';
+import { PIPELINE_STAGES, SOFTWARE_ONLY_STAGES } from '../../shared/enums.js';
 import type { dashboardQuerySchema } from '../../shared/validation.js';
 import { dhakaDateOf, dhakaQuarter, now } from '../clock.js';
 import type { Database } from '../db/client.js';
@@ -132,8 +132,11 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
     .from(opportunities)
     .where(inScope(eq(opportunities.stage, 'lost'), dateWithin(sql`${opportunities.closedDate}`, bounds?.from, bounds?.to)));
 
+  // CR6: the Software Procurement stages are shown once the scope has any
+  // such record in the active pipeline, after the standard ones.
+  const softwareInPipeline = stageRows.some((row) => SOFTWARE_ONLY_STAGES.includes(row.stage));
   const stages: DashboardStageDto[] = [
-    ...PIPELINE_STAGES.map((stage): DashboardStageDto => {
+    ...[...PIPELINE_STAGES, ...(softwareInPipeline ? SOFTWARE_ONLY_STAGES : [])].map((stage): DashboardStageDto => {
       const row = stageRows.find((candidate) => candidate.stage === stage);
       return { stage, count: row?.count ?? 0, value: row?.value ?? '0.00', valueBasis: 'estimated' };
     }),

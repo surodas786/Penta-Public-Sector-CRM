@@ -104,6 +104,27 @@ changes an alert. Failed jobs are retried with backoff and then left `failed`.
 `REPORT_EXPORT_TTL_HOURS` (default 24) and `REPORT_EXPORT_MAX_ROWS` (default
 50 000) bound exports. See
 [`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
+The change requests are in ADRs 0010 (multi-section leads and members), 0011
+(email delivery) and 0012 (Software Procurement workflow), and in
+[`docs/change-requests.md`](docs/change-requests.md).
+
+### Email (change requests CR1–CR3)
+
+Invitation and reset links, alert emails and the "password changed" notice
+are queued in the same transaction as the change and sent by the `email.send`
+job. The mail server, sender and wording are set by an administrator in
+**Administration → Email delivery** and **Email templates**. The environment
+decides whether this deployment may send at all:
+
+| Variable | Meaning |
+| --- | --- |
+| `EMAIL_TRANSPORT` | `none` (send nothing), `capture` (development: write each message as a file to `EMAIL_CAPTURE_DIR`, nothing leaves the machine; refused in production) or `smtp`. Default: `capture` in development, `none` in production |
+| `EMAIL_SECRET_KEY` | 64 hex characters (`openssl rand -hex 32`). Encrypts the SMTP password at rest. Keep it in the secret store; changing it means the password must be entered again |
+| `EMAIL_CAPTURE_DIR` | Where `capture` writes messages (`./var/mail-outbox`) |
+| `EMAIL_SEND_TIMEOUT_SECONDS` | Upper bound for one SMTP conversation (default 20) |
+
+No test or browser run ever reaches a mail server. See
+[`docs/adr/0011-email-delivery.md`](docs/adr/0011-email-delivery.md).
 
 > **Windows note.** Hyper-V, WSL and Docker Desktop reserve blocks of TCP
 > ports, and binding one fails with `EACCES` even though it looks free. The
@@ -147,7 +168,7 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run typecheck` | TypeScript for the web, server and e2e projects |
 | `npm run lint` | ESLint across all source |
 | `npm test` | Backend integration suite against the test database — **the milestone gate** |
-| `npm run test:smoke` | Playwright browser checks, as six isolated runs (smoke + M2, M3, M4, M5, M6, M7), each starting its own servers on freshly seeded test data |
+| `npm run test:smoke` | Playwright browser checks, as eleven isolated runs (smoke + M2, M3, M4, M5, M6, M7, then the change requests CR3, CR4/CR5, CR2, CR1, CR6), each starting its own servers on freshly seeded test data |
 | `npm run evidence` | Recaptures the screenshots in `docs/evidence/`, as five Playwright runs so none exceeds the login rate limit (10 per 15 minutes) |
 | `npm run build` | Production web bundle (with demo-exclusion checks) and compiled server |
 | `npm run check:demo-exclusion` | Production-safety guard, also run by the build |
@@ -180,6 +201,7 @@ bundle (`npm run check:demo-exclusion`).
 | `npm run capacity:pages` | First-usable-page timings of the production build (run `npm run build:web` first) |
 | `npm run ops:backup` / `npm run ops:restore` | Consistent, encrypted backup of database and documents, and verified restore into a new database (needs `BACKUP_ENCRYPTION_KEY`) |
 | `npm run ops:restore-drill` | The whole backup → restore → run-the-app-on-the-copy drill on the isolated test database |
+| `npx tsx scripts/ops/export-migration-sql.ts <migration>` | Writes the reviewed production SQL script for one migration (`docs/operations/sql/`), with pre-flight checks, in one transaction |
 | `npm run ops:create-first-administrator` | Creates the first System Administrator of an empty deployment and prints a single-use invitation link |
 
 Runbooks: `docs/operations/`. Release evidence: `docs/release/`.
@@ -217,9 +239,11 @@ Access control is enforced in the database query, not in the browser. See
 [`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md) and
 [`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
 
-## Not in this milestone
+## Not done yet
 
-The complete audit and mutation-control sweep (M7) and release preparation
-(M8). Production document storage and malware scanning are undecided. The
-Activities & Follow-ups calendar view is still visibly unavailable.
+Production document storage and malware scanning, the identity provider and
+MFA, and a staging environment are undecided release blockers. No mail server
+is configured (D-EM-1), so no email has been sent outside the local capture
+folder. The Activities & Follow-ups calendar view is still visibly
+unavailable.
 [`docs/progress.md`](docs/progress.md) has the full list and the next task.

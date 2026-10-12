@@ -874,6 +874,44 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'account.reset_queued', domain: 'administrative', changes: ['delivery'] }],
     },
     {
+      name: 'EOI outcome (CR6): the notice closes and the record moves to Shortlisted, together',
+      actor: 'salesGA1',
+      opportunityId: (response) => response.body.tender.opportunity.id as string,
+      run: async (c) => {
+        const created = await send(
+          c,
+          '/api/opportunities',
+          createOpportunityPayload({ name: 'Matrix software procurement', workflow: 'software_procurement', stage: 'eoi_published' }),
+        );
+        const opportunityId = created.body.opportunity.id as string;
+        const eoi = await send(c, `/api/opportunities/${opportunityId}/tenders`, {
+          procuringOrganizationId: ids.orgSylvanHills,
+          title: 'Matrix EOI',
+          reference: 'MX/EOI/2026/01',
+          publicationDate: '2026-10-01',
+          submissionDeadline: '2026-10-20T12:00:00+06:00',
+          bidStatus: 'preparing',
+          phase: 'eoi',
+        });
+        const submitted = await send(c, `/api/tenders/${eoi.body.id}/submit`, {
+          version: eoi.body.version,
+          submittedAt: EARLIER,
+          moveOpportunityToBidSubmitted: true,
+        });
+        return send(c, `/api/tenders/${eoi.body.id}/eoi-outcome`, {
+          version: submitted.body.tender.version,
+          outcome: 'shortlisted',
+          outcomeDate: TODAY,
+          updateOpportunity: true,
+        });
+      },
+      status: 200,
+      events: [
+        { action: 'tender.eoi_outcome_recorded', changes: ['eoiOutcome', 'noticeState'], reason: true },
+        { action: 'opportunity.stage_changed', changes: ['stage'], reason: true },
+      ],
+    },
+    {
       name: 'mail server settings (CR2), the password never recorded',
       actor: 'admin',
       opportunityId: null,

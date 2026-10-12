@@ -5,6 +5,10 @@
  * approved demo wording (FR-010). Never persist a label.
  */
 
+/**
+ * Every stage of every workflow (CR6), terminal stages last. Which stages a
+ * record may use depends on its workflow (`WORKFLOW_STAGES`).
+ */
 export const OPPORTUNITY_STAGES = [
   'identified',
   'initial_engagement',
@@ -14,6 +18,15 @@ export const OPPORTUNITY_STAGES = [
   'bid_preparation',
   'bid_submitted',
   'evaluation',
+  // Software Procurement (CR6), after Identified.
+  'eoi_published',
+  'eoi_submitted',
+  'shortlisted',
+  'rfp_issued',
+  'proposal_preparation',
+  'proposal_submitted',
+  'technical_evaluation',
+  'financial_evaluation',
   'awarded',
   'lost',
 ] as const;
@@ -28,9 +41,65 @@ export const STAGE_LABELS: Record<OpportunityStage, string> = {
   bid_preparation: 'Bid Preparation',
   bid_submitted: 'Bid Submitted',
   evaluation: 'Evaluation',
+  eoi_published: 'EOI Published',
+  eoi_submitted: 'EOI Submitted',
+  shortlisted: 'Shortlisted',
+  rfp_issued: 'RFP Issued',
+  proposal_preparation: 'Proposal Preparation',
+  proposal_submitted: 'Proposal Submitted',
+  technical_evaluation: 'Technical Evaluation',
+  financial_evaluation: 'Financial Evaluation / Negotiation',
   awarded: 'Awarded',
   lost: 'Lost',
 };
+
+/**
+ * CR6: an opportunity follows one workflow, chosen at creation and fixed
+ * (D-CR6-5). Both end at the shared Awarded and Lost stages, so every metric
+ * and outcome report covers both without change.
+ */
+export const WORKFLOWS = ['standard', 'software_procurement'] as const;
+export type Workflow = (typeof WORKFLOWS)[number];
+
+export const WORKFLOW_LABELS: Record<Workflow, string> = {
+  standard: 'Standard tender',
+  software_procurement: 'Software Procurement (EOI → RFP)',
+};
+
+/** Each workflow's working stages, in order (D-CR6-2). Skips and backward moves are measured against these. */
+export const WORKFLOW_STAGES: Record<Workflow, readonly OpportunityStage[]> = {
+  standard: [
+    'identified',
+    'initial_engagement',
+    'requirements_discussion',
+    'awaiting_tender',
+    'tender_published',
+    'bid_preparation',
+    'bid_submitted',
+    'evaluation',
+  ],
+  software_procurement: [
+    'identified',
+    'eoi_published',
+    'eoi_submitted',
+    'shortlisted',
+    'rfp_issued',
+    'proposal_preparation',
+    'proposal_submitted',
+    'technical_evaluation',
+    'financial_evaluation',
+  ],
+};
+
+/** The Software Procurement stages the standard workflow does not have, in order. */
+export const SOFTWARE_ONLY_STAGES: readonly OpportunityStage[] = WORKFLOW_STAGES.software_procurement.filter(
+  (stage) => !WORKFLOW_STAGES.standard.includes(stage),
+);
+
+/** Whether a record of `workflow` may be at `stage` (its working stages, or Awarded/Lost). */
+export function stageInWorkflow(stage: OpportunityStage, workflow: Workflow): boolean {
+  return isTerminalStage(stage) || WORKFLOW_STAGES[workflow].includes(stage);
+}
 
 /** BR-010: Awarded and Lost are terminal regardless of status. */
 export const TERMINAL_STAGES: readonly OpportunityStage[] = ['awarded', 'lost'];
@@ -39,18 +108,26 @@ export function isTerminalStage(stage: OpportunityStage): boolean {
   return TERMINAL_STAGES.includes(stage);
 }
 
-/** The eight working stages, in pipeline order. Skips and backward moves are measured against this. */
-export const PIPELINE_STAGES = OPPORTUNITY_STAGES.filter(
-  (stage) => !TERMINAL_STAGES.includes(stage),
-) as readonly OpportunityStage[];
+/** The standard workflow's eight working stages, in pipeline order. */
+export const PIPELINE_STAGES = WORKFLOW_STAGES.standard;
 
-/** BR-011: the six preset lost reasons. `other` requires explanatory text. */
+/** Every working (non-terminal) stage of any workflow. */
+export function isWorkingStage(stage: OpportunityStage): boolean {
+  return !isTerminalStage(stage);
+}
+
+/**
+ * BR-011: the six preset lost reasons. `other` requires explanatory text.
+ * CR6 adds `not_shortlisted`, for Software Procurement records only
+ * (D-CR6-3): not shortlisted after an EOI ends as Lost.
+ */
 export const LOSS_REASONS = [
   'price',
   'technical_eligibility',
   'competitor_selected',
   'budget_unavailable',
   'no_bid',
+  'not_shortlisted',
   'other',
 ] as const;
 export type LossReason = (typeof LOSS_REASONS)[number];
@@ -61,8 +138,14 @@ export const LOSS_REASON_LABELS: Record<LossReason, string> = {
   competitor_selected: 'Competitor selected',
   budget_unavailable: 'Budget unavailable',
   no_bid: 'No bid',
+  not_shortlisted: 'Not shortlisted',
   other: 'Other',
 };
+
+/** The lost reasons a record of `workflow` may use. */
+export function lossReasonsFor(workflow: Workflow): readonly LossReason[] {
+  return workflow === 'software_procurement' ? LOSS_REASONS : LOSS_REASONS.filter((reason) => reason !== 'not_shortlisted');
+}
 
 export type StageMoveKind = 'same' | 'forward' | 'skip' | 'backward' | 'outcome';
 
@@ -77,11 +160,16 @@ export type StageMoveKind = 'same' | 'forward' | 'skip' | 'backward' | 'outcome'
  *
  * Moves out of a terminal stage are reopenings, decided separately (BR-012).
  */
-export function classifyStageMove(from: OpportunityStage, to: OpportunityStage): StageMoveKind {
+export function classifyStageMove(
+  from: OpportunityStage,
+  to: OpportunityStage,
+  workflow: Workflow = 'standard',
+): StageMoveKind {
   if (from === to) return 'same';
   if (isTerminalStage(to)) return 'outcome';
-  const fromIndex = PIPELINE_STAGES.indexOf(from);
-  const toIndex = PIPELINE_STAGES.indexOf(to);
+  const stages = WORKFLOW_STAGES[workflow];
+  const fromIndex = stages.indexOf(from);
+  const toIndex = stages.indexOf(to);
   if (toIndex < fromIndex) return 'backward';
   return toIndex - fromIndex === 1 ? 'forward' : 'skip';
 }
@@ -115,11 +203,17 @@ export function isActivePipeline(stage: OpportunityStage, status: OpportunitySta
 }
 
 /**
- * Kanban lanes (D-001): the ten stages plus the On Hold and Cancelled status
- * lanes. A record sits in exactly one lane, chosen by `boardLane`.
+ * Kanban lanes (D-001): every stage plus the On Hold and Cancelled status
+ * lanes. A record sits in exactly one lane, chosen by `boardLane`. A board
+ * shows one workflow's lanes (`boardLanesFor`, CR6).
  */
 export const BOARD_LANES = [...OPPORTUNITY_STAGES, 'on_hold', 'cancelled'] as const;
 export type BoardLane = (typeof BOARD_LANES)[number];
+
+/** One workflow's lanes, in order: its working stages, Awarded, Lost, On Hold, Cancelled. */
+export function boardLanesFor(workflow: Workflow): BoardLane[] {
+  return [...WORKFLOW_STAGES[workflow], 'awarded', 'lost', 'on_hold', 'cancelled'];
+}
 
 export function boardLane(stage: OpportunityStage, status: OpportunityStatus): BoardLane {
   if (status === 'on_hold' || status === 'cancelled') return status;
@@ -241,14 +335,36 @@ export const BID_STATUS_LABELS: Record<BidStatus, string> = {
   not_participating: 'Not Participating',
 };
 
-/** FR-050: a production addition. Superseded and cancelled notices raise no deadline alerts. */
-export const NOTICE_STATES = ['current', 'superseded', 'cancelled'] as const;
+/**
+ * FR-050: a production addition. Superseded and cancelled notices raise no
+ * deadline alerts. `closed` (CR6, D-CR6-6): an EOI notice whose outcome has
+ * been recorded; kept as history, no longer current.
+ */
+export const NOTICE_STATES = ['current', 'superseded', 'cancelled', 'closed'] as const;
 export type NoticeState = (typeof NOTICE_STATES)[number];
 
 export const NOTICE_STATE_LABELS: Record<NoticeState, string> = {
   current: 'Current',
   superseded: 'Superseded',
   cancelled: 'Cancelled',
+  closed: 'Closed (outcome recorded)',
+};
+
+/** CR6: a Software Procurement notice is either the EOI or the RFP. Standard notices have no phase. */
+export const TENDER_PHASES = ['eoi', 'rfp'] as const;
+export type TenderPhase = (typeof TENDER_PHASES)[number];
+
+export const TENDER_PHASE_LABELS: Record<TenderPhase, string> = {
+  eoi: 'EOI (Expression of Interest)',
+  rfp: 'RFP (Request for Proposal)',
+};
+
+export const EOI_OUTCOMES = ['shortlisted', 'not_shortlisted'] as const;
+export type EoiOutcome = (typeof EOI_OUTCOMES)[number];
+
+export const EOI_OUTCOME_LABELS: Record<EoiOutcome, string> = {
+  shortlisted: 'Shortlisted',
+  not_shortlisted: 'Not shortlisted',
 };
 
 /**
@@ -290,13 +406,42 @@ export const SCAN_STATES = ['pending', 'clean', 'infected', 'failed'] as const;
 export type ScanState = (typeof SCAN_STATES)[number];
 
 /**
- * FR-051: Mark Submitted offers "move to Bid Submitted" only while the
- * opportunity is active and at an earlier pipeline stage. It never offers a
- * move backwards and never Awarded.
+ * The stage a submission corresponds to (FR-051, CR6): Bid Submitted for a
+ * standard notice, EOI Submitted for an EOI, Proposal Submitted for an RFP.
  */
-export function offersBidSubmittedStage(stage: OpportunityStage, status: OpportunityStatus): boolean {
-  const index = PIPELINE_STAGES.indexOf(stage);
-  return status === 'active' && index >= 0 && index < PIPELINE_STAGES.indexOf('bid_submitted');
+export function submittedStageFor(workflow: Workflow, phase: TenderPhase | null): OpportunityStage {
+  if (workflow === 'software_procurement') return phase === 'eoi' ? 'eoi_submitted' : 'proposal_submitted';
+  return 'bid_submitted';
+}
+
+/**
+ * Whether `target` is ahead of `stage` in the workflow, for an active record:
+ * the condition for offering a move to it. Never offers a move backwards and
+ * never an outcome.
+ */
+export function offersMoveTo(
+  stage: OpportunityStage,
+  status: OpportunityStatus,
+  target: OpportunityStage,
+  workflow: Workflow,
+): boolean {
+  const stages = WORKFLOW_STAGES[workflow];
+  const index = stages.indexOf(stage);
+  return status === 'active' && index >= 0 && index < stages.indexOf(target);
+}
+
+/**
+ * FR-051: Mark Submitted offers "move to Bid Submitted" (or the workflow's
+ * submitted stage) only while the opportunity is active and at an earlier
+ * stage. It never offers a move backwards and never Awarded.
+ */
+export function offersBidSubmittedStage(
+  stage: OpportunityStage,
+  status: OpportunityStatus,
+  workflow: Workflow = 'standard',
+  phase: TenderPhase | null = null,
+): boolean {
+  return offersMoveTo(stage, status, submittedStageFor(workflow, phase), workflow);
 }
 
 /** FR-052: amber means a deadline within this many hours. */

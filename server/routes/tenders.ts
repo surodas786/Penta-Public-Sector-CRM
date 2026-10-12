@@ -12,6 +12,7 @@ import {
   cancelTenderSchema,
   createTenderSchema,
   listTendersQuerySchema,
+  recordEoiOutcomeSchema,
   submitTenderSchema,
   tenderNoticeSchema,
   updateTenderSchema,
@@ -28,6 +29,7 @@ import {
   createTender,
   designateCurrentTender,
   getSubmissionResult,
+  recordEoiOutcome,
   getTender,
   listOpportunityTenders,
   listTenders,
@@ -138,6 +140,29 @@ export function createTendersRouter(options: { db: Database; csrfGuard: RequestH
         payload: { tenderId, body: req.body },
         execute: (completeClaim) =>
           submitTender({ db, actor, tenderId, command, requestId: req.requestId, completeClaim }),
+        replay: (entityId) => getSubmissionResult(db, actor, entityId),
+      });
+      res.json(result);
+    }),
+  );
+
+  // CR6, BR-091: an EOI's outcome, retried safely like a submission.
+  router.post(
+    '/:id/eoi-outcome',
+    csrfGuard,
+    handle(async (req, res) => {
+      const actor = actorOf(req);
+      const tenderId = readId(req.params.id);
+      const command = parseOrThrow(recordEoiOutcomeSchema, req.body);
+      const key = requireIdempotencyKey(req);
+      const { result } = await runIdempotent({
+        db,
+        actorId: actor.id,
+        operation: 'tender.eoi_outcome',
+        key,
+        payload: { tenderId, body: req.body },
+        execute: (completeClaim) =>
+          recordEoiOutcome({ db, actor, tenderId, command, requestId: req.requestId, completeClaim }),
         replay: (entityId) => getSubmissionResult(db, actor, entityId),
       });
       res.json(result);

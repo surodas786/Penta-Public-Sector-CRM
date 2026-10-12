@@ -8,6 +8,8 @@ This document defines the first production release of Penta's CRM for public sec
 
 The central rule is that top management sees all sales records, section leads see their section and direct reports, and salespeople see only opportunities they own. Production must enforce this rule on the server for every operation, including files, search, dashboards and exports.
 
+> **Amended by change requests CR1–CR6 (12 October 2026).** A lead may lead several sections, and a salesperson may belong to several sections (each opportunity still has exactly one section). Email delivery, self-service password change and a Software Procurement workflow (EOI → RFP) are added. Where these rules conflict with a single-section rule below, the change requests apply; every other requirement stands. See `docs/change-requests.md` and ADRs 0010–0012.
+
 Reference demo supplied by Penta: https://project-penta-public-sector-crm-400.magicpatterns.app
 
 ### Document conventions

@@ -24,7 +24,7 @@ import type {
   FollowUpListItemDto,
   Paginated,
 } from '../../shared/api.js';
-import { isTerminalStage, type OpportunityStage, type OpportunityStatus } from '../../shared/enums.js';
+import { isTerminalStage, type OpportunityStage, type OpportunityStatus, type Workflow } from '../../shared/enums.js';
 import type {
   FollowUpDraftInput,
   createFollowUpSchema,
@@ -169,6 +169,8 @@ export interface LockedOpportunity {
   id: string;
   ownerId: string;
   sectionId: string;
+  /** CR6: which stages the record may move among. */
+  workflow: Workflow;
   stage: OpportunityStage;
   status: OpportunityStatus;
   priority: 'high' | 'medium' | 'low';
@@ -195,6 +197,7 @@ export async function lockOpportunity(
       id: opportunities.id,
       ownerId: opportunities.ownerId,
       sectionId: opportunities.sectionId,
+      workflow: opportunities.workflow,
       stage: opportunities.stage,
       status: opportunities.status,
       priority: opportunities.priority,

@@ -21,6 +21,9 @@ import type {
   SolutionCategory,
   TenderIndicator,
   UserRole,
+  Workflow,
+  EoiOutcome,
+  TenderPhase,
 } from './enums.js';
 import type {
   AdminSearchResultType,
@@ -117,6 +120,8 @@ export interface OpportunityListItemDto {
   solutionCategory: SolutionCategory;
   /** Decimal string. Never a float. */
   estimatedValue: string;
+  /** CR6: which stages the record follows; fixed at creation. */
+  workflow: Workflow;
   stage: OpportunityStage;
   status: OpportunityStatus;
   priority: Priority;
@@ -226,6 +231,8 @@ export interface BoardLaneDto {
 }
 
 export interface BoardDto {
+  /** CR6: the workflow whose lanes these are. */
+  workflow: Workflow;
   lanes: BoardLaneDto[];
   /** Cards returned per lane at most; the table view pages through the rest. */
   laneLimit: number;
@@ -505,11 +512,17 @@ export interface TenderDto {
     id: string;
     reference: string;
     name: string;
+    workflow: Workflow;
     stage: OpportunityStage;
     status: OpportunityStatus;
     organizationId: string;
   };
   procuringOrganization: { id: string; name: string };
+  /** CR6: EOI or RFP on a Software Procurement record; null on a standard one. */
+  phase: TenderPhase | null;
+  /** CR6: an EOI's recorded result; recording it closes the notice (D-CR6-6). */
+  eoiOutcome: EoiOutcome | null;
+  eoiOutcomeDate: string | null;
   /** §7.1: shown with a clear label when it differs from the opportunity's organization. */
   procuringDiffersFromOpportunity: boolean;
   title: string;
@@ -533,8 +546,12 @@ export interface TenderDto {
   indicator: TenderIndicator;
   /** FR-051: bid recorded Submitted while the opportunity is still at an earlier stage. */
   stageMismatch: boolean;
-  /** FR-051: whether Mark Submitted may offer to move the opportunity to Bid Submitted. */
+  /** FR-051: whether Mark Submitted may offer to move the opportunity to its submitted stage. */
   canOfferBidSubmittedStage: boolean;
+  /** The stage that offer moves to: Bid Submitted, or EOI / Proposal Submitted (CR6). */
+  offeredStage: OpportunityStage;
+  /** CR6: a submitted, current EOI whose outcome can now be recorded. */
+  canRecordEoiOutcome: boolean;
   createdByName: string;
   createdAt: string;
   updatedAt: string;

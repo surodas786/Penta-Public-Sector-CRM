@@ -19,6 +19,13 @@
  *    scan, but the read-time check means no stale alert is ever served.
  *  - Reading an alert records `read_at` and nothing else. It never completes,
  *    reschedules or otherwise touches the task (BR-070).
+ *
+ * Email (CR2): while email delivery is on, a new alert is also emailed, in the
+ * same transaction, to the person responsible for it (the task's assignee,
+ * the record's owner, the new owner after a transfer). Leads and management
+ * keep their in-app alerts without an email for each (decision D-EM-4,
+ * proposed default). When the email is sent, `deliverableAlert` checks again
+ * that the alert is still true, still unread and still permitted.
  */
 import { and, asc, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -33,6 +40,7 @@ import { notFound } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { alertRecipientSql, opportunityScope } from '../policy/scope.js';
 import { enqueueJob } from '../jobs/queue.js';
+import { queueAlertEmails } from './email.js';
 import { opportunityOpen, participatingCurrentNotice, tenderDueWithin } from './metrics.js';
 
 const recipient = alias(users, 'recipient');
@@ -108,6 +116,8 @@ export async function retireObsoleteAlerts(
 // ---------------------------------------------------------------------------
 
 interface AlertCandidate {
+  /** The person the alert is about (assignee, owner, new owner): the one emailed. */
+  responsibleUserId: string;
   recipientId: string;
   opportunityId: string;
   followUpId: string | null;
@@ -126,12 +136,22 @@ async function insertAlerts(db: Database, candidates: AlertCandidate[], at: Date
   const sorted = [...candidates].sort((a, b) => a.triggerKey.localeCompare(b.triggerKey));
   let inserted = 0;
   for (let index = 0; index < sorted.length; index += 500) {
-    const rows = await db
-      .insert(notifications)
-      .values(sorted.slice(index, index + 500).map((candidate) => ({ ...candidate, createdAt: at })))
-      .onConflictDoNothing({ target: notifications.triggerKey })
-      .returning({ id: notifications.id });
-    inserted += rows.length;
+    const batch = sorted.slice(index, index + 500);
+    // The alerts and their emails commit together, so a new alert is never
+    // left without the email it should have had.
+    inserted += await db.transaction(async (tx) => {
+      const rows = await tx
+        .insert(notifications)
+        .values(batch.map(({ responsibleUserId: _responsible, ...candidate }) => ({ ...candidate, createdAt: at })))
+        .onConflictDoNothing({ target: notifications.triggerKey })
+        .returning({ id: notifications.id, recipientId: notifications.recipientId, type: notifications.type, triggerKey: notifications.triggerKey });
+      const responsibleByKey = new Map(batch.map((candidate) => [candidate.triggerKey, candidate.responsibleUserId]));
+      await queueAlertEmails(
+        tx,
+        rows.filter((row) => responsibleByKey.get(row.triggerKey) === row.recipientId),
+      );
+      return rows.length;
+    });
   }
   return inserted;
 }
@@ -157,6 +177,7 @@ export async function generateDeadlineAlerts(
   const taskKey = sql<string>`(${taskType} || ':' || ${recipient.id} || ':' || ${followUps.id} || ':' || ${followUps.dueDate}::text)`;
   const taskRows = await db
     .select({
+      responsibleUserId: followUps.assignedUserId,
       recipientId: recipient.id,
       opportunityId: opportunities.id,
       followUpId: followUps.id,
@@ -182,6 +203,7 @@ export async function generateDeadlineAlerts(
     || to_char(${tenders.submissionDeadline} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))`;
   const tenderRows = await db
     .select({
+      responsibleUserId: opportunities.ownerId,
       recipientId: recipient.id,
       opportunityId: opportunities.id,
       tenderId: tenders.id,
@@ -251,6 +273,7 @@ export async function generateOwnershipAlerts(
     db,
     rows.map((row) => ({
       ...row,
+      responsibleUserId: options.newOwnerId,
       followUpId: null,
       tenderId: null,
       type: 'ownership_changed' as const,
@@ -291,6 +314,39 @@ export async function alertsChangedInTransaction(
   });
 }
 
+/**
+ * For the email job (CR2): the alert, if it is still true, still unread and
+ * its recipient may still see the record; otherwise why not. The same
+ * `stillValid` definition as every inbox read.
+ */
+export async function deliverableAlert(
+  db: Database,
+  notificationId: string,
+  at: Date = now(),
+): Promise<
+  | { ok: true; opportunityId: string; triggerDate: string | null; triggerAt: Date | null }
+  | { ok: false; reason: string }
+> {
+  const [row] = await db
+    .select({
+      opportunityId: notifications.opportunityId,
+      triggerDate: notifications.triggerDate,
+      triggerAt: notifications.triggerAt,
+      readAt: notifications.readAt,
+      valid: sql<boolean>`${stillValid(at)}`,
+    })
+    .from(notifications)
+    .innerJoin(opportunities, eq(opportunities.id, notifications.opportunityId))
+    .innerJoin(recipient, eq(recipient.id, notifications.recipientId))
+    .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
+    .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .where(eq(notifications.id, notificationId))
+    .limit(1);
+  if (!row || !row.valid) return { ok: false, reason: 'The alert no longer applies, or the recipient can no longer see the record.' };
+  if (row.readAt) return { ok: false, reason: 'Already read in the CRM.' };
+  return { ok: true, opportunityId: row.opportunityId, triggerDate: row.triggerDate, triggerAt: row.triggerAt };
+}
+
 /** The scheduled scan: retire what is obsolete, then add what is due. */
 export async function runNotificationScan(db: Database, at: Date = now()): Promise<{ retired: number; created: number }> {
   const retired = await retireObsoleteAlerts(db, { resolution: 'obsolete', at });
@@ -306,12 +362,13 @@ export async function runNotificationScan(db: Database, at: Date = now()): Promi
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const timeFormatter = new Intl.DateTimeFormat('en-GB', { timeZone: BUSINESS_TIME_ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
-function formatDate(value: string): string {
+export function formatDate(value: string): string {
   const [year, month, day] = value.split('-');
   return `${day} ${MONTHS[Number(month) - 1]} ${year}`;
 }
 
-function formatInstant(value: Date): string {
+/** Also used by emails (CR2), so a date reads the same in the app and in a message. */
+export function formatInstant(value: Date): string {
   return `${formatDate(dhakaDateOf(value))}, ${timeFormatter.format(value)} ${BUSINESS_TIME_LABEL}`;
 }
 

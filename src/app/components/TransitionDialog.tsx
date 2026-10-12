@@ -11,9 +11,9 @@ import { toast } from 'sonner';
 
 import type { OpportunityDetailDto } from '../../../shared/api.js';
 import {
-  LOSS_REASONS,
+  lossReasonsFor,
   LOSS_REASON_LABELS,
-  PIPELINE_STAGES,
+  WORKFLOW_STAGES,
   STAGE_LABELS,
   STATUS_LABELS,
   boardLaneLabel,
@@ -78,7 +78,7 @@ export function TransitionDialog({
 
   if (!subject || !request) return <Modal open={false} onClose={onClose} title="">{null}</Modal>;
 
-  const move = request.kind === 'stage' ? classifyStageMove(subject.stage, request.target) : null;
+  const move = request.kind === 'stage' ? classifyStageMove(subject.stage, request.target, subject.workflow) : null;
   const needsExplanation = move === 'skip' || move === 'backward';
   const toAwarded = request.kind === 'stage' && request.target === 'awarded';
   const toLost = request.kind === 'stage' && request.target === 'lost';
@@ -188,7 +188,7 @@ export function TransitionDialog({
               value={reopenStage}
               onChange={(event) => setReopenStage(event.target.value as OpportunityStage)}
             >
-              {PIPELINE_STAGES.map((value) => (
+              {WORKFLOW_STAGES[subject.workflow].map((value) => (
                 <option key={value} value={value}>
                   {STAGE_LABELS[value]}
                 </option>
@@ -255,7 +255,7 @@ export function TransitionDialog({
                 onChange={(event) => setLossReason(event.target.value)}
               >
                 <option value="">Select a reason…</option>
-                {LOSS_REASONS.map((value) => (
+                {lossReasonsFor(subject.workflow).map((value) => (
                   <option key={value} value={value}>
                     {LOSS_REASON_LABELS[value]}
                   </option>

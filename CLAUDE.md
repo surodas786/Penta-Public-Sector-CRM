@@ -136,3 +136,20 @@ matrix, security review, capacity, interface quality, pilot handover) and
 never be presented as solved: production document storage and scanning,
 identity provider and MFA, and a staging environment. No production
 deployment or real data without explicit written authorization.
+
+Change requests CR1–CR6 (branch `cr-change-requests`, `docs/change-requests.md`,
+ADRs 0010–0012, migrations 0008–0010, each with a reviewed production script
+in `docs/operations/sql/`) supersede the single-section rules:
+
+- **Sections.** `sections.lead_user_id` is the only source of leadership. A
+  lead may lead several sections. Salespeople belong to sections through
+  `section_memberships`, and their scope also requires current membership.
+  `users.section_id` is legacy and unread.
+- **Email.** It is queued inside the business transaction and sent by the
+  `email.send` job. Content is a link and dates, never commercial detail
+  (D-EM-2). Alert emails go to the responsible person only (D-EM-4). Account
+  link tokens are issued at send time. `EMAIL_TRANSPORT=capture` is refused in
+  production, and no mail server is configured (D-EM-1). Never send real
+  email from a test.
+- **Workflows.** `WORKFLOW_STAGES` in `shared/enums.ts` is the single
+  per-workflow stage definition. Stage moves go through `applyStageMove`.

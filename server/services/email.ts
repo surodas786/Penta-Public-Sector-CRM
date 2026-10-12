@@ -48,6 +48,7 @@ import type { Actor } from '../policy/actor.js';
 import { canAdministerAccounts } from '../policy/scope.js';
 import { issueAccountLink } from './accountTokens.js';
 import { beginAdministrativeChange } from './admin.js';
+import { deliverableAlert, formatDate, formatInstant } from './notifications.js';
 import { diffRecords, recordAuditEvent } from './audit.js';
 
 function assertAdministrator(actor: Actor): void {
@@ -513,6 +514,32 @@ export async function suppressQueuedAccountEmails(tx: Database, userId: string, 
     );
 }
 
+const ALERT_EMAILS: readonly EmailTemplateKey[] = ['follow_up_due_today', 'follow_up_overdue', 'tender_deadline', 'ownership_changed'];
+
+/**
+ * Emails for newly created alerts (CR2), in the alert generator's
+ * transaction. Nothing while delivery is turned off. One email per alert:
+ * the dedupe key is the alert's id.
+ */
+export async function queueAlertEmails(tx: Database, alerts: { id: string; recipientId: string; type: string }[]): Promise<void> {
+  if (alerts.length === 0 || !(await isEmailDeliveryOn(tx))) return;
+  const rows = await tx
+    .insert(emailDeliveries)
+    .values(
+      alerts.map((alert) => ({
+        templateKey: alert.type,
+        recipientUserId: alert.recipientId,
+        dedupeKey: `alert:${alert.id}`,
+        context: { notificationId: alert.id },
+      })),
+    )
+    .onConflictDoNothing()
+    .returning({ id: emailDeliveries.id });
+  for (const row of rows) {
+    await enqueueJob(tx, { kind: 'email.send', payload: { deliveryId: row.id }, dedupeKey: `email.send:${row.id}` });
+  }
+}
+
 /**
  * Records an email to send and queues its job, in the caller's transaction,
  * so it exists if and only if the change that caused it commits. Does
@@ -548,19 +575,9 @@ export async function queueEmail(
   return row.id;
 }
 
-const dhakaInstantFormatter = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Dhaka',
-  day: '2-digit',
-  month: 'short',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-});
-
-function formatDhakaInstant(at: Date): string {
-  return `${dhakaInstantFormatter.format(at)} Bangladesh time (UTC+6)`;
-}
+/** Dates and times as the interface writes them: "04 Oct 2026, 15:00 Bangladesh time (UTC+6)". */
+const formatDhakaInstant = formatInstant;
+const formatDhakaDate = formatDate;
 
 /** The placeholder values for one delivery, from its context and the recipient. */
 function renderValues(
@@ -623,6 +640,17 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
     }
 
     const values = renderValues(key, delivery.context as Record<string, unknown>, recipient, runtime.appOrigin);
+
+    // CR2: an alert email goes only while the alert is still true, unread
+    // and permitted; it links to the record, where access is checked again.
+    if (ALERT_EMAILS.includes(key)) {
+      const notificationId = (delivery.context as { notificationId?: unknown }).notificationId;
+      const alert = typeof notificationId === 'string' ? await deliverableAlert(tx, notificationId) : null;
+      if (!alert || !alert.ok) return suppress(alert && !alert.ok ? alert.reason : 'The alert no longer exists.');
+      values.link = `${runtime.appOrigin}/opportunities/${alert.opportunityId}`;
+      if (alert.triggerDate) values.dueDate = formatDhakaDate(alert.triggerDate);
+      if (alert.triggerAt) values.deadline = formatDhakaInstant(alert.triggerAt);
+    }
 
     // CR1: the link is issued now, inside this transaction, and exists in
     // readable form only in the message below. Issuing spends any earlier

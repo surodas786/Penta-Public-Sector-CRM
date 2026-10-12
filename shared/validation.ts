@@ -18,8 +18,14 @@ import {
   PRIORITIES,
   SOLUTION_CATEGORIES,
   USER_ROLES,
+  EOI_OUTCOMES,
+  TENDER_PHASES,
+  WORKFLOWS,
+  WORKFLOW_STAGES,
   isTerminalStage,
+  stageInWorkflow,
   type OpportunityStage,
+  type Workflow,
 } from './enums.js';
 import { EMAIL_SECURITY_MODES } from './email.js';
 import { isValidMoneyString } from './money.js';
@@ -273,6 +279,11 @@ export const M1_CREATABLE_STAGES = OPPORTUNITY_STAGES.filter(
   (stage) => !isTerminalStage(stage),
 ) as readonly OpportunityStage[];
 
+/** CR6: the stages a new record of `workflow` may start at. */
+export function creatableStagesFor(workflow: Workflow): readonly OpportunityStage[] {
+  return WORKFLOW_STAGES[workflow];
+}
+
 export const createOpportunitySchema = z
   .object({
     name: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
@@ -284,6 +295,8 @@ export const createOpportunitySchema = z
     fundingSource: optionalText(200),
     ownerId: uuidField,
     sectionId: uuidField,
+    /** CR6: fixed once created. */
+    workflow: z.enum(WORKFLOWS).default('standard'),
     stage: z.enum(OPPORTUNITY_STAGES).refine(
       (stage) => !isTerminalStage(stage),
       'Create the opportunity at a working stage, then record Awarded or Lost as a stage change.',
@@ -299,7 +312,13 @@ export const createOpportunitySchema = z
       .max(200, 'Use at most 200 characters.'),
     initialFollowUpDueDate: calendarDateField,
   })
-  .strict();
+  .strict()
+  // CR6: the starting stage must be one of the chosen workflow's stages.
+  .superRefine((value, context) => {
+    if (!isTerminalStage(value.stage) && !stageInWorkflow(value.stage, value.workflow)) {
+      context.addIssue({ code: 'custom', path: ['stage'], message: 'Choose a stage of the selected workflow.' });
+    }
+  });
 
 export type CreateOpportunityInput = z.input<typeof createOpportunitySchema>;
 export type CreateOpportunityParsed = z.output<typeof createOpportunitySchema>;
@@ -536,6 +555,7 @@ export const listOpportunitiesQuerySchema = z
     pageSize: pageSizeNumber.optional().default(25),
     q: z.string().trim().max(200).optional(),
     stage: z.enum(OPPORTUNITY_STAGES).optional(),
+    workflow: z.enum(WORKFLOWS).optional(),
     status: z.enum(OPPORTUNITY_STATUSES).optional(),
     priority: z.enum(PRIORITIES).optional(),
     solutionCategory: z.enum(SOLUTION_CATEGORIES).optional(),
@@ -574,6 +594,8 @@ export const boardQuerySchema = z
     organizationId: uuidField.optional(),
     ownerId: uuidField.optional(),
     sectionId: uuidField.optional(),
+    /** CR6: a board shows one workflow's lanes. */
+    workflow: z.enum(WORKFLOWS).optional().default('standard'),
   })
   .strict();
 
@@ -873,6 +895,8 @@ const tenderFields = {
   bidStatus: z.enum(EDITABLE_BID_STATUSES),
   participationReason: optionalText(2000),
   notes: optionalText(10_000),
+  /** CR6: required on a Software Procurement record, refused on a standard one (checked by the service). */
+  phase: z.enum(TENDER_PHASES).optional(),
 };
 
 /**
@@ -898,6 +922,22 @@ export const updateTenderSchema = z
     bidStatus: tenderFields.bidStatus.optional(),
     participationReason: tenderFields.participationReason,
     notes: tenderFields.notes,
+  })
+  .strict();
+
+/**
+ * CR6, D-CR6-6: an EOI's result, which closes the notice. `updateOpportunity`
+ * is the user's explicit answer: move to Shortlisted, or close the record as
+ * Lost with the reason Not shortlisted. Required, so nothing moves without a
+ * decision.
+ */
+export const recordEoiOutcomeSchema = z
+  .object({
+    version: z.number().int().positive('Reload the tender and try again.'),
+    outcome: z.enum(EOI_OUTCOMES),
+    outcomeDate: calendarDateField,
+    updateOpportunity: z.boolean({ error: 'Choose whether to update the opportunity too.' }),
+    lossNote: optionalText(2000),
   })
   .strict();
 

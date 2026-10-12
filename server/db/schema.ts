@@ -35,7 +35,11 @@ import {
   PRIORITIES,
   SCAN_STATES,
   SOLUTION_CATEGORIES,
+  TENDER_PHASES,
+  EOI_OUTCOMES,
   USER_ROLES,
+  WORKFLOWS,
+  WORKFLOW_STAGES,
 } from '../../shared/enums.js';
 import { EMAIL_DELIVERY_STATUSES, EMAIL_SECURITY_MODES, EMAIL_TEMPLATE_KEYS } from '../../shared/email.js';
 import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/reporting.js';
@@ -56,6 +60,12 @@ export const activityTypeEnum = pgEnum('activity_type', ACTIVITY_TYPES);
 export const accountTokenPurposeEnum = pgEnum('account_token_purpose', ['invitation', 'password_reset']);
 export const bidStatusEnum = pgEnum('bid_status', BID_STATUSES);
 export const noticeStateEnum = pgEnum('notice_state', NOTICE_STATES);
+export const opportunityWorkflowEnum = pgEnum('opportunity_workflow', WORKFLOWS);
+export const tenderPhaseEnum = pgEnum('tender_phase', TENDER_PHASES);
+export const eoiOutcomeEnum = pgEnum('eoi_outcome', EOI_OUTCOMES);
+
+/** A SQL list of stage names, compared as text (see the stage/workflow CHECK). */
+const stageList = (stages: readonly string[]) => sql.raw(stages.map((stage) => `'${stage}'`).join(', '));
 export const documentCategoryEnum = pgEnum('document_category', DOCUMENT_CATEGORIES);
 export const scanStateEnum = pgEnum('scan_state', SCAN_STATES);
 export const notificationTypeEnum = pgEnum('notification_type', NOTIFICATION_TYPES);
@@ -223,6 +233,8 @@ export const opportunities = pgTable(
       .notNull()
       .references(() => sections.id, { onDelete: 'restrict' }),
     /** BR-010 / D-001: stage and status are independent from the first migration. */
+    /** CR6: fixed at creation (D-CR6-5); decides which stages the record may use. */
+    workflow: opportunityWorkflowEnum('workflow').notNull().default('standard'),
     stage: opportunityStageEnum('stage').notNull(),
     status: opportunityStatusEnum('status').notNull().default('active'),
     priority: priorityEnum('priority').notNull().default('medium'),
@@ -247,6 +259,22 @@ export const opportunities = pgTable(
     index('opportunities_section_idx').on(table.sectionId),
     index('opportunities_owner_idx').on(table.ownerId),
     index('opportunities_stage_status_idx').on(table.stage, table.status),
+    index('opportunities_workflow_idx').on(table.workflow),
+    // CR6: a record's stage is one of its workflow's stages, or Awarded/Lost.
+    // Compared as text so the check can be created in the same transaction
+    // that adds the new stage values (PostgreSQL forbids using a new enum
+    // value as a constant before that transaction commits).
+    check(
+      'opportunities_stage_in_workflow',
+      sql`${table.stage}::text IN ('awarded', 'lost') OR (${table.workflow} = 'standard' AND ${table.stage}::text IN (${stageList(
+        WORKFLOW_STAGES.standard,
+      )})) OR (${table.workflow} = 'software_procurement' AND ${table.stage}::text IN (${stageList(WORKFLOW_STAGES.software_procurement)}))`,
+    ),
+    // D-CR6-3: "Not shortlisted" belongs to the EOI step of Software Procurement.
+    check(
+      'opportunities_not_shortlisted_software_only',
+      sql`${table.lossReason} IS DISTINCT FROM 'not_shortlisted' OR ${table.workflow} = 'software_procurement'`,
+    ),
     index('opportunities_organization_idx').on(table.organizationId),
     index('opportunities_expected_award_idx').on(table.expectedAwardDate),
     index('opportunities_created_at_idx').on(table.createdAt),
@@ -273,7 +301,7 @@ export const opportunities = pgTable(
     ),
     check(
       'opportunities_loss_reason_preset',
-      sql`${table.lossReason} IS NULL OR ${table.lossReason} IN ('price', 'technical_eligibility', 'competitor_selected', 'budget_unavailable', 'no_bid', 'other')`,
+      sql`${table.lossReason} IS NULL OR ${table.lossReason} IN ('price', 'technical_eligibility', 'competitor_selected', 'budget_unavailable', 'no_bid', 'not_shortlisted', 'other')`,
     ),
     check(
       'opportunities_loss_other_explained',
@@ -566,6 +594,11 @@ export const tenders = pgTable(
     lateSubmissionNote: text('late_submission_note'),
     isCurrent: boolean('is_current').notNull(),
     noticeState: noticeStateEnum('notice_state').notNull(),
+    /** CR6: EOI or RFP on a Software Procurement record; null on a standard one (checked by the service). */
+    phase: tenderPhaseEnum('phase'),
+    /** CR6: the result of an EOI, recorded once; it closes the notice (D-CR6-6). */
+    eoiOutcome: eoiOutcomeEnum('eoi_outcome'),
+    eoiOutcomeDate: date('eoi_outcome_date'),
     notes: text('notes'),
     createdBy: uuid('created_by')
       .notNull()
@@ -586,6 +619,12 @@ export const tenders = pgTable(
     check('tenders_reference_length', sql`char_length(${table.reference}) BETWEEN 1 AND 200`),
     check('tenders_notice_url_http', sql`${table.noticeUrl} IS NULL OR ${table.noticeUrl} ~* '^https?://'`),
     check('tenders_current_is_current_notice', sql`${table.isCurrent} = (${table.noticeState} = 'current')`),
+    // CR6: an outcome only on an EOI, always with its date; a closed notice
+    // is an EOI whose outcome is recorded (the state is compared as text:
+    // see opportunities_stage_in_workflow).
+    check('tenders_eoi_outcome_on_eoi', sql`${table.eoiOutcome} IS NULL OR ${table.phase} = 'eoi'`),
+    check('tenders_eoi_outcome_dated', sql`(${table.eoiOutcome} IS NULL) = (${table.eoiOutcomeDate} IS NULL)`),
+    check('tenders_closed_has_outcome', sql`${table.noticeState}::text <> 'closed' OR ${table.eoiOutcome} IS NOT NULL`),
     // FR-051: Submitted always has a time, and nothing else does.
     check(
       'tenders_submitted_has_time',

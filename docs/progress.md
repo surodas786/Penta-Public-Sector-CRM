@@ -1,8 +1,10 @@
 # Implementation progress
 
 **Current state (12 October 2026):** Milestone 8 is complete, and change
-requests CR1–CR6 have been **assessed, not implemented**, on branch
-`cr-change-requests` (see below and `docs/change-requests.md`). Nothing is
+requests CR1–CR6 are **implemented and regression-tested** on branch
+`cr-change-requests` (steps 1–7 below; `docs/change-requests.md`). The
+database changes are migrations 0008–0010, each with a production script.
+No email has been sent outside the local capture folder. Nothing is
 deployed. **Not production-ready:** production document storage and malware
 scanning, the identity provider and MFA, and a staging environment are
 unresolved release blockers (Milestone 8, §8). Sections, newest first:
@@ -323,11 +325,173 @@ database change and no production SQL in this step.**
 
 **Evidence:** `docs/evidence/cr/cr1-invitation-emailed.png`.
 
-### 10. Next task
+### 10. Step 5 — CR2 alert emails (implemented 12 October 2026)
 
-Review step 4. Then, when instructed, step 5: CR2 notification emails. Each
-in-app alert also queues an email, with access rechecked when it is sent
-(D-EM-2: no commercial detail).
+**No database change and no production SQL in this step.** Decisions D-EM-2
+(no commercial detail) and the new **D-EM-4** (proposed default: email only
+the person responsible for an alert) are applied and await Penta's
+confirmation.
+
+**What changed**
+
+| Area | Change |
+| --- | --- |
+| Generation | When an in-app alert is created (follow-up due today, overdue, tender deadline within 72 h, ownership change), its email is queued **in the same transaction**, only for the responsible person: the task's assignee, the tender's owner, or the new owner after a transfer. Leads and management keep their in-app alerts without an email for each. Alert batches are now inserted in a transaction with their emails. One email per alert (dedupe key = alert id), so a repeated scan sends nothing new |
+| Send time | `deliverableAlert` re-applies the same `stillValid` definition as every inbox read. An alert that is no longer true, no longer permitted, or already **read in the app** is suppressed with its reason |
+| Content | The kind of alert, the date or deadline (in the interface's own format, `DD Mon YYYY, HH:MM Bangladesh time (UTC+6)`) and a link to the record, where access is checked again. No project name, reference, value or organization |
+| Wording | The ownership email now reads "An opportunity has been transferred to you", since only the new owner receives it |
+
+**Defect found and fixed:** the first email date formatter used `Intl` month
+names, which in Node's `en-GB` locale write September as "Sept". Emails now
+use the formatter the in-app alerts already use, so a date reads the same
+in the app and in a message.
+
+**Tests**
+
+- New: `server/tests/notificationEmails.test.ts` (8 tests), covering:
+  - emailed only to the responsible person, with the lead's alerts not
+    emailed;
+  - no duplicate on a rescan;
+  - content holds a link and dates only: no opportunity name, reference,
+    organization or amount;
+  - nothing queued while email is off, with alerts still in the app;
+  - suppressed when already read, when no longer true (rescheduled), or when
+    the recipient lost access (transfer);
+  - the transfer email going only to the new owner;
+  - a tender deadline in Bangladesh time;
+  - no endpoint for posting an alert email.
+- The existing notification tests pass unchanged.
+
+**Commands and results (final run, on this code)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **711 passed, 0 failed**, 27 files |
+| Browser checks, run separately | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, cr2 1, cr1 1 passed. m5 not rerun (aged fixture, step 1) |
+| `npm run build` | Pass, demo exclusion included |
+| `npm run check:production-server` | **20 passed, 0 failed** |
+
+### 11. Step 6 — CR6 Software Procurement workflow, EOI → RFP (implemented 12 October 2026)
+
+**Decisions.** Penta confirmed four decisions on 12 October 2026:
+
+- the draft stage list (D-CR6-2);
+- not shortlisted ends as Lost, with reason "Not shortlisted" (D-CR6-3);
+- a Workflow field on Opportunities, no new navigation (D-CR6-4);
+- recording the EOI outcome closes the EOI notice (D-CR6-6).
+
+D-CR6-1 (sales pursuit only) and D-CR6-5 (fixed at creation) use the proposed
+defaults. Design and reasons: ADR 0012.
+
+**What changed**
+
+| Area | Change |
+| --- | --- |
+| Database (migration 0010, additive) | `opportunities.workflow` (default `standard`). Eight new stage values, placed before Awarded. CHECK: a record's stage belongs to its workflow (compared as text, so it can be created in the same transaction). Lost reason `not_shortlisted`, Software Procurement only. `tenders.phase` (`eoi`/`rfp`), `eoi_outcome` and its date, notice state `closed`, with CHECKs. Existing records become Standard, unchanged |
+| Stage rules | `WORKFLOW_STAGES` defines each workflow's order. Skip and backward moves are measured within the workflow. A stage from the other workflow, or a reopening to one, is refused. Every other stage and status rule is unchanged |
+| Tenders | A Software Procurement notice must have a phase. Mark Submitted offers EOI Submitted / Proposal Submitted (Bid Submitted for standard). **Record EOI outcome** (`POST /api/tenders/:id/eoi-outcome`, idempotent) closes the EOI and records the outcome. With the user's choice, Shortlisted moves the record on, and Not shortlisted closes it as Lost (reason Not shortlisted, follow-ups cancelled), through the same audited `applyStageMove`. An RFP needs a Shortlisted EOI (unless there was no EOI). An EOI cannot follow an RFP. A closed EOI cannot become current again |
+| Views | One board per workflow, with a Workflow filter on Opportunities that is also the board switch. The stage chart and "Pipeline by stage" add Software Procurement stages only once such records exist. Shared metrics unchanged and cover both. CSV export gains a Workflow column. History labels for workflow, phase and outcome |
+| Interface | Create dialog: Workflow choice, with stages following it. Opportunity page: Workflow shown, stage menu per workflow. Transition dialog: stages and lost reasons per workflow. Tender tab: phase tag, EOI outcome line, "Record EOI outcome" dialog. Mark Submitted names the offered stage. Existing components only |
+
+**Tests**
+
+- New: `server/tests/workflow.test.ts` (8 tests), covering:
+  - creation at the workflow's own stages only;
+  - moves within the workflow's order, refusing the other workflow's
+    stages;
+  - "Not shortlisted" refused on standard records, by the service and the
+    database (both CHECKs proven with the runtime role);
+  - the full EOI → submitted → Shortlisted → RFP → Proposal Submitted path,
+    with an RFP refused before shortlisting, an EOI refused after the RFP,
+    and a closed EOI not made current;
+  - Not shortlisted → Lost with follow-ups cancelled, plus an idempotent
+    retry;
+  - an outcome without moving the stage, and only after submission;
+  - one board per workflow;
+  - metrics and the report including Software Procurement once present.
+- Audit matrix: the EOI outcome case (`tender.eoi_outcome_recorded` with the
+  stage change).
+- Browser check: `e2e/cr6.spec.ts`.
+- Every existing test passes unchanged.
+
+**Commands and results (final run, on this code)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **720 passed, 0 failed**, 28 files |
+| Browser checks, run separately | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, cr2 1, cr1 1, **cr6 1** passed. **m5 failed**: re-checked, still only the aged fixture (deadline 8 Oct now past, so the late-submission note is asked for). The parts of m5 that use the Mark Submitted wording changed here pass |
+| `npm run build` | Pass, demo exclusion included |
+| `npm run check:production-server` | **20 passed, 0 failed** |
+| 0010 rehearsal (release-one records → 0008 → 0009 → script) | Applied; existing records Standard and unchanged; stage order correct; five rules created; a rerun refused; `db:migrate` skipped it; scratch database dropped |
+
+**Database: production SQL.** This step changes the database.
+`docs/operations/sql/0010_software_procurement_workflow.production.sql`
+(file sha256 `e8a53d58…de6174d`). Apply it after 0009. Runbook §3.3 covers it.
+
+**Evidence:** `docs/evidence/cr/` holds
+`cr6-create-software-procurement.png`, `cr6-eoi-outcome.png`,
+`cr6-tender-tab.png` and `cr6-board.png`.
+
+### 12. Step 7 — final regression and release documents (12 October 2026)
+
+**No code or database change.** This step ran every gate, one after another
+on the same machine, and updated the release documents for CR1–CR6.
+
+**Commands and results (final run)**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass, 0 errors |
+| `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm run check:env` | Pass (32 variables) |
+| `npm test` | **720 passed, 0 failed**, 28 files |
+| Browser checks, each in its own run | Passed: smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, cr2 1, cr1 1, cr6 1 |
+| m5 browser check | **Failed.** Rerun alone and inspected. The only cause is the aged fixture: tender `DCR/PROC/2026/221` has a fixed deadline of 08 Oct 2026, now past, so Mark Submitted correctly asks for a late-submission explanation that the test does not give. The other two m5 tests pass |
+| `npm run build` | Pass, demo exclusion included |
+| `npm run check:production-server` | **20 passed, 0 failed** |
+| `npm audit --omit=dev` | The same 2 moderate `react-router` advisories as Milestone 8; nothing from `nodemailer` |
+| `npm run test:browsers` | **Chromium, Edge and Firefox: 5/5 each** |
+| `npm run capacity:seed` + `capacity:load` | 0 server errors. Paced p95 92 ms; saturation p95 658 ms, max 1 719 ms. Target (p95 < 2 s) met; `docs/evidence/capacity/load-after-change-requests.md` |
+
+**Documents updated**
+
+- `docs/release/acceptance-matrix.md`: the amended release-one rows, and a CR1–CR6
+  section (39 rows: 36 complete, 3 partial pending D-EM-1, D-EM-2 and D-EM-4).
+- `docs/release/security-review.md` §7 (change-request addendum, and two new
+  items for the independent reviewer).
+- `docs/release/capacity-and-performance.md` (re-run).
+- `docs/release/interface-quality.md` (three browsers, new screens).
+- `docs/release/pilot-handover.md`: CR UAT scenarios, the upgrade order, the
+  mail-server blocker, new limitations and checklist items.
+- `README.md` (email settings, eleven smoke runs, the migration SQL export).
+- A pointer to the change requests at the top of
+  `docs/Penta_CRM_Requirements.md`.
+- `CLAUDE.md` current state.
+
+**Database: production SQL.** Step 7 changes nothing. For the whole branch,
+apply in this order, once each, after a backup:
+
+1. `docs/operations/sql/0008_section_memberships_and_multi_section_leads.production.sql`
+2. `docs/operations/sql/0009_email_settings_templates_and_deliveries.production.sql`
+3. `docs/operations/sql/0010_software_procurement_workflow.production.sql`
+
+### 13. Next task
+
+Penta's decisions:
+
+- **D-EM-1:** the mail server. Then a test email on staging.
+- **D-EM-2:** email content.
+- **D-EM-4:** alert recipients.
+- **The aged m5 fixture:** make the deadline relative to today, or move that
+  one tender's date.
+- **Review** of the check-production-server rule for empty expired cookie
+  headers (step 1).
+
+The three release blockers are unchanged: document storage and scanning,
+identity provider and MFA, and staging. No production deployment or real
+data without explicit written authorization.
 
 ---
 

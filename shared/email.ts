@@ -3,6 +3,11 @@
  * administrator can edit, the placeholders each one accepts, and the default
  * wording used until an administrator saves their own.
  *
+ * Recipients, decision D-EM-4 (proposed default, awaiting Penta): an alert is
+ * emailed only to the person responsible for it (the task's assignee, the
+ * record's owner, the new owner after a transfer). Leads and management keep
+ * their in-app alerts without an email for each.
+ *
  * Content decision D-EM-2 (proposed default, awaiting Penta): emails carry no
  * commercial detail — no project names, values, owners or organizations.
  * They say what kind of thing needs attention and link into the CRM, where
@@ -107,11 +112,11 @@ export const EMAIL_TEMPLATES: Record<EmailTemplateKey, EmailTemplateDefinition> 
   },
   ownership_changed: {
     label: 'Ownership changed',
-    sentWhen: 'An opportunity you can see changes owner.',
+    sentWhen: 'An opportunity is transferred to you.',
     placeholders: ['recipientName', 'link', 'appName'],
     required: ['link'],
-    defaultSubject: 'An opportunity changed owner',
-    defaultBody: 'Dear {{recipientName}},\n\nAn opportunity you follow has a new owner. Open it in {{appName}}:\n\n{{link}}' + SIGN_OFF,
+    defaultSubject: 'An opportunity has been transferred to you',
+    defaultBody: 'Dear {{recipientName}},\n\nAn opportunity has been transferred to you. Open it in {{appName}}:\n\n{{link}}' + SIGN_OFF,
   },
 };
 
