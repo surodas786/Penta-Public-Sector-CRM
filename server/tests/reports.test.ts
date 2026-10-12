@@ -123,6 +123,7 @@ describe('reports and CSV exports (M6)', () => {
         upcoming_tenders: 'Tender submission deadline',
         outcomes: 'Award date (Awarded) or lost date (Lost)',
         lost_reasons: 'Lost date',
+        procurement_deadlines: 'Open procurement deadline (EOI or proposal)',
       });
     });
 

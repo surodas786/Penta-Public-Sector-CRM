@@ -17,22 +17,18 @@ import type { z } from 'zod';
 
 import type { Paginated, TenderDto, TenderSubmissionResultDto } from '../../shared/api.js';
 import {
-  EOI_OUTCOME_LABELS,
   NOTICE_STATE_LABELS,
+  PIPELINE_STAGES,
   STAGE_LABELS,
   TENDER_DUE_SOON_HOURS,
-  WORKFLOW_STAGES,
   isTerminalStage,
   offersBidSubmittedStage,
-  offersMoveTo,
-  submittedStageFor,
   type TenderIndicator,
 } from '../../shared/enums.js';
 import type {
   cancelTenderSchema,
   createTenderSchema,
   listTendersQuerySchema,
-  recordEoiOutcomeSchema,
   submitTenderSchema,
   tenderNoticeSchema,
   updateTenderSchema,
@@ -45,7 +41,6 @@ import type { Actor } from '../policy/actor.js';
 import { canManageTenders, opportunityScope, scopedWhere } from '../policy/scope.js';
 import { diffRecords, recordAuditEvent } from './audit.js';
 import { lockOpportunity, type LockedOpportunity } from './followUps.js';
-import { applyStageMove } from './transitions.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
 import { SEVEN_DAYS_HOURS, tenderDueWithin } from './metrics.js';
 import { alertsChangedInTransaction } from './notifications.js';
@@ -70,13 +65,9 @@ const selection = {
   opportunityId: opportunities.id,
   opportunityReference: opportunities.reference,
   opportunityName: opportunities.name,
-  opportunityWorkflow: opportunities.workflow,
   opportunityStage: opportunities.stage,
   opportunityStatus: opportunities.status,
   opportunityOrganizationId: opportunities.organizationId,
-  phase: tenders.phase,
-  eoiOutcome: tenders.eoiOutcome,
-  eoiOutcomeDate: tenders.eoiOutcomeDate,
   procuringOrganizationId: procuring.id,
   procuringOrganizationName: procuring.name,
   title: tenders.title,
@@ -136,12 +127,10 @@ export function tenderIndicator(
   return 'upcoming';
 }
 
-/** FR-051, CR6: a submitted bid while the record is still before the matching submitted stage. */
 function stageMismatch(row: Row): boolean {
   if (!row.isCurrent || row.bidStatus !== 'submitted') return false;
-  const stages = WORKFLOW_STAGES[row.opportunityWorkflow];
-  const index = stages.indexOf(row.opportunityStage);
-  return index >= 0 && index < stages.indexOf(submittedStageFor(row.opportunityWorkflow, row.phase));
+  const index = PIPELINE_STAGES.indexOf(row.opportunityStage);
+  return index >= 0 && index < PIPELINE_STAGES.indexOf('bid_submitted');
 }
 
 function opportunityClosed(opportunity: Pick<LockedOpportunity, 'stage' | 'status'>): boolean {
@@ -156,15 +145,11 @@ function toDto(actor: Actor, row: Row, at: Date): TenderDto {
       id: row.opportunityId,
       reference: row.opportunityReference,
       name: row.opportunityName,
-      workflow: row.opportunityWorkflow,
       stage: row.opportunityStage,
       status: row.opportunityStatus,
       organizationId: row.opportunityOrganizationId,
     },
     procuringOrganization: { id: row.procuringOrganizationId, name: row.procuringOrganizationName },
-    phase: row.phase,
-    eoiOutcome: row.eoiOutcome,
-    eoiOutcomeDate: row.eoiOutcomeDate,
     procuringDiffersFromOpportunity: row.procuringOrganizationId !== row.opportunityOrganizationId,
     title: row.title,
     reference: row.reference,
@@ -185,12 +170,7 @@ function toDto(actor: Actor, row: Row, at: Date): TenderDto {
     indicator: tenderIndicator(row, at),
     stageMismatch: stageMismatch(row),
     canOfferBidSubmittedStage:
-      row.isCurrent &&
-      row.bidStatus !== 'submitted' &&
-      offersBidSubmittedStage(row.opportunityStage, row.opportunityStatus, row.opportunityWorkflow, row.phase),
-    offeredStage: submittedStageFor(row.opportunityWorkflow, row.phase),
-    canRecordEoiOutcome:
-      canManageTenders(actor) && !closed && row.phase === 'eoi' && row.isCurrent && row.bidStatus === 'submitted' && !row.eoiOutcome,
+      row.isCurrent && row.bidStatus !== 'submitted' && offersBidSubmittedStage(row.opportunityStage, row.opportunityStatus),
     createdByName: row.createdByName,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -365,38 +345,6 @@ const auditable = (tender: typeof tenders.$inferSelect) => ({
   notes: tender.notes,
 });
 
-/**
- * CR6: a Software Procurement notice is an EOI or an RFP; a standard one has
- * no phase. An RFP follows a successful EOI: if the record has EOI notices,
- * one of them must be recorded Shortlisted (an opportunity found at the RFP
- * stage, with no EOI at all, may record the RFP directly). An EOI cannot
- * follow an RFP.
- */
-async function assertPhase(
-  tx: Database,
-  opportunity: LockedOpportunity,
-  phase: z.output<typeof createTenderSchema>['phase'],
-): Promise<'eoi' | 'rfp' | null> {
-  if (opportunity.workflow === 'standard') {
-    if (phase) throw validationFailed({ phase: 'Only Software Procurement notices have an EOI or RFP phase.' });
-    return null;
-  }
-  if (!phase) throw validationFailed({ phase: 'Choose whether this notice is the EOI or the RFP.' });
-  const earlier = await tx
-    .select({ phase: tenders.phase, eoiOutcome: tenders.eoiOutcome })
-    .from(tenders)
-    .where(and(eq(tenders.opportunityId, opportunity.id), sql`${tenders.noticeState} <> 'cancelled'`));
-  if (phase === 'rfp') {
-    const eois = earlier.filter((row) => row.phase === 'eoi');
-    if (eois.length > 0 && !eois.some((row) => row.eoiOutcome === 'shortlisted')) {
-      throw invalidTransition('Record the EOI outcome as Shortlisted before recording the RFP.');
-    }
-  } else if (earlier.some((row) => row.phase === 'rfp')) {
-    throw invalidTransition('An EOI cannot follow the RFP. Record a re-issued RFP instead.');
-  }
-  return phase;
-}
-
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
@@ -435,7 +383,6 @@ export async function createTender(options: {
     });
     if (Object.keys(errors).length > 0) throw validationFailed(errors);
     await assertProcuringOrganization(tx, command.procuringOrganizationId);
-    const phase = await assertPhase(tx, opportunity, command.phase);
 
     const [previous] = await tx
       .select({ id: tenders.id, reference: tenders.reference, version: tenders.version })
@@ -475,7 +422,6 @@ export async function createTender(options: {
         participationReason,
         isCurrent: true,
         noticeState: 'current',
-        phase,
         notes: command.notes ?? null,
         createdBy: actor.id,
         createdAt: timestamp,
@@ -490,7 +436,7 @@ export async function createTender(options: {
       entityType: 'tender',
       entityId: created.id,
       action: 'tender.created',
-      after: { about: created.reference, ...auditable(created), noticeState: 'current', ...(phase ? { phase } : {}) },
+      after: { about: created.reference, ...auditable(created), noticeState: 'current' },
       requestId,
     });
     await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
@@ -627,11 +573,7 @@ export async function submitTender(options: {
       errors.lateSubmissionNote =
         'This time is after the recorded submission deadline. Explain the late submission to record it.';
     }
-    const submittedStage = submittedStageFor(opportunity.workflow, tender.phase);
-    if (
-      command.moveOpportunityToBidSubmitted &&
-      !offersBidSubmittedStage(opportunity.stage, opportunity.status, opportunity.workflow, tender.phase)
-    ) {
+    if (command.moveOpportunityToBidSubmitted && !offersBidSubmittedStage(opportunity.stage, opportunity.status)) {
       throw invalidTransition(
         opportunity.status !== 'active'
           ? 'The opportunity is not Active, so its stage cannot change. Record the submission without moving the stage.'
@@ -656,7 +598,7 @@ export async function submitTender(options: {
         lateSubmissionNote,
       },
       reason: command.moveOpportunityToBidSubmitted
-        ? `Opportunity moved to ${STAGE_LABELS[submittedStage]} at the user's request.`
+        ? 'Opportunity moved to Bid Submitted at the user\'s request.'
         : 'The user chose to keep the opportunity stage.',
       requestId,
     });
@@ -664,7 +606,7 @@ export async function submitTender(options: {
     if (command.moveOpportunityToBidSubmitted) {
       const moved = await tx
         .update(opportunities)
-        .set({ stage: submittedStage, updatedAt: now(), version: sql`${opportunities.version} + 1` })
+        .set({ stage: 'bid_submitted', updatedAt: now(), version: sql`${opportunities.version} + 1` })
         .where(and(eq(opportunities.id, opportunity.id), eq(opportunities.version, opportunity.version)))
         .returning({ id: opportunities.id });
       if (moved.length === 0) throw versionConflict();
@@ -675,7 +617,7 @@ export async function submitTender(options: {
         entityId: opportunity.id,
         action: 'opportunity.stage_changed',
         before: { stage: opportunity.stage },
-        after: { stage: submittedStage, tenderId },
+        after: { stage: 'bid_submitted', tenderId },
         reason: `Bid submitted for tender ${tender.reference}.`,
         requestId,
       });
@@ -684,102 +626,6 @@ export async function submitTender(options: {
     await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
     await completeClaim(tx, tenderId);
     return command.moveOpportunityToBidSubmitted;
-  });
-
-  signalJobsEnqueued();
-  return { tender: await getTender(db, actor, tenderId), stageChanged };
-}
-
-/**
- * CR6, D-CR6-3, D-CR6-6: records an EOI's result and closes the notice, in
- * one transaction. With the user's explicit agreement (`updateOpportunity`):
- *
- *   shortlisted      the record moves on to Shortlisted (never backwards)
- *   not shortlisted  the record closes as Lost, reason Not shortlisted, on
- *                    the outcome date; its open follow-ups are cancelled
- *
- * Both moves go through the same audited stage move as the stage-change
- * service. Without agreement only the notice changes, and the stage stays.
- */
-export async function recordEoiOutcome(options: {
-  db: Database;
-  actor: Actor;
-  tenderId: string;
-  command: z.output<typeof recordEoiOutcomeSchema>;
-  requestId: string;
-  completeClaim: CompleteClaimInTransaction;
-}): Promise<TenderSubmissionResultDto> {
-  const { db, actor, tenderId, command, requestId, completeClaim } = options;
-
-  const stageChanged = await db.transaction(async (tx) => {
-    const { opportunity, tender } = await lockTender(tx, actor, tenderId);
-    if (!canManageTenders(actor)) throw forbidden();
-    if (tender.version !== command.version) throw versionConflict();
-    assertOpportunityOpen(opportunity);
-    if (tender.phase !== 'eoi') throw invalidTransition('Only an EOI notice has a shortlisting outcome.');
-    if (tender.eoiOutcome) throw invalidTransition('This EOI’s outcome is already recorded.');
-    if (!tender.isCurrent) throw invalidTransition('Only the current EOI can have its outcome recorded.');
-    if (tender.bidStatus !== 'submitted') {
-      throw invalidTransition('Record the EOI submission first. An outcome follows a submitted EOI.');
-    }
-
-    const errors: Record<string, string> = {};
-    if (command.outcomeDate > dhakaToday()) errors.outcomeDate = 'The outcome date cannot be in the future.';
-    else if (command.outcomeDate < tender.publicationDate) {
-      errors.outcomeDate = 'The outcome date cannot be before the notice was published.';
-    }
-    const target = command.outcome === 'shortlisted' ? 'shortlisted' : 'lost';
-    if (command.updateOpportunity) {
-      if (opportunity.status !== 'active') {
-        throw invalidTransition('The opportunity is not Active, so its stage cannot change. Record the outcome without updating it.');
-      }
-      if (target === 'shortlisted' && !offersMoveTo(opportunity.stage, opportunity.status, 'shortlisted', opportunity.workflow)) {
-        throw invalidTransition(
-          `The opportunity is already at ${STAGE_LABELS[opportunity.stage]}. Record the outcome without moving the stage.`,
-        );
-      }
-    }
-    if (Object.keys(errors).length > 0) throw validationFailed(errors);
-
-    await writeTender(tx, tenderId, command.version, {
-      eoiOutcome: command.outcome,
-      eoiOutcomeDate: command.outcomeDate,
-      isCurrent: false,
-      noticeState: 'closed',
-    });
-    await recordAuditEvent(tx, {
-      actorId: actor.id,
-      opportunityId: opportunity.id,
-      entityType: 'tender',
-      entityId: tenderId,
-      action: 'tender.eoi_outcome_recorded',
-      before: { about: tender.reference, noticeState: tender.noticeState },
-      after: { about: tender.reference, eoiOutcome: command.outcome, eoiOutcomeDate: command.outcomeDate, noticeState: 'closed' },
-      reason: `EOI outcome: ${EOI_OUTCOME_LABELS[command.outcome]}.`,
-      requestId,
-    });
-
-    if (command.updateOpportunity) {
-      await applyStageMove(tx, {
-        actor,
-        current: opportunity,
-        version: opportunity.version,
-        changes:
-          target === 'shortlisted'
-            ? { stage: 'shortlisted' }
-            : { stage: 'lost', lossReason: 'not_shortlisted', lossNote: command.lossNote ?? null, closedDate: command.outcomeDate },
-        after:
-          target === 'shortlisted'
-            ? { stage: 'shortlisted', tenderId }
-            : { stage: 'lost', lossReason: 'not_shortlisted', closedDate: command.outcomeDate, tenderId },
-        reason: `EOI outcome recorded for tender ${tender.reference}: ${EOI_OUTCOME_LABELS[command.outcome]}.`,
-        requestId,
-      });
-    }
-
-    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'tender_changed' });
-    await completeClaim(tx, tenderId);
-    return command.updateOpportunity;
   });
 
   signalJobsEnqueued();
@@ -825,9 +671,6 @@ export async function designateCurrentTender(options: {
     if (tender.isCurrent) throw validationFailed({ isCurrent: 'This is already the current tender.' });
     if (tender.noticeState === 'cancelled') {
       throw invalidTransition('A cancelled notice cannot become current. Record a re-issued notice as a new tender.');
-    }
-    if (tender.noticeState === 'closed') {
-      throw invalidTransition('This EOI is closed with its recorded outcome and cannot become current again.');
     }
 
     const [previous] = await tx

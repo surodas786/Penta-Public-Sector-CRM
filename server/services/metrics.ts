@@ -10,7 +10,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 
 import { addCalendarDays, dhakaQuarter, dhakaToday, now } from '../clock.js';
-import { followUps, opportunities, tenders } from '../db/schema.js';
+import { followUps, opportunities, procurementCycles, tenders } from '../db/schema.js';
 import type { DashboardRange } from '../../shared/reporting.js';
 
 /** §10.1 "Active opportunities": status Active and stage neither Awarded nor Lost (BR-010, D-002). */
@@ -65,6 +65,44 @@ export function tenderDueWithin(at: Date, hours: number): SQL {
 }
 
 export const SEVEN_DAYS_HOURS = 7 * 24;
+
+/**
+ * CR6: the deadline a Software Procurement cycle is working towards: the EOI
+ * deadline while the EOI is being prepared, then the proposal deadline from
+ * the RFP until the proposal is submitted. Null otherwise. Kept apart from
+ * tender deadlines so goods tenders and EOI/RFP submissions are never mixed.
+ */
+export const procurementOpenDeadline: SQL = sql`(CASE
+  WHEN ${procurementCycles.milestone} = 'eoi_preparation' THEN ${procurementCycles.eoiDeadline}
+  WHEN ${procurementCycles.milestone} IN ('rfp_received', 'proposal_preparation') THEN ${procurementCycles.proposalDeadline}
+  END)`;
+
+/** The Dhaka calendar date of that deadline (the report's date basis). */
+export const procurementDeadlineDate: SQL = sql`((${procurementOpenDeadline} AT TIME ZONE 'Asia/Dhaka')::date)`;
+
+/**
+ * A cycle that can count toward a deadline metric: the opportunity's current
+ * cycle, not ended, not declined, on a record that is not closed. The same
+ * rule as the area's indicator.
+ */
+export function workingProcurementCycle(): SQL {
+  return sql`(${procurementCycles.isCurrent}
+    AND ${procurementCycles.milestone} NOT IN ('not_shortlisted', 'awarded', 'unsuccessful', 'cancelled')
+    AND ${procurementCycles.participation} <> 'not_participating' AND ${opportunityOpen()})`;
+}
+
+/** An open procurement deadline from now up to, not including, now plus `hours`. */
+export function procurementDueWithin(at: Date, hours: number): SQL {
+  const end = new Date(at.getTime() + hours * 3_600_000);
+  return sql`(${workingProcurementCycle()}
+    AND ${procurementOpenDeadline} >= ${at.toISOString()}::timestamptz
+    AND ${procurementOpenDeadline} < ${end.toISOString()}::timestamptz)`;
+}
+
+/** An open procurement deadline that has passed without the submission. */
+export function procurementOverdue(at: Date): SQL {
+  return sql`(${workingProcurementCycle()} AND ${procurementOpenDeadline} < ${at.toISOString()}::timestamptz)`;
+}
 
 /**
  * §10.1 "Awarded value this quarter": currently Awarded records whose award

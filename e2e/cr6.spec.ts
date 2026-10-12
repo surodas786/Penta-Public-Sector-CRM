@@ -1,88 +1,106 @@
 /**
- * CR6 browser check: a salesperson creates a Software Procurement
- * opportunity, records the EOI, marks it submitted (offered EOI Submitted),
- * records it Shortlisted, adds the RFP, and finds the record on the
- * Software Procurement board. One sign-in.
+ * CR6 browser check: a salesperson records a Software Procurement cycle on an
+ * opportunity, takes it through EOI submission and shortlisting to the RFP,
+ * declines the offered pipeline change, and finds the cycle in the Software
+ * Procurement area and on the dashboard. Management sees the direct-RFP
+ * exception; a salesperson does not. Two sign-ins.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'Synthetic-Dev-2026';
-const NAME = 'Integrated Financial Management Software';
+const OPPORTUNITY = 'Municipal Service Portal';
 
-test('a Software Procurement opportunity goes from EOI to RFP', async ({ page }) => {
+async function signIn(page: Page, email: string) {
   await page.goto('/sign-in');
-  await page.getByLabel('Email address').fill('rafiq.hasan@example.com');
+  await page.getByLabel('Email address').fill(email);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await page.waitForURL(/\/dashboard$/);
-  await page.getByRole('link', { name: 'Opportunities', exact: true }).click();
+}
 
-  // Create: the workflow decides the stage list.
-  await page.getByRole('button', { name: 'Add Opportunity' }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Project / opportunity name').fill(NAME);
-  await dialog.getByLabel('Procuring organization').selectOption({ index: 1 });
-  await dialog.getByLabel('Solution category').selectOption('custom_software');
-  await dialog.getByLabel('Estimated value (BDT)').fill('45000000');
-  await dialog.getByLabel(/^Workflow/).selectOption('software_procurement');
-  const stageOptions = await dialog.getByLabel(/Current stage/).locator('option').allTextContents();
-  expect(stageOptions).toContain('EOI Published');
-  expect(stageOptions).not.toContain('Tender Published');
-  await dialog.getByLabel(/Current stage/).selectOption({ label: 'EOI Published' });
-  await dialog.getByLabel('Next action').fill('Prepare the EOI response');
-  await dialog.getByLabel('Due date').fill('2027-03-15');
-  await page.screenshot({ path: 'docs/evidence/cr/cr6-create-software-procurement.png' });
-  await dialog.getByRole('button', { name: 'Create opportunity' }).click();
+/** A Dhaka datetime-local value `days` from now. */
+function dhakaInput(days: number): string {
+  const at = new Date(Date.now() + days * 86_400_000 + 6 * 3_600_000);
+  return at.toISOString().slice(0, 16);
+}
 
+test('a Software Procurement cycle goes from EOI to RFP without moving the pipeline unasked', async ({ page }) => {
+  await signIn(page, 'rafiq.hasan@example.com');
+  await page.goto('/opportunities?view=table');
   const main = page.locator('#main-content');
-  await expect(page.getByRole('heading', { name: NAME })).toBeVisible();
-  await expect(main.getByText('Software Procurement (EOI → RFP)')).toBeVisible();
+  await main.getByRole('button', { name: new RegExp(`^${OPPORTUNITY}$`) }).click();
+  await expect(page.getByRole('heading', { name: OPPORTUNITY })).toBeVisible();
+  const stageBefore = await main.getByText(/Requirements Discussion/).first().textContent();
+  await page.getByRole('tab', { name: /Software Procurement/ }).click();
 
-  // The EOI notice: its phase is chosen when it is added.
-  await main.getByRole('tab', { name: /Tender/ }).click();
-  await main.getByRole('button', { name: 'Add tender' }).first().click();
-  const form = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Add tender' }) });
-  await form.getByLabel(/^Phase/).selectOption('eoi');
-  await form.getByLabel('Tender reference').fill('MOF/EOI/2026/31');
-  await form.getByLabel('Publication date').fill('2026-10-01');
-  await form.getByLabel(/Submission deadline/).fill('2027-01-20T15:00');
-  await form.getByRole('button', { name: 'Add tender' }).click();
+  // Add the cycle: the EOI route; no direct-RFP option for a salesperson.
+  await main.getByRole('button', { name: 'Add procurement' }).click();
+  const form = page.getByRole('dialog');
+  await expect(form.getByText('Direct RFP invitation without an EOI')).toHaveCount(0);
+  await form.getByLabel('EOI reference').fill('SH/EOI/2026/31');
+  await form.getByLabel('Submission method').fill('e-GP portal');
+  await form.getByLabel('EOI publication date').fill(dhakaInput(-3).slice(0, 10));
+  await form.getByLabel(/^EOI deadline/).fill(dhakaInput(2));
+  await page.screenshot({ path: 'docs/evidence/cr/cr6-add-procurement.png' });
+  await form.getByRole('button', { name: 'Add procurement' }).click();
   await expect(form).toBeHidden();
+  await expect(main.getByText('EOI preparation').first()).toBeVisible();
+  await expect(main.getByText('Due within 72 hours').first()).toBeVisible();
 
-  // Mark Submitted offers the EOI's own stage.
-  await main.getByRole('button', { name: 'Mark Submitted' }).click();
-  const submit = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Mark bid as Submitted' }) });
-  await submit.getByLabel('Yes, move the opportunity to EOI Submitted').check();
-  await submit.getByRole('button', { name: 'Mark Submitted' }).click();
-  await expect(submit).toBeHidden();
+  // EOI submitted, then shortlisted: no pipeline offer for these.
+  const record = async (milestone: string, fill?: () => Promise<void>) => {
+    await main.getByRole('button', { name: 'Record milestone' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Milestone').selectOption({ label: milestone });
+    if (fill) await fill();
+    return dialog;
+  };
+  let dialog = await record('EOI submitted');
+  await expect(dialog.getByText('A procurement milestone never changes the pipeline by itself.')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Record milestone' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(main.getByText('Moved to EOI submitted')).toBeVisible();
+  dialog = await record('Shortlisted');
+  await dialog.getByRole('button', { name: 'Record milestone' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(main.getByText('Moved to Shortlisted')).toBeVisible();
 
-  // The outcome: Shortlisted closes the EOI and moves the record on.
-  await main.getByRole('button', { name: 'Record EOI outcome' }).click();
-  const outcome = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Record EOI outcome' }) });
-  await outcome.getByLabel('Shortlisted', { exact: true }).check();
-  await outcome.getByLabel('Yes, move it to Shortlisted').check();
-  await page.screenshot({ path: 'docs/evidence/cr/cr6-eoi-outcome.png' });
-  await outcome.getByRole('button', { name: 'Record outcome' }).click();
-  await expect(outcome).toBeHidden();
-  await expect(main.getByText('EOI outcome: Shortlisted', { exact: false })).toBeVisible();
+  // The RFP: the matching pipeline stage is offered, and declined.
+  dialog = await record('RFP received', async () => {
+    await page.getByRole('dialog').getByLabel('RFP reference').fill('SH/RFP/2026/31');
+    await page.getByRole('dialog').getByLabel(/^Proposal deadline/).fill(dhakaInput(14));
+  });
+  await expect(dialog.getByText(/Also move it to Tender Published\?/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Record milestone' }).click();
+  await expect(dialog.getByText('Choose whether to move the opportunity to Tender Published.')).toBeVisible();
+  await dialog.getByLabel(/No, keep it at/).check();
+  await page.screenshot({ path: 'docs/evidence/cr/cr6-milestone-offer.png' });
+  await dialog.getByRole('button', { name: 'Record milestone' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(main.getByText('RFP received').first()).toBeVisible();
+  await expect(main.getByText(stageBefore ?? 'Requirements Discussion').first()).toBeVisible();
 
-  // The RFP follows.
-  await main.getByRole('button', { name: 'Add tender' }).first().click();
-  const rfp = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Add tender' }) });
-  await rfp.getByLabel(/^Phase/).selectOption('rfp');
-  await rfp.getByLabel('Tender reference').fill('MOF/RFP/2026/31');
-  await rfp.getByLabel('Publication date').fill('2026-10-05');
-  await rfp.getByLabel(/Submission deadline/).fill('2027-02-20T15:00');
-  await rfp.getByRole('button', { name: 'Add tender' }).click();
-  await expect(rfp).toBeHidden();
-  await expect(main.getByText('MOF/RFP/2026/31', { exact: false }).first()).toBeVisible();
-  await page.screenshot({ path: 'docs/evidence/cr/cr6-tender-tab.png' });
+  // Stage history, from the audit.
+  await expect(main.getByText('Moved to Shortlisted')).toBeVisible();
+  await page.screenshot({ path: 'docs/evidence/cr/cr6-procurement-tab.png', fullPage: true });
 
-  // The Software Procurement board has its own lanes.
-  await page.getByRole('link', { name: 'Opportunities', exact: true }).click();
-  await main.getByLabel('Workflow').selectOption('software_procurement');
-  await expect(main.getByText('Shortlisted').first()).toBeVisible();
-  await expect(main.getByText(NAME)).toBeVisible();
-  await expect(main.getByText('Tender Published')).toHaveCount(0);
-  await page.screenshot({ path: 'docs/evidence/cr/cr6-board.png' });
+  // The area lists it, with its open deadline; the dashboard shows the panel.
+  await page.getByRole('link', { name: 'Software Procurement' }).click();
+  await expect(page.getByRole('heading', { name: 'Software Procurement' })).toBeVisible();
+  const row = page.getByRole('row').filter({ hasText: 'SH/EOI/2026/31' });
+  await expect(row.getByText('RFP received')).toBeVisible();
+  await expect(row.getByText('EOI then RFP')).toBeVisible();
+  await page.screenshot({ path: 'docs/evidence/cr/cr6-procurement-area.png' });
+  await page.getByRole('link', { name: 'Dashboard' }).click();
+  await expect(page.getByRole('heading', { name: 'Software Procurement Deadlines' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  // Management may record the documented direct-RFP exception.
+  await signIn(page, 'arif.rahman@example.com');
+  await page.getByRole('link', { name: 'Software Procurement' }).click();
+  await page.getByRole('button', { name: 'Add Procurement' }).click();
+  const direct = page.getByRole('dialog');
+  await direct.getByLabel(/Direct RFP invitation without an EOI/).check();
+  await expect(direct.getByLabel('Why is there no EOI?')).toBeVisible();
+  await expect(direct.getByLabel('EOI publication date')).toHaveCount(0);
 });

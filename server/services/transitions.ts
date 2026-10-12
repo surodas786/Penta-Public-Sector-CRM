@@ -18,12 +18,8 @@ import type { OpportunityDetailDto } from '../../shared/api.js';
 import {
   STAGE_LABELS,
   STATUS_LABELS,
-  WORKFLOW_LABELS,
   classifyStageMove,
   isTerminalStage,
-  lossReasonsFor,
-  stageInWorkflow,
-  type OpportunityStage,
 } from '../../shared/enums.js';
 import { canonicalMoney } from '../../shared/money.js';
 import type {
@@ -78,49 +74,6 @@ async function applyOpportunityUpdate(
   if (rows.length === 0) throw versionConflict();
 }
 
-/**
- * A validated stage move, inside the caller's transaction after its
- * opportunity lock: the update (version-checked), its audit event, and for
- * Awarded or Lost the cancellation of open tasks (BR-014). Shared by the
- * stage-change service and the EOI outcome (CR6), so both moves are recorded
- * the same way.
- */
-export async function applyStageMove(
-  tx: Database,
-  move: {
-    actor: Actor;
-    current: LockedOpportunity;
-    version: number;
-    changes: Partial<typeof opportunities.$inferInsert> & { stage: OpportunityStage };
-    after: Record<string, unknown>;
-    reason: string | null;
-    requestId: string;
-  },
-): Promise<void> {
-  const { actor, current, version, changes, after, reason, requestId } = move;
-  await applyOpportunityUpdate(tx, actor, current, version, changes);
-  await recordAuditEvent(tx, {
-    actorId: actor.id,
-    opportunityId: current.id,
-    entityType: 'opportunity',
-    entityId: current.id,
-    action: 'opportunity.stage_changed',
-    before: { stage: current.stage },
-    after,
-    reason,
-    requestId,
-  });
-  if (isTerminalStage(changes.stage)) {
-    // BR-014: terminal closure cancels open tasks, never marks them done.
-    await cancelOpenFollowUps(tx, {
-      actor,
-      opportunityId: current.id,
-      reason: closureReason(`marked ${STAGE_LABELS[changes.stage]}`),
-      requestId,
-    });
-  }
-}
-
 function closureReason(label: string, explanation?: string): string {
   return explanation
     ? `Closed automatically: opportunity ${label}. ${explanation}`
@@ -145,111 +98,140 @@ export async function changeStage(options: {
     const current = await lockOpportunity(tx, actor, opportunityId);
     if (!canChangeStageOrStatus(actor)) throw forbidden();
     if (current.version !== command.version) throw versionConflict();
-
-    if (isTerminalStage(current.stage)) {
-      // BR-012: leaving Awarded or Lost is a reopening, with its own rules.
-      throw canReopenOpportunity(actor)
-        ? invalidTransition('This opportunity is closed. Use Reopen to return it to a working stage.')
-        : forbidden('Only management can reopen an Awarded or Lost opportunity.');
-    }
-    if (current.status !== 'active') {
-      // D-001: a held or cancelled record keeps its stage; it returns to work
-      // through the status change, which restores that stage.
-      throw invalidTransition(
-        `This opportunity is ${STATUS_LABELS[current.status]}. Return it to Active before changing its stage.`,
-      );
-    }
-
-    // CR6: a record moves only among its own workflow's stages.
-    if (!stageInWorkflow(command.stage, current.workflow)) {
-      throw validationFailed({
-        stage: `${STAGE_LABELS[command.stage]} is not a stage of the ${WORKFLOW_LABELS[current.workflow]} workflow.`,
-      });
-    }
-    const move = classifyStageMove(current.stage, command.stage, current.workflow);
-    if (move === 'same') {
-      throw validationFailed({ stage: `The opportunity is already at ${STAGE_LABELS[current.stage]}.` });
-    }
-
-    const errors: Record<string, string> = {};
-    if ((move === 'skip' || move === 'backward') && !command.explanation) {
-      errors.explanation =
-        move === 'skip'
-          ? 'Explain why stages are being skipped.'
-          : 'Explain why the opportunity is moving back to an earlier stage.';
-    }
-
-    const today = dhakaToday();
-    const changes: Partial<typeof opportunities.$inferInsert> = { stage: command.stage };
-    const after: Record<string, unknown> = { stage: command.stage };
-
-    if (command.stage === 'awarded') {
-      // BR-011: actual value (positive) and award date (not in the future).
-      if (!command.awardedValue) errors.awardedValue = 'Enter the actual awarded value.';
-      if (!command.awardDate) errors.awardDate = 'Enter the award date.';
-      else if (command.awardDate > today) errors.awardDate = 'The award date cannot be in the future.';
-      if (command.awardedValue && command.awardDate) {
-        changes.awardedValue = canonicalMoney(command.awardedValue);
-        changes.awardDate = command.awardDate;
-        changes.closedDate = command.awardDate;
-        Object.assign(after, { awardedValue: changes.awardedValue, awardDate: command.awardDate });
-      }
-    } else if (command.stage === 'lost') {
-      // BR-011: a preset reason and a closed date; "Other" must be explained.
-      if (!command.lossReason) errors.lossReason = 'Choose the reason the opportunity was lost.';
-      else if (!lossReasonsFor(current.workflow).includes(command.lossReason)) {
-        errors.lossReason = 'Not shortlisted applies only to Software Procurement opportunities.';
-      }
-      if (command.lossReason === 'other' && !command.lossNote) {
-        errors.lossNote = 'Explain the reason when choosing Other.';
-      }
-      if (!command.closedDate) errors.closedDate = 'Enter the date the opportunity was lost.';
-      else if (command.closedDate > today) errors.closedDate = 'The closed date cannot be in the future.';
-      changes.lossReason = command.lossReason ?? null;
-      changes.lossNote = command.lossNote ?? null;
-      changes.closedDate = command.closedDate ?? null;
-      Object.assign(after, {
-        lossReason: command.lossReason,
-        lossNote: command.lossNote ?? null,
-        closedDate: command.closedDate,
-      });
-    } else if (
-      !command.nextFollowUp &&
-      (await countOpenFollowUps(tx, current.id)) === 0
-    ) {
-      // A working stage must leave the record with a next action (BR-013).
-      errors['nextFollowUp.title'] = 'Add the next action for this opportunity.';
-    }
-
-    if (Object.keys(errors).length > 0) throw validationFailed(errors);
-
-    await applyStageMove(tx, {
-      actor,
-      current,
-      version: command.version,
-      changes: { ...changes, stage: command.stage },
-      after,
-      reason: command.explanation ?? null,
-      requestId,
-    });
-
-    if (!isTerminalStage(command.stage) && command.nextFollowUp) {
-      await insertFollowUp(tx, {
-        actor,
-        opportunity: current,
-        draft: command.nextFollowUp,
-        requestId,
-        fieldPrefix: 'nextFollowUp',
-        context: 'transition',
-      });
-    }
-
-    await alertsChangedInTransaction(tx, { opportunityId: current.id, resolution: 'opportunity_changed' });
+    await changeStageInTransaction(tx, { actor, current, command, requestId });
     await completeClaim(tx, current.id);
   });
 
   signalJobsEnqueued();
   return getOpportunityDetail(db, actor, opportunityId);
+}
+
+/**
+ * A stage change on an opportunity the caller has already locked, inside the
+ * caller's transaction: every FR-021 / BR-010 to BR-014 rule, the update, its
+ * audit and the follow-up consequences. Used by the stage-change endpoint and
+ * by a procurement milestone whose user explicitly chose the matching
+ * pipeline change (CR6), so both are held to the same rules. Field errors can
+ * carry a prefix (e.g. "pipeline.") to sit beside the caller's own fields.
+ */
+export async function changeStageInTransaction(
+  tx: Database,
+  options: {
+    actor: Actor;
+    current: LockedOpportunity;
+    command: Omit<ChangeStageCommand, 'version'>;
+    requestId: string;
+    reason?: string;
+    fieldPrefix?: string;
+  },
+): Promise<void> {
+  const { actor, current, command, requestId } = options;
+  const prefix = options.fieldPrefix ?? '';
+  const fail = (errors: Record<string, string>) =>
+    validationFailed(Object.fromEntries(Object.entries(errors).map(([key, value]) => [`${prefix}${key}`, value])));
+
+  if (!canChangeStageOrStatus(actor)) throw forbidden();
+  if (isTerminalStage(current.stage)) {
+    // BR-012: leaving Awarded or Lost is a reopening, with its own rules.
+    throw canReopenOpportunity(actor)
+      ? invalidTransition('This opportunity is closed. Use Reopen to return it to a working stage.')
+      : forbidden('Only management can reopen an Awarded or Lost opportunity.');
+  }
+  if (current.status !== 'active') {
+    // D-001: a held or cancelled record keeps its stage; it returns to work
+    // through the status change, which restores that stage.
+    throw invalidTransition(
+      `This opportunity is ${STATUS_LABELS[current.status]}. Return it to Active before changing its stage.`,
+    );
+  }
+
+  const move = classifyStageMove(current.stage, command.stage);
+  if (move === 'same') {
+    throw fail({ stage: `The opportunity is already at ${STAGE_LABELS[current.stage]}.` });
+  }
+
+  const errors: Record<string, string> = {};
+  if ((move === 'skip' || move === 'backward') && !command.explanation) {
+    errors.explanation =
+      move === 'skip'
+        ? 'Explain why stages are being skipped.'
+        : 'Explain why the opportunity is moving back to an earlier stage.';
+  }
+
+  const today = dhakaToday();
+  const changes: Partial<typeof opportunities.$inferInsert> = { stage: command.stage };
+  const after: Record<string, unknown> = { stage: command.stage };
+
+  if (command.stage === 'awarded') {
+    // BR-011: actual value (positive) and award date (not in the future).
+    if (!command.awardedValue) errors.awardedValue = 'Enter the actual awarded value.';
+    if (!command.awardDate) errors.awardDate = 'Enter the award date.';
+    else if (command.awardDate > today) errors.awardDate = 'The award date cannot be in the future.';
+    if (command.awardedValue && command.awardDate) {
+      changes.awardedValue = canonicalMoney(command.awardedValue);
+      changes.awardDate = command.awardDate;
+      changes.closedDate = command.awardDate;
+      Object.assign(after, { awardedValue: changes.awardedValue, awardDate: command.awardDate });
+    }
+  } else if (command.stage === 'lost') {
+    // BR-011: a preset reason and a closed date; "Other" must be explained.
+    if (!command.lossReason) errors.lossReason = 'Choose the reason the opportunity was lost.';
+    if (command.lossReason === 'other' && !command.lossNote) {
+      errors.lossNote = 'Explain the reason when choosing Other.';
+    }
+    if (!command.closedDate) errors.closedDate = 'Enter the date the opportunity was lost.';
+    else if (command.closedDate > today) errors.closedDate = 'The closed date cannot be in the future.';
+    changes.lossReason = command.lossReason ?? null;
+    changes.lossNote = command.lossNote ?? null;
+    changes.closedDate = command.closedDate ?? null;
+    Object.assign(after, {
+      lossReason: command.lossReason,
+      lossNote: command.lossNote ?? null,
+      closedDate: command.closedDate,
+    });
+  } else if (
+    !command.nextFollowUp &&
+    (await countOpenFollowUps(tx, current.id)) === 0
+  ) {
+    // A working stage must leave the record with a next action (BR-013).
+    errors['nextFollowUp.title'] = 'Add the next action for this opportunity.';
+  }
+
+  if (Object.keys(errors).length > 0) throw fail(errors);
+
+  await applyOpportunityUpdate(tx, actor, current, current.version, changes);
+  await recordAuditEvent(tx, {
+    actorId: actor.id,
+    opportunityId: current.id,
+    entityType: 'opportunity',
+    entityId: current.id,
+    action: 'opportunity.stage_changed',
+    before: { stage: current.stage },
+    after,
+    reason: command.explanation ?? options.reason ?? null,
+    requestId,
+  });
+
+  if (isTerminalStage(command.stage)) {
+    // BR-014: terminal closure cancels open tasks, never marks them done.
+    await cancelOpenFollowUps(tx, {
+      actor,
+      opportunityId: current.id,
+      reason: closureReason(`marked ${STAGE_LABELS[command.stage]}`),
+      requestId,
+    });
+  } else if (command.nextFollowUp) {
+    await insertFollowUp(tx, {
+      actor,
+      opportunity: current,
+      draft: command.nextFollowUp,
+      requestId,
+      fieldPrefix: `${prefix}nextFollowUp`,
+      context: 'transition',
+    });
+  }
+
+  await alertsChangedInTransaction(tx, { opportunityId: current.id, resolution: 'opportunity_changed' });
 }
 
 // ---------------------------------------------------------------------------
@@ -387,11 +369,6 @@ export async function reopenOpportunity(options: {
     if (current.version !== command.version) throw versionConflict();
     if (!isTerminalStage(current.stage)) {
       throw invalidTransition('Only Awarded or Lost opportunities can be reopened.');
-    }
-    if (!stageInWorkflow(command.stage, current.workflow)) {
-      throw validationFailed({
-        stage: `${STAGE_LABELS[command.stage]} is not a stage of the ${WORKFLOW_LABELS[current.workflow]} workflow.`,
-      });
     }
 
     await applyOpportunityUpdate(tx, actor, current, command.version, {

@@ -14,6 +14,7 @@ import { motion } from 'framer-motion';
 import type {
   DashboardActivityDto,
   DashboardNextActionDto,
+  DashboardProcurementDto,
   DashboardSectionDto,
   DashboardStageDto,
   DashboardTenderDto,
@@ -25,6 +26,7 @@ import { EmptyState } from '../../../components/ui/Feedback';
 import { Avatar } from '../../ui/ApiBadges.js';
 import { formatCalendarDate, formatInstantCompact } from '../../ui/dates.js';
 import { BidStatusBadge, TenderIndicatorBadge } from '../../ui/TenderBadges.js';
+import { MilestoneBadge, ProcurementIndicatorBadge } from '../../ui/ProcurementBadges.js';
 
 /** Display boundary only: bar lengths need a number (plan 4.2). */
 const displayNumber = (value: string) => Number(toPaisa(value)) / 100;
@@ -399,6 +401,51 @@ export function TenderDeadlineList({ tenders, onOpen }: { tenders: DashboardTend
         </li>
       ))}
     </ul>
+  );
+}
+
+/** CR6: the next open EOI or proposal deadlines, apart from goods tenders. */
+export function ProcurementDeadlineList({
+  procurement,
+  onOpen,
+}: {
+  procurement: DashboardProcurementDto;
+  onOpen: (opportunityId: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[12px] text-slate-600">
+        <strong className="font-semibold text-slate-900">{procurement.overdue}</strong> overdue ·{' '}
+        <strong className="font-semibold text-slate-900">{procurement.dueNext7Days}</strong> due within 7 days ·{' '}
+        {procurement.working} in progress
+      </p>
+      {procurement.upcoming.length === 0 ? (
+        <EmptyState compact title="No upcoming EOI or proposal deadlines" description="Cycles in scope are submitted, waiting, or ended." />
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {procurement.upcoming.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                onClick={() => onOpen(item.opportunityId)}
+                className="-mx-2 flex w-[calc(100%+1rem)] flex-col gap-1 rounded-md px-2 py-2 text-left transition-colors duration-150 hover:bg-slate-50"
+              >
+                <span className="flex items-start justify-between gap-2">
+                  <span className="text-[12.5px] font-semibold text-slate-900">{item.opportunityName}</span>
+                  <MilestoneBadge milestone={item.milestone} />
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  Ref {item.reference} · Deadline {formatInstantCompact(item.deadline)} (UTC+6)
+                </span>
+                <span>
+                  <ProcurementIndicatorBadge indicator={item.indicator} />
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

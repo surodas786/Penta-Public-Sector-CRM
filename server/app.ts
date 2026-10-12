@@ -37,6 +37,7 @@ import {
   createReportsRouter,
   createSearchRouter,
 } from './routes/reporting.js';
+import { createOpportunityProcurementRouter, createProcurementRouter } from './routes/procurement.js';
 import { createOpportunityTendersRouter, createTendersRouter } from './routes/tenders.js';
 import {
   createDocumentRevisionsRouter,
@@ -259,6 +260,8 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   app.use('/api/opportunities', createOpportunityTendersRouter({ db: database.db, csrfGuard }));
   app.use('/api/opportunities', createOpportunityDocumentsRouter({ services: documentServices, csrfGuard }));
   app.use('/api/tenders', createTendersRouter({ db: database.db, csrfGuard }));
+  app.use('/api/opportunities', createOpportunityProcurementRouter({ db: database.db, csrfGuard }));
+  app.use('/api/procurement', createProcurementRouter({ db: database.db, csrfGuard }));
   app.use('/api/document-uploads', createDocumentUploadsRouter({ services: documentServices, csrfGuard }));
   app.use('/api/documents', createDocumentsRouter({ services: documentServices, csrfGuard, scanner: config.documents.scanner }));
   app.use('/api/document-revisions', createDocumentRevisionsRouter({ services: documentServices }));

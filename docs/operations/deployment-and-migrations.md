@@ -51,6 +51,7 @@ the dependency notes in `docs/release/security-review.md` §2).
 | `0008` (CR4, CR5) | The `Rollback:` steps in its header, or restore | **Not compatible with the previous code**: see §3.1 |
 | `0009` (CR2 email) | The `Rollback:` steps in its header, or restore | Additive; compatible with the previous code. Rolling back loses saved email settings, wording and the delivery log |
 | `0010` (CR6 workflow) | The `Rollback:` steps in its header, or restore | Additive; existing records become Standard and are unchanged. The eight new stage values cannot be dropped and stay unused after a rollback |
+| `0011` (CR6 cycles) | The `Rollback:` steps in its header, only before any cycle exists, or restore | Drops 0010's workflow and phase columns after a pre-flight check; restoring them needs 0010's statements again |
 
 ### 3.1 Migration 0008: multi-section leads and section memberships
 
@@ -160,6 +161,48 @@ It was rehearsed on 12 October 2026 on a scratch database brought from
 - all five new rules were created;
 - a rerun was refused;
 - `db:migrate` then skipped it.
+
+### 3.4 Migration 0011: Software Procurement cycles (CR6 rebuilt)
+
+This migration replaces 0010's design (ADR 0012, revised).
+
+- **Adds:**
+  - `procurement_cycles`, with its route, milestones, EOI and RFP fields, and
+    checks;
+  - links from a cycle to the opportunity's contacts and documents;
+  - the "Software procurement deadlines" export kind.
+- **Retires 0010:**
+  - drops `opportunities.workflow`, `tenders.phase` and the tender
+    EOI-outcome columns;
+  - adds checks that refuse the eight retired stage values and the `closed`
+    notice state, which PostgreSQL cannot drop.
+- **Existing records:** opportunities, tenders and documents are otherwise
+  unchanged.
+
+**Pre-flight.** The script refuses to run, and changes nothing, if any
+opportunity still has the Software Procurement workflow or one of its
+stages, or any tender has an EOI/RFP phase or the `closed` state. It names
+each record. Correct them first. Nothing is converted automatically.
+
+**How to apply.** Run `npm run db:migrate`, or have a database administrator
+run `docs/operations/sql/0011_software_procurement_cycles.production.sql` as
+`penta_migrator`. It is one transaction, and it refuses to run unless `0010`
+is the latest applied migration.
+
+**Rehearsal (12 October 2026).** A scratch database was brought to `0010`
+with the code before the rebuild and filled with the synthetic test data
+(23 opportunities, 8 tenders):
+
+- a Software Procurement record planted under 0010 made the pre-flight
+  refuse, naming it, with nothing changed;
+- after removing it, the script applied;
+- counts were unchanged, the `workflow` column was gone, and the three new
+  tables existed with their grants (the runtime role cannot delete cycles);
+- the export kind was added;
+- a retired stage was refused by `opportunities_stage_live`;
+- a rerun was refused, and `db:migrate` skipped it.
+
+The scratch database was dropped.
 
 Rules for future migrations (unchanged from earlier milestones): additive
 first; a destructive change ships in a later release after the code no

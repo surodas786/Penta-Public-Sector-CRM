@@ -35,6 +35,9 @@ import type {
   OrganizationSummaryDto,
   OwnerOptionDto,
   Paginated,
+  ProcurementCycleDetailDto,
+  ProcurementCycleDto,
+  ProcurementMilestoneResultDto,
   RecoveryOptionsDto,
   TeamDto,
   DashboardDto,
@@ -561,15 +564,6 @@ export function submitTender(
   return apiRequest(`/api/tenders/${id}/submit`, { method: 'POST', body, idempotencyKey });
 }
 
-/** CR6: an EOI's shortlisting outcome; closes the notice and may move the opportunity. */
-export function recordEoiOutcome(
-  id: string,
-  body: Record<string, unknown>,
-  idempotencyKey: string,
-): Promise<TenderSubmissionResultDto> {
-  return apiRequest(`/api/tenders/${id}/eoi-outcome`, { method: 'POST', body, idempotencyKey });
-}
-
 export function designateCurrentTender(id: string, version: number): Promise<TenderDto> {
   return apiRequest(`/api/tenders/${id}/designate-current`, { method: 'POST', body: { version } });
 }
@@ -682,4 +676,55 @@ export function markNotificationRead(id: string): Promise<{ notification: Notifi
 
 export function markAllNotificationsRead(): Promise<{ unreadCount: number }> {
   return apiRequest('/api/notifications/read-all', { method: 'POST', body: {} });
+}
+
+// --- Software Procurement (CR6) -------------------------------------------------
+
+export function fetchProcurementCycles(params: Record<string, string | number | undefined>, signal?: AbortSignal): Promise<Paginated<ProcurementCycleDto>> {
+  return apiRequest(`/api/procurement${toQuery(params)}`, { signal });
+}
+
+export function fetchOpportunityProcurement(opportunityId: string, signal?: AbortSignal): Promise<{ items: ProcurementCycleDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/procurement`, { signal });
+}
+
+export function fetchProcurementCycle(id: string, signal?: AbortSignal): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}`, { signal });
+}
+
+export function createProcurementCycle(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/procurement`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateProcurementCycle(id: string, body: Record<string, unknown>): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}`, { method: 'PATCH', body });
+}
+
+/** Moves a cycle to a milestone; the opportunity's stage moves only if `pipeline` is given. */
+export function advanceProcurementCycle(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<ProcurementMilestoneResultDto> {
+  return apiRequest(`/api/procurement/${id}/milestone`, { method: 'POST', body, idempotencyKey });
+}
+
+export function linkProcurementContact(id: string, contactId: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/contacts`, { method: 'POST', body: { contactId } });
+}
+
+export function unlinkProcurementContact(id: string, contactId: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/contacts/${contactId}`, { method: 'DELETE' });
+}
+
+export function linkProcurementDocument(id: string, documentId: string, role: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/documents`, { method: 'POST', body: { documentId, role } });
+}
+
+export function unlinkProcurementDocument(id: string, documentId: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/documents/${documentId}`, { method: 'DELETE' });
 }

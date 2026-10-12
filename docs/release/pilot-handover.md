@@ -151,15 +151,22 @@ local server, so emails are written as files to `EMAIL_CAPTURE_DIR`
    3. Run `npm run jobs:run` after a follow-up falls due. The owner, and only
       the owner, receives one email: a link and a date, no commercial detail.
    4. The delivery log lists it without the message body.
-7. **CR6. Software Procurement** (salesperson).
-   1. Create an opportunity with **Workflow: Software Procurement**.
-   2. Record an EOI notice and mark it submitted (the stage offered is EOI
-      Submitted).
-   3. Record the EOI outcome as Shortlisted and move the stage.
-   4. Record the RFP and continue to Proposal Submitted.
-   5. On a second record, record "Not shortlisted": it closes as Lost, with
-      the reason Not shortlisted.
-   6. The board's Workflow switch shows the software lanes.
+7. **CR6. Software Procurement** (salesperson, then management).
+   1. On an opportunity, open the **Software Procurement** tab and add a
+      cycle with its EOI reference and deadline.
+   2. Record **EOI submitted**, then **Shortlisted**. The opportunity's stage
+      does not change.
+   3. Record **RFP received** with its reference and proposal deadline.
+      When asked, choose whether to move the opportunity to Tender
+      Published.
+   4. Record the proposal, then the evaluation and the outcome. Awarded asks
+      for the value and date if you accept the offered stage.
+   5. Try a submission after its deadline: a note is required.
+   6. Cancel a cycle with a reason, then add a new cycle.
+   7. **Software Procurement** in the menu lists cycles. The open-deadline
+      filters (overdue, 72 hours, 7 days) and the dashboard panel agree.
+   8. As management: **Add Procurement** offers the direct RFP exception,
+      which needs a reason and has no EOI fields.
 
 ### Everyone
 
@@ -181,7 +188,7 @@ local server, so emails are written as files to `EMAIL_CAPTURE_DIR`
 | No SMS | Excluded | §1.3 |
 | Email is sent only once Penta's mail server is configured | Until then `EMAIL_TRANSPORT=none` (nothing sent) or `capture` (local files, refused in production) | D-EM-1, ADR 0011 |
 | Management receives every alert in the app; business day starts 00:00 Dhaka | May be noisy | M6 decisions |
-| The Software Procurement workflow is fixed when the record is created | To change it, close the record and create a new one | D-CR6-5, ADR 0012 |
+| Software Procurement deadline notifications are not built yet | Deadlines show in the area, the tab, the dashboard panel and the report | CR6 step 5 instruction (stop before notifications) |
 | At 360 px the search box shows only "Se…" | Cosmetic | interface-quality.md |
 | Performance measured on a laptop | Staging figures pending | capacity-and-performance.md |
 
@@ -208,6 +215,7 @@ checks, and stops without changing anything if a check fails:
 1. `docs/operations/sql/0008_section_memberships_and_multi_section_leads.production.sql`
 2. `docs/operations/sql/0009_email_settings_templates_and_deliveries.production.sql`
 3. `docs/operations/sql/0010_software_procurement_workflow.production.sql`
+4. `docs/operations/sql/0011_software_procurement_cycles.production.sql`
 
 `npm run db:migrate` applies the same migrations. Use one method, not both.
 Take a backup first (`docs/operations/backup-and-restore.md`). After 0009, set

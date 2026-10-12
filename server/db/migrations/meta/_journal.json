@@ -78,6 +78,13 @@
       "when": 1791792829758,
       "tag": "0010_software_procurement_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791806810438,
+      "tag": "0011_software_procurement_cycles",
+      "breakpoints": true
     }
   ]
 }

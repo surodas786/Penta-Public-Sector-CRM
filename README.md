@@ -105,7 +105,7 @@ changes an alert. Failed jobs are retried with backoff and then left `failed`.
 50 000) bound exports. See
 [`docs/adr/0007-dashboards-reports-search-notifications.md`](docs/adr/0007-dashboards-reports-search-notifications.md).
 The change requests are in ADRs 0010 (multi-section leads and members), 0011
-(email delivery) and 0012 (Software Procurement workflow), and in
+(email delivery) and 0012 (Software Procurement, EOI then RFP), and in
 [`docs/change-requests.md`](docs/change-requests.md).
 
 ### Email (change requests CR1–CR3)

@@ -24,10 +24,12 @@ import {
   ACTIVITY_TYPE_LABELS,
   BID_STATUS_LABELS,
   DOCUMENT_CATEGORY_LABELS,
+  PARTICIPATION_DECISION_LABELS,
+  PROCUREMENT_MILESTONE_LABELS,
+  PROCUREMENT_ROUTE_LABELS,
+  PROPOSAL_FORMAT_LABELS,
   NOTICE_STATE_LABELS,
-  EOI_OUTCOME_LABELS,
-  TENDER_PHASE_LABELS,
-  WORKFLOW_LABELS,
+  BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
   LOSS_REASON_LABELS,
   PRIORITY_LABELS,
@@ -36,7 +38,6 @@ import {
   STAGE_LABELS,
   STATUS_LABELS,
   boardLane,
-  boardLanesFor,
   type BoardLane,
 } from '../../shared/enums.js';
 import { canonicalMoney } from '../../shared/money.js';
@@ -141,7 +142,6 @@ const listSelection = {
   organizationLocation: organizations.location,
   solutionCategory: opportunities.solutionCategory,
   estimatedValue: opportunities.estimatedValue,
-  workflow: opportunities.workflow,
   stage: opportunities.stage,
   status: opportunities.status,
   priority: opportunities.priority,
@@ -174,7 +174,6 @@ function toListItem(row: ListRow, nextAction: NextActionDto | null): Opportunity
     },
     solutionCategory: row.solutionCategory,
     estimatedValue: canonicalMoney(row.estimatedValue),
-    workflow: row.workflow,
     stage: row.stage,
     status: row.status,
     priority: row.priority,
@@ -226,7 +225,6 @@ export function opportunityListFilters(query: OpportunityListFilters): (SQL | un
     );
   }
   if (query.stage) filters.push(eq(opportunities.stage, query.stage));
-  if (query.workflow) filters.push(eq(opportunities.workflow, query.workflow));
   if (query.status) filters.push(eq(opportunities.status, query.status));
   if (query.priority) filters.push(eq(opportunities.priority, query.priority));
   if (query.solutionCategory) filters.push(eq(opportunities.solutionCategory, query.solutionCategory));
@@ -412,8 +410,6 @@ export interface CreateOpportunityCommand {
   fundingSource?: string | undefined;
   ownerId: string;
   sectionId: string;
-  /** CR6; standard when omitted. The stage was checked against it by the schema. */
-  workflow?: OpportunityDetailDto['workflow'];
   stage: OpportunityDetailDto['stage'];
   priority: OpportunityDetailDto['priority'];
   expectedPublicationDate?: string | undefined;
@@ -524,7 +520,6 @@ export async function createOpportunity(options: {
         fundingSource: command.fundingSource ?? null,
         ownerId: command.ownerId,
         sectionId: command.sectionId,
-        workflow: command.workflow ?? 'standard',
         stage: command.stage,
         // M1 creates Active, nonterminal records only.
         status: 'active',
@@ -577,7 +572,6 @@ export async function createOpportunity(options: {
         estimatedValue,
         ownerId: command.ownerId,
         sectionId: command.sectionId,
-        workflow: command.workflow ?? 'standard',
         stage: command.stage,
         status: 'active',
         priority: command.priority,
@@ -893,10 +887,12 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   type: ACTIVITY_TYPE_LABELS,
   bidStatus: BID_STATUS_LABELS,
   noticeState: NOTICE_STATE_LABELS,
-  workflow: WORKFLOW_LABELS,
-  phase: TENDER_PHASE_LABELS,
-  eoiOutcome: EOI_OUTCOME_LABELS,
   category: DOCUMENT_CATEGORY_LABELS,
+  milestone: PROCUREMENT_MILESTONE_LABELS,
+  route: PROCUREMENT_ROUTE_LABELS,
+  participation: PARTICIPATION_DECISION_LABELS,
+  proposalFormat: PROPOSAL_FORMAT_LABELS,
+  eoiOutcome: { shortlisted: 'Shortlisted', not_shortlisted: 'Not shortlisted' },
   scanState: { pending: 'Pending', clean: 'Clean', infected: 'Rejected (infected)', failed: 'Scan failed' },
 };
 
@@ -983,8 +979,6 @@ export async function getBoard(db: Database, actor: Actor, query: BoardQuery): P
   if (query.organizationId) filters.push(eq(opportunities.organizationId, query.organizationId));
   if (query.ownerId) filters.push(eq(opportunities.ownerId, query.ownerId));
   if (query.sectionId) filters.push(eq(opportunities.sectionId, query.sectionId));
-  // CR6: one workflow per board, with that workflow's lanes.
-  filters.push(eq(opportunities.workflow, query.workflow));
 
   const where = scopedWhere(actor, ...filters);
 
@@ -1032,7 +1026,7 @@ export async function getBoard(db: Database, actor: Actor, query: BoardQuery): P
     byLane.set(lane, [...(byLane.get(lane) ?? []), item]);
   }
 
-  const lanes: BoardLaneDto[] = boardLanesFor(query.workflow).map((lane) => {
+  const lanes: BoardLaneDto[] = BOARD_LANES.map((lane) => {
     const aggregate = aggregates.find((row) => row.lane === lane);
     return {
       lane,
@@ -1043,5 +1037,5 @@ export async function getBoard(db: Database, actor: Actor, query: BoardQuery): P
     };
   });
 
-  return { workflow: query.workflow, lanes, laneLimit: BOARD_LANE_LIMIT };
+  return { lanes, laneLimit: BOARD_LANE_LIMIT };
 }

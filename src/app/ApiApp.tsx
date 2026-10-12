@@ -28,6 +28,7 @@ const OrganizationDetailPage = lazy(() =>
 );
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage.js').then((m) => ({ default: m.ContactDetailPage })));
 const TenderTrackerPage = lazy(() => import('./pages/TenderTrackerPage.js').then((m) => ({ default: m.TenderTrackerPage })));
+const ProcurementPage = lazy(() => import('./pages/ProcurementPage.js').then((m) => ({ default: m.ProcurementPage })));
 const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage.js').then((m) => ({ default: m.DashboardPage })));
 const ReportsPage = lazy(() => import('./pages/ReportsPage.js').then((m) => ({ default: m.ReportsPage })));
@@ -121,6 +122,7 @@ function AppRoutes() {
           <Route path="contacts/:id" element={<Lazy><ContactDetailPage /></Lazy>} />
           <Route path="activities" element={<Lazy><FollowUpsPage /></Lazy>} />
           <Route path="tenders" element={<Lazy><TenderTrackerPage /></Lazy>} />
+          <Route path="procurement" element={<Lazy><ProcurementPage /></Lazy>} />
           <Route path="reports" element={<Lazy><ReportsPage /></Lazy>} />
           <Route path="team" element={<RequireTeamView />} />
           </Route>

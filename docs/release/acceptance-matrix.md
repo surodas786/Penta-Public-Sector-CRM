@@ -130,7 +130,7 @@ default (D-EM-2, D-EM-4); see "Change requests CR1–CR6".
 
 | ID | Requirement | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
-| BR-080 | Constraints and indexes | Complete | migrations `0000`–`0010`, `operations.test.ts`; capacity seed validated against them | — |
+| BR-080 | Constraints and indexes | Complete | migrations `0000`–`0011`, `operations.test.ts`; capacity seed validated against them | — |
 | BR-081 | Archive keeps references; no cascades; transaction boundaries | Complete | `m7MutationControls.test.ts` (FK refusals, induced failures) | — |
 | SEC-020 | Status codes and error shape | Complete | `childScope.test.ts`, `operations.test.ts` | — |
 | BR-090 | Versions; stale = 409; serialized related writes | Complete | `m7MutationControls.test.ts` §3, §5 | — |
@@ -236,11 +236,15 @@ checks named below.
 | CR5-AC4 | Leaving a section is blocked while owning records there | Complete | `sections.test.ts`, `administration.test.ts` | — |
 | CR5-AC5 | Section chosen at creation when the owner has several | Complete | `sections.test.ts`, `e2e/cr45.spec.ts` | — |
 | CR5-AC6 | Existing users keep exactly their current scope | Complete | `sections.test.ts` (backfill scope equivalence); 0008 rehearsal | — |
-| CR6-AC1 | Workflow chosen at creation; existing records Standard | Complete | `workflow.test.ts`, `e2e/cr6.spec.ts`; 0010 rehearsal | — |
-| CR6-AC2 | Its own stage sequence with the same stage rules | Complete | `workflow.test.ts` (and the database CHECK) | — |
-| CR6-AC3 | EOI/RFP phases; EOI outcome before the RFP; one current notice | Complete | `workflow.test.ts`, `e2e/cr6.spec.ts`, audit matrix | — |
-| CR6-AC4 | Board, stage chart and pipeline report per workflow; shared metrics cover both | Complete | `workflow.test.ts`, `e2e/cr6.spec.ts` | — |
-| CR6-AC5 | Access unchanged by workflow | Complete | Scope is unchanged; `workflow.test.ts` runs under the existing scope rules | — |
+| CR6-AC1 | A separate Software Procurement area; cycles inherit the opportunity's owner, section, access and documents; nothing classified from titles | Complete | `procurement.test.ts` (access, transfers), `e2e/cr6.spec.ts`; 0011 rehearsal | Rebuilt to the step 5 instruction (ADR 0012) |
+| CR6-AC2 | Several cycles, one current; reissue only after the current one ends; explicit route | Complete | `procurement.test.ts` (cancellation and reissue), audit matrix | — |
+| CR6-AC3 | Milestones EOI → shortlisting → RFP → proposal → evaluation → Awarded / Unsuccessful / Cancelled, forward only | Complete | `procurement.test.ts`, database CHECKs | — |
+| CR6-AC4 | Milestones never move the pipeline; the offered stage, if accepted, follows the stage rules | Complete | `procurement.test.ts` (skip needs explanation, Awarded needs value, Lost reason), audit and atomicity matrices, `e2e/cr6.spec.ts` | — |
+| CR6-AC5 | EOI and RFP fields, clarification deadline, submission method, participation, separate technical/financial submissions, contacts and documents | Complete | `procurement.test.ts` | — |
+| CR6-AC6 | Late submissions recorded with a note; deadlines frozen under a recorded submission; Asia/Dhaka dates | Complete | `procurement.test.ts` (deadline boundaries at 72 h, Dhaka-date check) | — |
+| CR6-AC7 | Shortlisting before the RFP; direct RFP is management-only, documented, never with an EOI | Complete | `procurement.test.ts` (database refuses an invented EOI) | — |
+| CR6-AC8 | Version checks, retry protection, transactions, audit, protected documents | Complete | audit, retry, stale-version, atomicity and transfer-race matrices | — |
+| CR6-AC9 | Filters, deadline windows, stage history; scoped dashboard, report and CSV export, apart from goods tenders | Complete | `procurement.test.ts`, `e2e/cr6.spec.ts` | Procurement deadline notifications not built (instructed to stop before them) |
 
 ## Unresolved, in one list
 

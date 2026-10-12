@@ -3,7 +3,8 @@
 **Current state (12 October 2026):** Milestone 8 is complete, and change
 requests CR1–CR6 are **implemented and regression-tested** on branch
 `cr-change-requests` (steps 1–7 below; `docs/change-requests.md`). The
-database changes are migrations 0008–0010, each with a production script.
+database changes are migrations 0008–0011, each with a production script
+(0011 rebuilt CR6 as separate procurement cycles, §15).
 No email has been sent outside the local capture folder. Nothing is
 deployed. **Not production-ready:** production document storage and malware
 scanning, the identity provider and MFA, and a staging environment are
@@ -660,7 +661,85 @@ Evidence: `docs/evidence/cr/cr3-forgot-password.png` and `cr1-link-used.png`.
 6. **Disabled account:** deactivate a pending user, then open their link:
    **This link does not work**. It cannot be used.
 
-### 15. Next task
+### 15. CR6 rebuilt to the step 5 instruction: Software Procurement cycles (12 October 2026)
+
+**Why.** The step 5 instruction conflicts with the first CR6 design: it
+asks for a separate area and for milestones kept distinct from the pipeline.
+Penta chose to rebuild to the instruction. This supersedes D-CR6-2 and
+D-CR6-4 (ADR 0012, revised).
+
+**Database: migration 0011** (production script, rehearsed).
+
+- **Adds:** `procurement_cycles`, `procurement_cycle_contacts`,
+  `procurement_cycle_documents` and the `procurement_deadlines` export
+  kind.
+- **Retires 0010:** drops `opportunities.workflow`, `tenders.phase` and the
+  tender EOI-outcome columns, and adds CHECKs refusing the retired enum
+  values.
+- **Pre-flight:** refuses, naming the records, if anything still uses 0010's
+  structures.
+
+**What changed**
+
+| Area | Change |
+| --- | --- |
+| Removed (step 6) | Workflow field, filter and board switch; eight pipeline stages; tender EOI/RFP phase and the EOI-outcome endpoint; `workflow.test.ts`. Files changed only by step 6 were restored from `1fca633`. `applyStageMove` was replaced by `changeStageInTransaction` (below) |
+| Server | `services/procurement.ts`, `routes/procurement.ts`. The stage-change rules moved into `changeStageInTransaction` (transitions.ts), shared by the stage endpoint and accepted procurement offers. New permission rules `canManageProcurement` and `canApproveDirectRfp` (management). New `procurement*` metrics in `metrics.ts`; the "Software procurement deadlines" report and CSV export; a dashboard `procurement` block; history labels |
+| Interface | **Software Procurement** in the menu (Tender Tracker layout and filters). A **Software Procurement** tab on the opportunity: the current cycle, Record milestone (asks about the matching stage, like Mark Submitted), Edit, document and contact links, stage history, earlier cycles. A dashboard panel, shown only where cycles are in progress |
+| Rules | Forward-only milestones. Required facts on advancing. Late submissions need a note, and a recorded submission freezes its deadline. Shortlisting before the RFP, except a documented direct RFP that only management can record. One current cycle; a reissue only after the current one ends. A closed opportunity's cycle can only reach its ending |
+
+**Tests**
+
+- **`procurement.test.ts`** (12):
+  - the normal flow, including pipeline offers under the stage rules;
+  - Not shortlisted, with Lost only when accepted;
+  - the direct RFP, and the database refusing an invented EOI or an RFP
+    without shortlisting;
+  - cancellation and reissue;
+  - a stale version and a retried milestone;
+  - deadline boundaries (exactly 72 hours is Upcoming), late submissions
+    and Dhaka dates;
+  - separate technical and financial submissions;
+  - transfers and every role's scope;
+  - forged cycle, contact and document ids (identical 404s);
+  - dashboard, report and export, scoped and apart from tenders.
+- **M7 matrices:** five audit cases, two retry cases, two stale-version
+  cases, one atomicity case (failure at the stage change leaves the cycle
+  untouched) and two queued previous-owner writes. The audit coverage guard
+  now scans `procurement.*` actions.
+- **`e2e/cr6.spec.ts`** rewritten for the new screens. Evidence:
+  `cr6-add-procurement.png`, `cr6-milestone-offer.png`,
+  `cr6-procurement-tab.png` and `cr6-procurement-area.png`. The four step 6
+  screenshots were removed.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck`, `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **756 passed, 0 failed**, 29 files. The first run had one failure: the reports test listing every report's date basis did not yet include the new report. It was updated and the reports tests rerun: 19 of 19 |
+| `procurement.test.ts`, M7 matrices | 12 of 12; 175 of 175 |
+| Browser checks, each in its own run | smoke+m2 12, m3 2, m4 3, m6 4, m7 1, cr3 1, cr45 1, cr2 1, cr1 1, **cr6 1**, accountAccess 1 passed. m5 fails only on the aged fixture (re-checked: the late-submission note) |
+| `npm run build`, `npm run check:production-server` | Pass; 20 passed, 0 failed |
+| `drizzle-kit generate` after 0011 | "No schema changes": schema and snapshot agree |
+| 0011 rehearsal (0010 + synthetic data → script) | Pre-flight refused a planted 0010 record, naming it, with nothing changed. Then the script applied: counts kept, columns retired, tables and grants created, a retired stage refused. A rerun was refused and `db:migrate` skipped it |
+
+**Production SQL:** `docs/operations/sql/0011_software_procurement_cycles.production.sql`
+(file sha256 `500d9a75…567106`; migration sha256 `d98971e6…4708be`). Apply
+it after 0010 (runbook §3.4).
+
+**Incident during the rehearsal (resolved).** A first rehearsal attempt
+linked a temporary worktree to the repository's `node_modules` with a
+junction. Removing the worktree followed the junction and deleted part of
+`node_modules`.
+
+- **Restored:** `npm install` from the unchanged `package-lock.json` restored
+  it. `npm ls` reports nothing missing or invalid, and the typecheck and
+  tests pass.
+- **Not touched:** your running dev servers.
+- **Later rehearsals:** the worktree is placed inside `.git`, with no links.
+
+### 16. Next task
 
 Penta's decisions:
 

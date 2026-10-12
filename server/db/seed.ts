@@ -126,6 +126,7 @@ export async function seedDatabase(
       await tx.execute(sql`
         TRUNCATE TABLE
           notifications, report_exports, background_jobs,
+          procurement_cycle_documents, procurement_cycle_contacts, procurement_cycles,
           document_revisions, document_uploads, documents, tenders,
           activities, opportunity_contacts, contacts, account_tokens, audit_events, section_memberships,
           email_deliveries, email_templates, email_settings,

@@ -21,9 +21,13 @@ import type {
   SolutionCategory,
   TenderIndicator,
   UserRole,
-  Workflow,
   EoiOutcome,
-  TenderPhase,
+  ParticipationDecision,
+  ProcurementDocumentRole,
+  ProcurementIndicator,
+  ProcurementMilestone,
+  ProcurementRoute,
+  ProposalFormat,
 } from './enums.js';
 import type {
   AdminSearchResultType,
@@ -120,8 +124,6 @@ export interface OpportunityListItemDto {
   solutionCategory: SolutionCategory;
   /** Decimal string. Never a float. */
   estimatedValue: string;
-  /** CR6: which stages the record follows; fixed at creation. */
-  workflow: Workflow;
   stage: OpportunityStage;
   status: OpportunityStatus;
   priority: Priority;
@@ -231,8 +233,6 @@ export interface BoardLaneDto {
 }
 
 export interface BoardDto {
-  /** CR6: the workflow whose lanes these are. */
-  workflow: Workflow;
   lanes: BoardLaneDto[];
   /** Cards returned per lane at most; the table view pages through the rest. */
   laneLimit: number;
@@ -526,17 +526,11 @@ export interface TenderDto {
     id: string;
     reference: string;
     name: string;
-    workflow: Workflow;
     stage: OpportunityStage;
     status: OpportunityStatus;
     organizationId: string;
   };
   procuringOrganization: { id: string; name: string };
-  /** CR6: EOI or RFP on a Software Procurement record; null on a standard one. */
-  phase: TenderPhase | null;
-  /** CR6: an EOI's recorded result; recording it closes the notice (D-CR6-6). */
-  eoiOutcome: EoiOutcome | null;
-  eoiOutcomeDate: string | null;
   /** §7.1: shown with a clear label when it differs from the opportunity's organization. */
   procuringDiffersFromOpportunity: boolean;
   title: string;
@@ -560,12 +554,8 @@ export interface TenderDto {
   indicator: TenderIndicator;
   /** FR-051: bid recorded Submitted while the opportunity is still at an earlier stage. */
   stageMismatch: boolean;
-  /** FR-051: whether Mark Submitted may offer to move the opportunity to its submitted stage. */
+  /** FR-051: whether Mark Submitted may offer to move the opportunity to Bid Submitted. */
   canOfferBidSubmittedStage: boolean;
-  /** The stage that offer moves to: Bid Submitted, or EOI / Proposal Submitted (CR6). */
-  offeredStage: OpportunityStage;
-  /** CR6: a submitted, current EOI whose outcome can now be recorded. */
-  canRecordEoiOutcome: boolean;
   createdByName: string;
   createdAt: string;
   updatedAt: string;
@@ -697,6 +687,27 @@ export interface DashboardTenderDto {
   indicator: TenderIndicator;
 }
 
+/**
+ * CR6: Software Procurement deadlines, kept apart from goods tenders. Counts
+ * use the metric definitions in metrics.ts; `working` is zero where no cycle
+ * is in progress, and the panel is then not shown.
+ */
+export interface DashboardProcurementDto {
+  working: number;
+  overdue: number;
+  dueNext7Days: number;
+  upcoming: {
+    id: string;
+    reference: string;
+    title: string;
+    opportunityId: string;
+    opportunityName: string;
+    milestone: ProcurementMilestone;
+    deadline: string;
+    indicator: ProcurementIndicator;
+  }[];
+}
+
 export interface DashboardActivityDto {
   id: string;
   opportunityId: string;
@@ -753,6 +764,7 @@ export interface DashboardDto {
   sections: DashboardSectionDto[] | null;
   nextActions: { target: { id: string; fullName: string }; items: DashboardNextActionDto[]; total: number };
   upcomingTenders: DashboardTenderDto[];
+  procurement: DashboardProcurementDto;
   recentActivity: DashboardActivityDto[];
   /** Owner choices for the filter: leads see their sections' people, management everyone; salespeople none. */
   ownerOptions: { id: string; fullName: string; active: boolean }[];
@@ -957,3 +969,70 @@ export interface EmailTemplateVersionDto {
 
 /** At most this many administrator retries of one failed email (CR2). */
 export const EMAIL_MANUAL_RETRY_LIMIT = 3;
+
+// ---------------------------------------------------------------------------
+// Software Procurement cycles (CR6)
+// ---------------------------------------------------------------------------
+
+/**
+ * One procurement cycle of an opportunity. Its responsible owner and section
+ * are the opportunity's, read live, so a transfer moves them with no write.
+ */
+export interface ProcurementCycleDto {
+  id: string;
+  opportunity: { id: string; reference: string; name: string; stage: OpportunityStage; status: OpportunityStatus };
+  procuringOrganization: { id: string; name: string };
+  title: string;
+  reference: string;
+  route: ProcurementRoute;
+  milestone: ProcurementMilestone;
+  isCurrent: boolean;
+  submissionMethod: string | null;
+  participation: ParticipationDecision;
+  participationReason: string | null;
+  eoiPublicationDate: string | null;
+  eoiDeadline: string | null;
+  eoiSubmittedAt: string | null;
+  eoiLateNote: string | null;
+  eoiOutcome: EoiOutcome | null;
+  eoiOutcomeDate: string | null;
+  rfpReference: string | null;
+  rfpInvitationDate: string | null;
+  clarificationDeadline: string | null;
+  proposalDeadline: string | null;
+  proposalFormat: ProposalFormat;
+  proposalSubmittedAt: string | null;
+  technicalSubmittedAt: string | null;
+  financialSubmittedAt: string | null;
+  proposalLateNote: string | null;
+  directRfpReason: string | null;
+  directRfpApprovedByName: string | null;
+  outcomeDate: string | null;
+  outcomeNote: string | null;
+  notes: string | null;
+  responsibleOwner: { id: string; fullName: string };
+  section: { id: string; name: string };
+  /** The deadline the cycle is working towards now (EOI or proposal), if any. */
+  openDeadline: string | null;
+  indicator: ProcurementIndicator;
+  /** Where the cycle may go next, for this user; empty when it cannot change. */
+  nextMilestones: ProcurementMilestone[];
+  canEdit: boolean;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface ProcurementCycleDetailDto extends ProcurementCycleDto {
+  contacts: { id: string; fullName: string; designation: string | null }[];
+  documents: { id: string; role: ProcurementDocumentRole; fileName: string; category: DocumentCategory; archived: boolean }[];
+  /** Milestones and other changes, oldest first, from the audit trail. */
+  history: { occurredAt: string; actorName: string | null; action: string; milestone: ProcurementMilestone | null; summary: string }[];
+}
+
+/** The result of a milestone change: the cycle, and whether the opportunity's stage moved with it. */
+export interface ProcurementMilestoneResultDto {
+  cycle: ProcurementCycleDetailDto;
+  stageChanged: boolean;
+}

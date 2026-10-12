@@ -18,14 +18,13 @@ import {
   PRIORITIES,
   SOLUTION_CATEGORIES,
   USER_ROLES,
-  EOI_OUTCOMES,
-  TENDER_PHASES,
-  WORKFLOWS,
-  WORKFLOW_STAGES,
+  PARTICIPATION_DECISIONS,
+  PROCUREMENT_DOCUMENT_ROLES,
+  PROCUREMENT_MILESTONES,
+  PROCUREMENT_ROUTES,
+  PROPOSAL_FORMATS,
   isTerminalStage,
-  stageInWorkflow,
   type OpportunityStage,
-  type Workflow,
 } from './enums.js';
 import { EMAIL_SECURITY_MODES } from './email.js';
 import { isValidMoneyString } from './money.js';
@@ -289,11 +288,6 @@ export const M1_CREATABLE_STAGES = OPPORTUNITY_STAGES.filter(
   (stage) => !isTerminalStage(stage),
 ) as readonly OpportunityStage[];
 
-/** CR6: the stages a new record of `workflow` may start at. */
-export function creatableStagesFor(workflow: Workflow): readonly OpportunityStage[] {
-  return WORKFLOW_STAGES[workflow];
-}
-
 export const createOpportunitySchema = z
   .object({
     name: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
@@ -305,8 +299,6 @@ export const createOpportunitySchema = z
     fundingSource: optionalText(200),
     ownerId: uuidField,
     sectionId: uuidField,
-    /** CR6: fixed once created. */
-    workflow: z.enum(WORKFLOWS).default('standard'),
     stage: z.enum(OPPORTUNITY_STAGES).refine(
       (stage) => !isTerminalStage(stage),
       'Create the opportunity at a working stage, then record Awarded or Lost as a stage change.',
@@ -322,13 +314,7 @@ export const createOpportunitySchema = z
       .max(200, 'Use at most 200 characters.'),
     initialFollowUpDueDate: calendarDateField,
   })
-  .strict()
-  // CR6: the starting stage must be one of the chosen workflow's stages.
-  .superRefine((value, context) => {
-    if (!isTerminalStage(value.stage) && !stageInWorkflow(value.stage, value.workflow)) {
-      context.addIssue({ code: 'custom', path: ['stage'], message: 'Choose a stage of the selected workflow.' });
-    }
-  });
+  .strict();
 
 export type CreateOpportunityInput = z.input<typeof createOpportunitySchema>;
 export type CreateOpportunityParsed = z.output<typeof createOpportunitySchema>;
@@ -565,7 +551,6 @@ export const listOpportunitiesQuerySchema = z
     pageSize: pageSizeNumber.optional().default(25),
     q: z.string().trim().max(200).optional(),
     stage: z.enum(OPPORTUNITY_STAGES).optional(),
-    workflow: z.enum(WORKFLOWS).optional(),
     status: z.enum(OPPORTUNITY_STATUSES).optional(),
     priority: z.enum(PRIORITIES).optional(),
     solutionCategory: z.enum(SOLUTION_CATEGORIES).optional(),
@@ -604,8 +589,6 @@ export const boardQuerySchema = z
     organizationId: uuidField.optional(),
     ownerId: uuidField.optional(),
     sectionId: uuidField.optional(),
-    /** CR6: a board shows one workflow's lanes. */
-    workflow: z.enum(WORKFLOWS).optional().default('standard'),
   })
   .strict();
 
@@ -905,8 +888,6 @@ const tenderFields = {
   bidStatus: z.enum(EDITABLE_BID_STATUSES),
   participationReason: optionalText(2000),
   notes: optionalText(10_000),
-  /** CR6: required on a Software Procurement record, refused on a standard one (checked by the service). */
-  phase: z.enum(TENDER_PHASES).optional(),
 };
 
 /**
@@ -932,22 +913,6 @@ export const updateTenderSchema = z
     bidStatus: tenderFields.bidStatus.optional(),
     participationReason: tenderFields.participationReason,
     notes: tenderFields.notes,
-  })
-  .strict();
-
-/**
- * CR6, D-CR6-6: an EOI's result, which closes the notice. `updateOpportunity`
- * is the user's explicit answer: move to Shortlisted, or close the record as
- * Lost with the reason Not shortlisted. Required, so nothing moves without a
- * decision.
- */
-export const recordEoiOutcomeSchema = z
-  .object({
-    version: z.number().int().positive('Reload the tender and try again.'),
-    outcome: z.enum(EOI_OUTCOMES),
-    outcomeDate: calendarDateField,
-    updateOpportunity: z.boolean({ error: 'Choose whether to update the opportunity too.' }),
-    lossNote: optionalText(2000),
   })
   .strict();
 
@@ -1170,3 +1135,123 @@ export const sendTestEmailSchema = z.object({ to: emailField }).strict();
  * email delivery is on, otherwise shown once to copy (D-CR1-1).
  */
 export const issueAccountLinkSchema = z.object({ delivery: z.enum(['email', 'manual']).optional() }).strict();
+
+// ---------------------------------------------------------------------------
+// Software Procurement cycles (CR6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fields of a cycle that can be known in advance. Everything about a later
+ * milestone is optional while the cycle is earlier (an RFP may not exist yet
+ * during the EOI); the service requires what a milestone needs when the
+ * cycle reaches it.
+ */
+const procurementFields = {
+  procuringOrganizationId: uuidField,
+  title: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  reference: z.string().trim().min(1, 'Enter the procurement reference.').max(200, 'Use at most 200 characters.'),
+  submissionMethod: optionalText(100),
+  participation: z.enum(PARTICIPATION_DECISIONS).optional(),
+  participationReason: optionalText(2000),
+  eoiPublicationDate: optionalDate(),
+  eoiDeadline: optionalInstant,
+  rfpReference: optionalText(200),
+  rfpInvitationDate: optionalDate(),
+  clarificationDeadline: optionalInstant,
+  proposalDeadline: optionalInstant,
+  proposalFormat: z.enum(PROPOSAL_FORMATS).optional(),
+  notes: optionalText(10_000),
+};
+
+/**
+ * A new cycle. `route: 'direct_rfp'` is the management-only exception for an
+ * RFP invitation without an EOI; it needs the documented reason and starts at
+ * RFP received, so it needs the RFP's reference, invitation date and proposal
+ * deadline.
+ */
+export const createProcurementCycleSchema = z
+  .object({
+    ...procurementFields,
+    route: z.enum(PROCUREMENT_ROUTES).default('eoi_rfp'),
+    directRfpReason: optionalText(2000),
+  })
+  .strict();
+
+export type CreateProcurementCycleInput = z.input<typeof createProcurementCycleSchema>;
+
+/** Editing a cycle's facts. Its route and milestone change only through their own actions. */
+export const updateProcurementCycleSchema = z
+  .object({
+    version: z.number().int().positive('Reload the cycle and try again.'),
+    procuringOrganizationId: procurementFields.procuringOrganizationId.optional(),
+    title: procurementFields.title.optional(),
+    reference: procurementFields.reference.optional(),
+    submissionMethod: procurementFields.submissionMethod,
+    participation: procurementFields.participation,
+    participationReason: procurementFields.participationReason,
+    eoiPublicationDate: procurementFields.eoiPublicationDate,
+    eoiDeadline: procurementFields.eoiDeadline,
+    rfpReference: procurementFields.rfpReference,
+    rfpInvitationDate: procurementFields.rfpInvitationDate,
+    clarificationDeadline: procurementFields.clarificationDeadline,
+    proposalDeadline: procurementFields.proposalDeadline,
+    proposalFormat: procurementFields.proposalFormat,
+    notes: procurementFields.notes,
+  })
+  .strict();
+
+export type UpdateProcurementCycleInput = z.input<typeof updateProcurementCycleSchema>;
+
+/**
+ * Moving a cycle to a milestone, with the facts that milestone records. The
+ * opportunity's pipeline changes only when `pipeline` is given: the user's
+ * explicit acceptance of the offered stage, held to the normal stage rules.
+ */
+export const advanceProcurementCycleSchema = z
+  .object({
+    version: z.number().int().positive('Reload the cycle and try again.'),
+    milestone: z.enum(PROCUREMENT_MILESTONES),
+    eoiSubmittedAt: optionalInstant,
+    eoiLateNote: optionalText(2000),
+    eoiOutcomeDate: optionalDate(),
+    rfpReference: optionalText(200),
+    rfpInvitationDate: optionalDate(),
+    clarificationDeadline: optionalInstant,
+    proposalDeadline: optionalInstant,
+    proposalSubmittedAt: optionalInstant,
+    technicalSubmittedAt: optionalInstant,
+    financialSubmittedAt: optionalInstant,
+    proposalLateNote: optionalText(2000),
+    outcomeDate: optionalDate(),
+    outcomeNote: optionalText(2000),
+    pipeline: changeStageSchema.omit({ version: true }).optional(),
+  })
+  .strict();
+
+export type AdvanceProcurementCycleInput = z.input<typeof advanceProcurementCycleSchema>;
+
+export const PROCUREMENT_CYCLE_FILTERS = ['current', 'all'] as const;
+export const PROCUREMENT_DEADLINE_WINDOWS = ['overdue', '72h', '7d'] as const;
+
+/** The Software Procurement area's list, filtered inside the scope predicate. */
+export const listProcurementCyclesQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    milestone: z.enum(PROCUREMENT_MILESTONES).optional(),
+    route: z.enum(PROCUREMENT_ROUTES).optional(),
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+    /** `current`: each opportunity's current cycle (the default). `all`: history too. */
+    cycles: z.enum(PROCUREMENT_CYCLE_FILTERS).optional().default('current'),
+    /** Open deadlines (EOI or proposal) already passed, or due within 72 hours or seven days. */
+    deadline: z.enum(PROCUREMENT_DEADLINE_WINDOWS).optional(),
+    dir: z.enum(['asc', 'desc']).optional(),
+  })
+  .strict();
+
+export const linkProcurementContactSchema = z.object({ contactId: uuidField }).strict();
+
+export const linkProcurementDocumentSchema = z
+  .object({ documentId: uuidField, role: z.enum(PROCUREMENT_DOCUMENT_ROLES) })
+  .strict();

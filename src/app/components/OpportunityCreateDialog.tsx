@@ -16,11 +16,8 @@ import {
   SOLUTION_CATEGORIES,
   SOLUTION_CATEGORY_LABELS,
   STAGE_LABELS,
-  WORKFLOWS,
-  WORKFLOW_LABELS,
-  type Workflow,
 } from '../../../shared/enums.js';
-import { creatableStagesFor } from '../../../shared/validation.js';
+import { M1_CREATABLE_STAGES } from '../../../shared/validation.js';
 import { ApiRequestError, newIdempotencyKey } from '../../api/client.js';
 import { createOpportunity, fetchOpportunityOwners, fetchOrganizations } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
@@ -45,7 +42,6 @@ const BLANK = {
   fundingSource: '',
   ownerId: '',
   sectionId: '',
-  workflow: 'standard',
   stage: 'identified',
   priority: 'medium',
   expectedPublicationDate: '',
@@ -140,7 +136,6 @@ export function OpportunityCreateDialog({ open, onClose, onCreated }: Props) {
       fundingSource: draft.fundingSource || null,
       ownerId: draft.ownerId,
       sectionId: draft.sectionId,
-      workflow: draft.workflow,
       stage: draft.stage,
       priority: draft.priority,
       expectedPublicationDate: draft.expectedPublicationDate || null,
@@ -367,44 +362,11 @@ export function OpportunityCreateDialog({ open, onClose, onCreated }: Props) {
           )}
 
           <Field
-            label="Workflow"
-            htmlFor="c-workflow"
-            required
-            error={fieldErrors.workflow}
-            hint="Software Procurement follows an EOI, then an RFP. Fixed once the opportunity is created."
-          >
-            <select
-              id="c-workflow"
-              className={inputCls(fieldErrors.workflow)}
-              value={draft.workflow}
-              onChange={(event) => {
-                const workflow = event.target.value as Workflow;
-                // The stage list belongs to the workflow; keep the stage if it exists there.
-                setDraft((current) => ({
-                  ...current,
-                  workflow,
-                  stage: creatableStagesFor(workflow).includes(current.stage as never) ? current.stage : 'identified',
-                }));
-              }}
-            >
-              {WORKFLOWS.map((value) => (
-                <option key={value} value={value}>
-                  {WORKFLOW_LABELS[value]}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field
             label="Current stage"
             htmlFor="c-stage"
             required
             error={fieldErrors.stage}
-            hint={
-              draft.workflow === 'software_procurement'
-                ? 'Start at the stage the procurement has reached. Awarded and Lost are set through the stage workflow.'
-                : 'New opportunities may start directly at Tender Published. Awarded and Lost are set through the stage workflow.'
-            }
+            hint="New opportunities may start directly at Tender Published. Awarded and Lost are set through the stage workflow."
           >
             <select
               id="c-stage"
@@ -412,13 +374,15 @@ export function OpportunityCreateDialog({ open, onClose, onCreated }: Props) {
               value={draft.stage}
               onChange={(event) => set('stage', event.target.value)}
             >
-              {creatableStagesFor(draft.workflow as Workflow).map((value) => (
+              {M1_CREATABLE_STAGES.map((value) => (
                 <option key={value} value={value}>
                   {STAGE_LABELS[value]}
                 </option>
               ))}
             </select>
           </Field>
+
+          <div className="hidden sm:block" />
 
           <Field
             label="Expected tender publication"

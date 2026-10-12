@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import { AlertTriangleIcon, ExternalLinkIcon, FileTextIcon, PlusIcon } from 'lucide-react';
 
 import type { TenderDto } from '../../../shared/api.js';
-import { EOI_OUTCOME_LABELS, STAGE_LABELS, TENDER_PHASE_LABELS, type TenderPhase } from '../../../shared/enums.js';
+import { STAGE_LABELS } from '../../../shared/enums.js';
 import { ApiRequestError } from '../../api/client.js';
 import { designateCurrentTender, type fetchOpportunityTenders } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
@@ -17,7 +17,7 @@ import { formatCalendarDate, formatInstant } from '../ui/dates.js';
 import { BidStatusBadge, NoticeStateBadge, TenderIndicatorBadge, TenderLegend } from '../ui/TenderBadges.js';
 import type { useApiResource } from '../useApiResource.js';
 import { ErrorPanel, LoadingPanel } from './Feedback.js';
-import { CancelNoticeDialog, EoiOutcomeDialog, MarkSubmittedDialog, TenderFormDialog, type TenderParent } from './TenderDialogs.js';
+import { CancelNoticeDialog, MarkSubmittedDialog, TenderFormDialog, type TenderParent } from './TenderDialogs.js';
 
 export function TenderTab({
   resource,
@@ -35,7 +35,6 @@ export function TenderTab({
   const [editing, setEditing] = useState<TenderDto | null>(null);
   const [submitting, setSubmitting] = useState<TenderDto | null>(null);
   const [cancelling, setCancelling] = useState<TenderDto | null>(null);
-  const [recordingOutcome, setRecordingOutcome] = useState<TenderDto | null>(null);
 
   if (resource.loading && !resource.data) return <LoadingPanel label="Loading tenders…" />;
   if (resource.error) return <ErrorPanel error={resource.error} onRetry={resource.reload} />;
@@ -48,7 +47,6 @@ export function TenderTab({
     setEditing(null);
     setSubmitting(null);
     setCancelling(null);
-    setRecordingOutcome(null);
     onChanged();
   };
 
@@ -77,7 +75,6 @@ export function TenderTab({
           onEdit={() => setEditing(current)}
           onSubmit={() => setSubmitting(current)}
           onCancel={() => setCancelling(current)}
-          onRecordOutcome={() => setRecordingOutcome(current)}
           action={addButton}
         />
       ) : (
@@ -117,16 +114,8 @@ export function TenderTab({
                 {earlier.map((tender) => (
                   <tr key={tender.id}>
                     <td className={`${tdCls} pl-4`}>
-                      <span className="block font-semibold text-slate-900">
-                        {tender.reference}
-                        {tender.phase && <PhaseTag phase={tender.phase} />}
-                      </span>
+                      <span className="block font-semibold text-slate-900">{tender.reference}</span>
                       <span className="block text-[11.5px] text-slate-500">{tender.title}</span>
-                      {tender.eoiOutcome && (
-                        <span className="block text-[11.5px] text-slate-600">
-                          EOI outcome: {EOI_OUTCOME_LABELS[tender.eoiOutcome]} ({formatCalendarDate(tender.eoiOutcomeDate)})
-                        </span>
-                      )}
                     </td>
                     <td className={tdCls}>
                       <NoticeStateBadge state={tender.noticeState} />
@@ -163,7 +152,6 @@ export function TenderTab({
       />
       <MarkSubmittedDialog tender={submitting} onClose={() => setSubmitting(null)} onDone={done} />
       <CancelNoticeDialog tender={cancelling} onClose={() => setCancelling(null)} onDone={done} />
-      <EoiOutcomeDialog tender={recordingOutcome} onClose={() => setRecordingOutcome(null)} onDone={done} />
     </div>
   );
 }
@@ -174,7 +162,6 @@ function CurrentTender({
   onEdit,
   onSubmit,
   onCancel,
-  onRecordOutcome,
   action,
 }: {
   tender: TenderDto;
@@ -182,7 +169,6 @@ function CurrentTender({
   onEdit: () => void;
   onSubmit: () => void;
   onCancel: () => void;
-  onRecordOutcome: () => void;
   action: React.ReactNode;
 }) {
   const open = tender.bidStatus === 'reviewing' || tender.bidStatus === 'preparing';
@@ -190,10 +176,7 @@ function CurrentTender({
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[15px] font-bold text-slate-900">
-            {tender.title}
-            {tender.phase && <PhaseTag phase={tender.phase} />}
-          </p>
+          <p className="text-[15px] font-bold text-slate-900">{tender.title}</p>
           <p className="mt-0.5 text-[13px] text-slate-500">
             Ref {tender.reference} · {tender.procuringOrganization.name}
             {tender.procuringDiffersFromOpportunity && (
@@ -214,11 +197,6 @@ function CurrentTender({
               Mark Submitted
             </Button>
           )}
-          {tender.canRecordEoiOutcome && (
-            <Button variant="primary" size="sm" onClick={onRecordOutcome}>
-              Record EOI outcome
-            </Button>
-          )}
           {tender.canEdit && (
             <Button size="sm" onClick={onEdit}>
               Edit tender
@@ -235,8 +213,8 @@ function CurrentTender({
       {tender.stageMismatch && (
         <p role="status" className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
           <AlertTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
-          The bid is recorded as Submitted, but the opportunity is still at {STAGE_LABELS[tender.opportunity.stage]}, before{' '}
-          {STAGE_LABELS[tender.offeredStage]}. Change the stage when you are ready.
+          The bid is recorded as Submitted, but the opportunity is still at {STAGE_LABELS[tender.opportunity.stage]}. Change the stage
+          when you are ready.
         </p>
       )}
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
@@ -270,14 +248,5 @@ function CurrentTender({
       {tender.notes && <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">{tender.notes}</p>}
       <TenderLegend />
     </div>
-  );
-}
-
-/** CR6: which phase a Software Procurement notice is, next to its title. */
-function PhaseTag({ phase }: { phase: TenderPhase }) {
-  return (
-    <span className="ml-2 inline-flex rounded bg-slate-100 px-1.5 py-0.5 align-middle text-[11px] font-semibold text-slate-600">
-      {TENDER_PHASE_LABELS[phase].split(' ')[0]}
-    </span>
   );
 }

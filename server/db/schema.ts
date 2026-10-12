@@ -15,6 +15,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -27,19 +28,24 @@ import {
   ACTIVITY_TYPES,
   BID_STATUSES,
   DOCUMENT_CATEGORIES,
+  EOI_OUTCOMES,
   FOLLOW_UP_STATES,
-  NOTICE_STATES,
   OPPORTUNITY_STAGES,
   OPPORTUNITY_STATUSES,
   ORGANIZATION_TYPES,
+  PARTICIPATION_DECISIONS,
   PRIORITIES,
+  PROCUREMENT_DOCUMENT_ROLES,
+  PROCUREMENT_MILESTONES,
+  PROCUREMENT_ROUTES,
+  PROPOSAL_FORMATS,
   SCAN_STATES,
   SOLUTION_CATEGORIES,
-  TENDER_PHASES,
-  EOI_OUTCOMES,
+  STORED_NOTICE_STATES,
+  STORED_OPPORTUNITY_STAGES,
   USER_ROLES,
-  WORKFLOWS,
-  WORKFLOW_STAGES,
+  type NoticeState,
+  type OpportunityStage,
 } from '../../shared/enums.js';
 import { EMAIL_DELIVERY_STATUSES, EMAIL_SECURITY_MODES, EMAIL_TEMPLATE_KEYS } from '../../shared/email.js';
 import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/reporting.js';
@@ -49,7 +55,9 @@ import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/
 // ---------------------------------------------------------------------------
 
 export const userRoleEnum = pgEnum('user_role', USER_ROLES);
-export const opportunityStageEnum = pgEnum('opportunity_stage', OPPORTUNITY_STAGES);
+// The stored lists keep values retired by migration 0011 (see shared/enums.ts);
+// the columns are typed with the live lists, and CHECKs refuse the rest.
+export const opportunityStageEnum = pgEnum('opportunity_stage', STORED_OPPORTUNITY_STAGES);
 export const opportunityStatusEnum = pgEnum('opportunity_status', OPPORTUNITY_STATUSES);
 export const priorityEnum = pgEnum('priority', PRIORITIES);
 export const solutionCategoryEnum = pgEnum('solution_category', SOLUTION_CATEGORIES);
@@ -59,13 +67,16 @@ export const idempotencyStateEnum = pgEnum('idempotency_state', ['in_progress', 
 export const activityTypeEnum = pgEnum('activity_type', ACTIVITY_TYPES);
 export const accountTokenPurposeEnum = pgEnum('account_token_purpose', ['invitation', 'password_reset']);
 export const bidStatusEnum = pgEnum('bid_status', BID_STATUSES);
-export const noticeStateEnum = pgEnum('notice_state', NOTICE_STATES);
-export const opportunityWorkflowEnum = pgEnum('opportunity_workflow', WORKFLOWS);
-export const tenderPhaseEnum = pgEnum('tender_phase', TENDER_PHASES);
+export const noticeStateEnum = pgEnum('notice_state', STORED_NOTICE_STATES);
 export const eoiOutcomeEnum = pgEnum('eoi_outcome', EOI_OUTCOMES);
+export const procurementRouteEnum = pgEnum('procurement_route', PROCUREMENT_ROUTES);
+export const procurementMilestoneEnum = pgEnum('procurement_milestone', PROCUREMENT_MILESTONES);
+export const proposalFormatEnum = pgEnum('proposal_format', PROPOSAL_FORMATS);
+export const participationDecisionEnum = pgEnum('participation_decision', PARTICIPATION_DECISIONS);
+export const procurementDocumentRoleEnum = pgEnum('procurement_document_role', PROCUREMENT_DOCUMENT_ROLES);
 
-/** A SQL list of stage names, compared as text (see the stage/workflow CHECK). */
-const stageList = (stages: readonly string[]) => sql.raw(stages.map((stage) => `'${stage}'`).join(', '));
+/** A SQL list of names, for a CHECK that compares an enum as text. */
+const textList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(', '));
 export const documentCategoryEnum = pgEnum('document_category', DOCUMENT_CATEGORIES);
 export const scanStateEnum = pgEnum('scan_state', SCAN_STATES);
 export const notificationTypeEnum = pgEnum('notification_type', NOTIFICATION_TYPES);
@@ -233,9 +244,7 @@ export const opportunities = pgTable(
       .notNull()
       .references(() => sections.id, { onDelete: 'restrict' }),
     /** BR-010 / D-001: stage and status are independent from the first migration. */
-    /** CR6: fixed at creation (D-CR6-5); decides which stages the record may use. */
-    workflow: opportunityWorkflowEnum('workflow').notNull().default('standard'),
-    stage: opportunityStageEnum('stage').notNull(),
+    stage: opportunityStageEnum('stage').$type<OpportunityStage>().notNull(),
     status: opportunityStatusEnum('status').notNull().default('active'),
     priority: priorityEnum('priority').notNull().default('medium'),
     expectedPublicationDate: date('expected_publication_date'),
@@ -259,22 +268,6 @@ export const opportunities = pgTable(
     index('opportunities_section_idx').on(table.sectionId),
     index('opportunities_owner_idx').on(table.ownerId),
     index('opportunities_stage_status_idx').on(table.stage, table.status),
-    index('opportunities_workflow_idx').on(table.workflow),
-    // CR6: a record's stage is one of its workflow's stages, or Awarded/Lost.
-    // Compared as text so the check can be created in the same transaction
-    // that adds the new stage values (PostgreSQL forbids using a new enum
-    // value as a constant before that transaction commits).
-    check(
-      'opportunities_stage_in_workflow',
-      sql`${table.stage}::text IN ('awarded', 'lost') OR (${table.workflow} = 'standard' AND ${table.stage}::text IN (${stageList(
-        WORKFLOW_STAGES.standard,
-      )})) OR (${table.workflow} = 'software_procurement' AND ${table.stage}::text IN (${stageList(WORKFLOW_STAGES.software_procurement)}))`,
-    ),
-    // D-CR6-3: "Not shortlisted" belongs to the EOI step of Software Procurement.
-    check(
-      'opportunities_not_shortlisted_software_only',
-      sql`${table.lossReason} IS DISTINCT FROM 'not_shortlisted' OR ${table.workflow} = 'software_procurement'`,
-    ),
     index('opportunities_organization_idx').on(table.organizationId),
     index('opportunities_expected_award_idx').on(table.expectedAwardDate),
     index('opportunities_created_at_idx').on(table.createdAt),
@@ -303,6 +296,9 @@ export const opportunities = pgTable(
       'opportunities_loss_reason_preset',
       sql`${table.lossReason} IS NULL OR ${table.lossReason} IN ('price', 'technical_eligibility', 'competitor_selected', 'budget_unavailable', 'no_bid', 'not_shortlisted', 'other')`,
     ),
+    // Migration 0011: only the pipeline's own stages; the Software Procurement
+    // stages 0010 added are retired (compared as text: see textList).
+    check('opportunities_stage_live', sql`${table.stage}::text IN (${textList(OPPORTUNITY_STAGES)})`),
     check(
       'opportunities_loss_other_explained',
       sql`${table.lossReason} IS DISTINCT FROM 'other' OR ${table.lossNote} IS NOT NULL`,
@@ -593,12 +589,7 @@ export const tenders = pgTable(
     participationReason: text('participation_reason'),
     lateSubmissionNote: text('late_submission_note'),
     isCurrent: boolean('is_current').notNull(),
-    noticeState: noticeStateEnum('notice_state').notNull(),
-    /** CR6: EOI or RFP on a Software Procurement record; null on a standard one (checked by the service). */
-    phase: tenderPhaseEnum('phase'),
-    /** CR6: the result of an EOI, recorded once; it closes the notice (D-CR6-6). */
-    eoiOutcome: eoiOutcomeEnum('eoi_outcome'),
-    eoiOutcomeDate: date('eoi_outcome_date'),
+    noticeState: noticeStateEnum('notice_state').$type<NoticeState>().notNull(),
     notes: text('notes'),
     createdBy: uuid('created_by')
       .notNull()
@@ -619,13 +610,9 @@ export const tenders = pgTable(
     check('tenders_reference_length', sql`char_length(${table.reference}) BETWEEN 1 AND 200`),
     check('tenders_notice_url_http', sql`${table.noticeUrl} IS NULL OR ${table.noticeUrl} ~* '^https?://'`),
     check('tenders_current_is_current_notice', sql`${table.isCurrent} = (${table.noticeState} = 'current')`),
-    // CR6: an outcome only on an EOI, always with its date; a closed notice
-    // is an EOI whose outcome is recorded (the state is compared as text:
-    // see opportunities_stage_in_workflow).
-    check('tenders_eoi_outcome_on_eoi', sql`${table.eoiOutcome} IS NULL OR ${table.phase} = 'eoi'`),
-    check('tenders_eoi_outcome_dated', sql`(${table.eoiOutcome} IS NULL) = (${table.eoiOutcomeDate} IS NULL)`),
-    check('tenders_closed_has_outcome', sql`${table.noticeState}::text <> 'closed' OR ${table.eoiOutcome} IS NOT NULL`),
     // FR-051: Submitted always has a time, and nothing else does.
+    // Migration 0011: the `closed` state 0010 added for EOI notices is retired.
+    check('tenders_notice_state_live', sql`${table.noticeState}::text <> 'closed'`),
     check(
       'tenders_submitted_has_time',
       sql`(${table.bidStatus} = 'submitted') = (${table.submittedAt} IS NOT NULL)`,
@@ -795,6 +782,218 @@ export const accountTokens = pgTable(
   (table) => [
     uniqueIndex('account_tokens_hash_unique').on(table.tokenHash),
     index('account_tokens_user_idx').on(table.userId, table.purpose),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Software Procurement cycles: EOI then RFP (CR6, migration 0011)
+// ---------------------------------------------------------------------------
+
+const RFP_PHASE = PROCUREMENT_MILESTONES.filter((milestone) =>
+  ['rfp_received', 'proposal_preparation', 'proposal_submitted', 'evaluation', 'awarded', 'unsuccessful'].includes(milestone),
+);
+const PROPOSAL_IN = ['proposal_submitted', 'evaluation', 'awarded', 'unsuccessful'] as const;
+const EOI_PHASE = ['eoi_preparation', 'eoi_submitted', 'shortlisted', 'not_shortlisted'] as const;
+const ENDINGS = ['not_shortlisted', 'awarded', 'unsuccessful', 'cancelled'] as const;
+
+/**
+ * One procurement cycle of an opportunity, separate from goods tenders and
+ * from the opportunity pipeline. It belongs to the opportunity, so its owner,
+ * section, access and documents are the opportunity's. At most one cycle per
+ * opportunity is current; earlier ones stay as history. The CHECKs make the
+ * milestone's required fields, the direct-RFP exception and late
+ * submissions unrepresentable when wrong; the order of milestones is the
+ * service's (services/procurement.ts).
+ */
+export const procurementCycles = pgTable(
+  'procurement_cycles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    opportunityId: uuid('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'restrict' }),
+    procuringOrganizationId: uuid('procuring_organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    title: text('title').notNull(),
+    /** The procurement's own reference (the EOI's, or the RFP's on a direct RFP). */
+    reference: text('reference').notNull(),
+    route: procurementRouteEnum('route').notNull(),
+    milestone: procurementMilestoneEnum('milestone').notNull(),
+    isCurrent: boolean('is_current').notNull(),
+    submissionMethod: text('submission_method'),
+    participation: participationDecisionEnum('participation').notNull().default('undecided'),
+    participationReason: text('participation_reason'),
+    // EOI
+    eoiPublicationDate: date('eoi_publication_date'),
+    eoiDeadline: timestamp('eoi_deadline', { withTimezone: true }),
+    eoiSubmittedAt: timestamp('eoi_submitted_at', { withTimezone: true }),
+    eoiLateNote: text('eoi_late_note'),
+    eoiOutcome: eoiOutcomeEnum('eoi_outcome'),
+    eoiOutcomeDate: date('eoi_outcome_date'),
+    // RFP
+    rfpReference: text('rfp_reference'),
+    rfpInvitationDate: date('rfp_invitation_date'),
+    clarificationDeadline: timestamp('clarification_deadline', { withTimezone: true }),
+    proposalDeadline: timestamp('proposal_deadline', { withTimezone: true }),
+    proposalFormat: proposalFormatEnum('proposal_format').notNull().default('single'),
+    proposalSubmittedAt: timestamp('proposal_submitted_at', { withTimezone: true }),
+    technicalSubmittedAt: timestamp('technical_submitted_at', { withTimezone: true }),
+    financialSubmittedAt: timestamp('financial_submitted_at', { withTimezone: true }),
+    proposalLateNote: text('proposal_late_note'),
+    // The management-only exception: an RFP without an EOI.
+    directRfpReason: text('direct_rfp_reason'),
+    directRfpApprovedBy: uuid('direct_rfp_approved_by').references(() => users.id, { onDelete: 'restrict' }),
+    // The ending
+    outcomeDate: date('outcome_date'),
+    outcomeNote: text('outcome_note'),
+    notes: text('notes'),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    uniqueIndex('procurement_cycles_one_current_per_opportunity')
+      .on(table.opportunityId)
+      .where(sql`${table.isCurrent}`),
+    index('procurement_cycles_opportunity_idx').on(table.opportunityId),
+    index('procurement_cycles_milestone_idx').on(table.milestone),
+    index('procurement_cycles_eoi_deadline_idx').on(table.eoiDeadline),
+    index('procurement_cycles_proposal_deadline_idx').on(table.proposalDeadline),
+    index('procurement_cycles_procuring_organization_idx').on(table.procuringOrganizationId),
+    check('procurement_cycles_title_length', sql`char_length(${table.title}) BETWEEN 3 AND 200`),
+    check('procurement_cycles_reference_length', sql`char_length(${table.reference}) BETWEEN 1 AND 200`),
+    check(
+      'procurement_cycles_rfp_reference_length',
+      sql`${table.rfpReference} IS NULL OR char_length(${table.rfpReference}) BETWEEN 1 AND 200`,
+    ),
+    check(
+      'procurement_cycles_submission_method_length',
+      sql`${table.submissionMethod} IS NULL OR char_length(${table.submissionMethod}) BETWEEN 1 AND 100`,
+    ),
+    // The direct-RFP exception is documented and approved by management, and
+    // never carries an EOI: none is invented to satisfy it.
+    check(
+      'procurement_cycles_direct_rfp_documented',
+      sql`${table.route} <> 'direct_rfp' OR (${table.directRfpReason} IS NOT NULL AND ${table.directRfpApprovedBy} IS NOT NULL
+        AND ${table.eoiPublicationDate} IS NULL AND ${table.eoiDeadline} IS NULL AND ${table.eoiSubmittedAt} IS NULL
+        AND ${table.eoiOutcome} IS NULL AND ${table.milestone}::text NOT IN (${textList(EOI_PHASE)}))`,
+    ),
+    check(
+      'procurement_cycles_exception_only_on_direct_rfp',
+      sql`${table.route} = 'direct_rfp' OR (${table.directRfpReason} IS NULL AND ${table.directRfpApprovedBy} IS NULL)`,
+    ),
+    // EOI: submitted before any later milestone (unless cancelled during
+    // preparation); an outcome only on a submitted EOI, always dated; the RFP
+    // only after shortlisting.
+    check(
+      'procurement_cycles_eoi_submitted_when_due',
+      sql`${table.route} = 'direct_rfp' OR ${table.milestone}::text IN ('eoi_preparation', 'cancelled') OR ${table.eoiSubmittedAt} IS NOT NULL`,
+    ),
+    check(
+      'procurement_cycles_eoi_outcome_dated',
+      sql`(${table.eoiOutcome} IS NULL) = (${table.eoiOutcomeDate} IS NULL) AND (${table.eoiOutcome} IS NULL OR ${table.eoiSubmittedAt} IS NOT NULL)`,
+    ),
+    check(
+      'procurement_cycles_shortlist_milestones',
+      sql`(${table.milestone} <> 'shortlisted' OR ${table.eoiOutcome} = 'shortlisted') AND (${table.milestone} <> 'not_shortlisted' OR ${table.eoiOutcome} = 'not_shortlisted')`,
+    ),
+    check(
+      'procurement_cycles_rfp_after_shortlisting',
+      sql`${table.route} = 'direct_rfp' OR ${table.milestone}::text NOT IN (${textList(RFP_PHASE)}) OR ${table.eoiOutcome} = 'shortlisted'`,
+    ),
+    // RFP: its reference, invitation date and proposal deadline from the
+    // moment it is received; the proposal (or both its parts) once submitted.
+    check(
+      'procurement_cycles_rfp_recorded',
+      sql`${table.milestone}::text NOT IN (${textList(RFP_PHASE)}) OR (${table.rfpReference} IS NOT NULL AND ${table.rfpInvitationDate} IS NOT NULL AND ${table.proposalDeadline} IS NOT NULL)`,
+    ),
+    check(
+      'procurement_cycles_proposal_parts',
+      sql`(${table.proposalFormat} = 'single' AND ${table.technicalSubmittedAt} IS NULL AND ${table.financialSubmittedAt} IS NULL)
+        OR (${table.proposalFormat} = 'separate' AND ${table.proposalSubmittedAt} IS NULL)`,
+    ),
+    check(
+      'procurement_cycles_proposal_submitted_when_due',
+      sql`${table.milestone}::text NOT IN (${textList(PROPOSAL_IN)}) OR ${table.proposalSubmittedAt} IS NOT NULL
+        OR (${table.technicalSubmittedAt} IS NOT NULL AND ${table.financialSubmittedAt} IS NOT NULL)`,
+    ),
+    check(
+      'procurement_cycles_clarification_before_proposal',
+      sql`${table.clarificationDeadline} IS NULL OR ${table.proposalDeadline} IS NULL OR ${table.clarificationDeadline} <= ${table.proposalDeadline}`,
+    ),
+    // Late submissions are recorded as late, never hidden by moving a deadline.
+    check(
+      'procurement_cycles_late_eoi_explained',
+      sql`${table.eoiSubmittedAt} IS NULL OR ${table.eoiDeadline} IS NULL OR ${table.eoiSubmittedAt} <= ${table.eoiDeadline} OR ${table.eoiLateNote} IS NOT NULL`,
+    ),
+    check(
+      'procurement_cycles_late_proposal_explained',
+      sql`${table.proposalDeadline} IS NULL OR ${table.proposalLateNote} IS NOT NULL OR (
+        COALESCE(${table.proposalSubmittedAt}, '-infinity') <= ${table.proposalDeadline}
+        AND COALESCE(${table.technicalSubmittedAt}, '-infinity') <= ${table.proposalDeadline}
+        AND COALESCE(${table.financialSubmittedAt}, '-infinity') <= ${table.proposalDeadline})`,
+    ),
+    check(
+      'procurement_cycles_not_participating_reason',
+      sql`${table.participation} <> 'not_participating' OR ${table.participationReason} IS NOT NULL`,
+    ),
+    // An ending is dated; a cancellation says why.
+    check(
+      'procurement_cycles_ending_dated',
+      sql`${table.milestone}::text NOT IN (${textList(ENDINGS)}) OR ${table.outcomeDate} IS NOT NULL`,
+    ),
+    check(
+      'procurement_cycles_cancellation_explained',
+      sql`${table.milestone} <> 'cancelled' OR ${table.outcomeNote} IS NOT NULL`,
+    ),
+  ],
+);
+
+/** People relevant to a cycle: contacts already linked to its opportunity. */
+export const procurementCycleContacts = pgTable(
+  'procurement_cycle_contacts',
+  {
+    cycleId: uuid('cycle_id')
+      .notNull()
+      .references(() => procurementCycles.id, { onDelete: 'restrict' }),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => contacts.id, { onDelete: 'restrict' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.cycleId, table.contactId] }), index('procurement_cycle_contacts_contact_idx').on(table.contactId)],
+);
+
+/**
+ * The cycle's EOI, shortlist, RFP, proposal and decision documents: links to
+ * the opportunity's own protected documents, which keep their storage,
+ * scanning, revisions and access unchanged.
+ */
+export const procurementCycleDocuments = pgTable(
+  'procurement_cycle_documents',
+  {
+    cycleId: uuid('cycle_id')
+      .notNull()
+      .references(() => procurementCycles.id, { onDelete: 'restrict' }),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'restrict' }),
+    role: procurementDocumentRoleEnum('role').notNull(),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.cycleId, table.documentId] }),
+    index('procurement_cycle_documents_document_idx').on(table.documentId),
   ],
 );
 

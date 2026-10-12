@@ -22,14 +22,13 @@ import {
 
 import type { ActivityDto, FollowUpDto, HistoryEntryDto, OpportunityDetailDto } from '../../../shared/api.js';
 import {
+  BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
   LOSS_REASON_LABELS,
   SOLUTION_CATEGORY_LABELS,
   STAGE_LABELS,
-  WORKFLOW_LABELS,
   STATUS_LABELS,
   boardLane,
-  boardLanesFor,
   boardLaneTitle,
   isTerminalStage,
   type BoardLane,
@@ -44,6 +43,7 @@ import {
   fetchOpportunityFollowUps,
   fetchOpportunityHistory,
   fetchOpportunityTenders,
+  fetchOpportunityProcurement,
 } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/Feedback';
@@ -65,6 +65,7 @@ import { ActivityTimeline } from '../components/ActivityTimeline.js';
 import { ContactsTab } from '../components/OpportunityContactsTab.js';
 import { DocumentsTab } from '../components/OpportunityDocumentsTab.js';
 import { TenderTab } from '../components/OpportunityTenderTab.js';
+import { ProcurementTab } from '../components/OpportunityProcurementTab.js';
 import { TransitionDialog } from '../components/TransitionDialog.js';
 import {
   needsTransitionDialog,
@@ -75,7 +76,7 @@ import {
 import { DueTag, PriorityBadge, RetainedStageNote, StageBadge } from '../ui/ApiBadges.js';
 import { dhakaToday, formatCalendarDate, formatInstant } from '../ui/dates.js';
 
-type TabId = 'overview' | 'contacts' | 'activities' | 'tender' | 'documents' | 'history';
+type TabId = 'overview' | 'contacts' | 'activities' | 'tender' | 'procurement' | 'documents' | 'history';
 
 const ACTION_LABELS: Record<string, string> = {
   'opportunity.created': 'Opportunity created',
@@ -100,6 +101,14 @@ const ACTION_LABELS: Record<string, string> = {
   'tender.superseded': 'Tender notice superseded',
   'tender.designated_current': 'Tender made current',
   'tender.cancelled': 'Tender notice cancelled',
+  'procurement.created': 'Software procurement cycle added',
+  'procurement.updated': 'Software procurement cycle updated',
+  'procurement.milestone_changed': 'Procurement milestone changed',
+  'procurement.superseded': 'Procurement cycle replaced',
+  'procurement.contact_linked': 'Contact linked to procurement cycle',
+  'procurement.contact_unlinked': 'Contact unlinked from procurement cycle',
+  'procurement.document_linked': 'Document linked to procurement cycle',
+  'procurement.document_unlinked': 'Document unlinked from procurement cycle',
   'document.uploaded': 'Document uploaded',
   'document.revised': 'Document revision uploaded',
   'document.scanned': 'Document scanned',
@@ -172,6 +181,10 @@ export function OpportunityDetailPage() {
     useCallback((signal: AbortSignal) => fetchOpportunityTenders(id, signal), [id]),
     [id],
   );
+  const procurement = useApiResource(
+    useCallback((signal: AbortSignal) => fetchOpportunityProcurement(id, signal), [id]),
+    [id],
+  );
   const [showArchived, setShowArchived] = useState(false);
   const documents = useApiResource(
     useCallback((signal: AbortSignal) => fetchOpportunityDocuments(id, showArchived, signal), [id, showArchived]),
@@ -189,6 +202,7 @@ export function OpportunityDetailPage() {
     contacts.reload();
     activities.reload();
     tenders.reload();
+    procurement.reload();
     documents.reload();
   };
 
@@ -329,7 +343,7 @@ export function OpportunityDetailPage() {
                 aria-label="Change stage"
               >
                 <option value="">{moving ? 'Saving…' : 'Change Stage…'}</option>
-                {boardLanesFor(opportunity.workflow).filter((lane) => lane !== currentLane).map((lane) => (
+                {BOARD_LANES.filter((lane) => lane !== currentLane).map((lane) => (
                   <option key={lane} value={lane}>
                     {boardLaneTitle(lane)}
                   </option>
@@ -391,6 +405,7 @@ export function OpportunityDetailPage() {
               { id: 'contacts', label: 'Contacts', count: contacts.data?.items.length },
               { id: 'activities', label: 'Activities', count: activities.data?.total },
               { id: 'tender', label: 'Tender', count: tenders.data?.items.length },
+              { id: 'procurement', label: 'Software Procurement', count: procurement.data?.items.length },
               { id: 'documents', label: 'Documents', count: documents.data?.items.length },
               { id: 'history', label: 'Change History', count: history.data?.total },
             ]}
@@ -457,7 +472,23 @@ export function OpportunityDetailPage() {
                 organizationId: opportunity.organization.id,
                 organizationName: opportunity.organization.name,
                 ownerName: opportunity.ownerName,
-                workflow: opportunity.workflow,
+              }}
+              onChanged={reloadAll}
+            />
+          )}
+
+          {tab === 'procurement' && (
+            <ProcurementTab
+              resource={procurement}
+              closed={closed}
+              contacts={contacts.data?.items ?? []}
+              documents={documents.data?.items ?? []}
+              parent={{
+                id: opportunity.id,
+                name: opportunity.name,
+                organizationId: opportunity.organization.id,
+                organizationName: opportunity.organization.name,
+                ownerName: opportunity.ownerName,
               }}
               onChanged={reloadAll}
             />
@@ -566,7 +597,6 @@ function OverviewTab({ opportunity, today }: { opportunity: OpportunityDetailDto
       <DetailItem label="Procuring organization">{opportunity.organization.name}</DetailItem>
       <DetailItem label="Department / office">{opportunity.department}</DetailItem>
       <DetailItem label="Solution category">{SOLUTION_CATEGORY_LABELS[opportunity.solutionCategory]}</DetailItem>
-      <DetailItem label="Workflow">{WORKFLOW_LABELS[opportunity.workflow]}</DetailItem>
       <DetailItem label="Pipeline stage">{STAGE_LABELS[opportunity.stage]}</DetailItem>
       <DetailItem label="Status">{STATUS_LABELS[opportunity.status]}</DetailItem>
       <DetailItem label="Funding source">{opportunity.fundingSource}</DetailItem>

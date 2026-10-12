@@ -270,6 +270,22 @@ export function canManageTenders(actor: Actor): boolean {
 }
 
 /**
+ * CR6: a Software Procurement cycle belongs to its opportunity, so whoever may
+ * work on the opportunity's tenders may work on its cycles, within scope.
+ */
+export function canManageProcurement(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/**
+ * CR6: only management may record the documented exception of an RFP
+ * invitation without an EOI (the "direct RFP" route).
+ */
+export function canApproveDirectRfp(actor: Actor): boolean {
+  return actor.role === 'management';
+}
+
+/**
  * FR-060, FR-061: a user may upload a document or a revision only while
  * authorized to edit the parent opportunity. The opportunity is still located
  * through `opportunityScope` on every upload, finalize, read and download.

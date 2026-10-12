@@ -15,9 +15,11 @@ import type { ReportDto, ReportRowDto, ReportSummaryItemDto } from '../../shared
 import {
   BID_STATUS_LABELS,
   BOARD_LANES,
-  SOFTWARE_ONLY_STAGES,
   LOSS_REASON_LABELS,
   PRIORITY_LABELS,
+  PROCUREMENT_INDICATOR_LABELS,
+  PROCUREMENT_MILESTONE_LABELS,
+  PROCUREMENT_ROUTE_LABELS,
   STAGE_LABELS,
   STATUS_LABELS,
   TENDER_DUE_SOON_HOURS,
@@ -36,7 +38,7 @@ import {
 import type { reportFiltersSchema } from '../../shared/validation.js';
 import { dhakaDateOf, now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { followUps, opportunities, organizations, sections, tenders, users } from '../db/schema.js';
+import { followUps, opportunities, organizations, procurementCycles, sections, tenders, users } from '../db/schema.js';
 import { validationFailed } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { scopedWhere } from '../policy/scope.js';
@@ -51,7 +53,13 @@ import {
   sumMoney,
   tenderDeadlineDate,
   tenderDueWithin,
+  procurementDeadlineDate,
+  procurementDueWithin,
+  procurementOpenDeadline,
+  procurementOverdue,
+  workingProcurementCycle,
 } from './metrics.js';
+import { procurementIndicator } from './procurement.js';
 import { tenderIndicator } from './tenders.js';
 
 export type ReportFilters = z.output<typeof reportFiltersSchema>;
@@ -150,14 +158,8 @@ const pipelineReport: ReportSpec = {
       .from(opportunities)
       .where(where)
       .groupBy(laneExpression);
-    // Every lane is listed, empty ones included, in board order. CR6: the
-    // Software Procurement stages only when such records are in the report.
-    const [software] = await context.db
-      .select({ present: sql<boolean>`count(*) > 0` })
-      .from(opportunities)
-      .where(and(where, eq(opportunities.workflow, 'software_procurement')));
-    const lanes = BOARD_LANES.filter((lane) => software?.present || !(SOFTWARE_ONLY_STAGES as readonly string[]).includes(lane));
-    const all = lanes.map((lane, index) => {
+    // Every lane is listed, empty ones included, in board order.
+    const all = BOARD_LANES.map((lane, index) => {
       const row = grouped.find((candidate) => candidate.lane === lane);
       return {
         index,
@@ -654,6 +656,111 @@ const lostReasonsReport: ReportSpec = {
 
 // ---------------------------------------------------------------------------
 // Engine
+
+// ---------------------------------------------------------------------------
+// Software procurement deadlines (CR6; open EOI or proposal deadline)
+// ---------------------------------------------------------------------------
+
+/** Working cycles with an open deadline, overdue included: kept apart from goods tenders. */
+function procurementWhere(context: ReportContext): SQL {
+  return opportunityWhere(
+    context,
+    workingProcurementCycle(),
+    sql`${procurementOpenDeadline} IS NOT NULL`,
+    dateWithin(procurementDeadlineDate, context.filters.from, context.filters.to),
+  );
+}
+
+const procurementReport: ReportSpec = {
+  key: 'procurement_deadlines',
+  columns: [
+    { key: 'reference', label: 'Reference', kind: 'text', sort: sql`${procurementCycles.reference}` },
+    { key: 'cycle', label: 'Procurement', kind: 'text', sort: sql`${procurementCycles.title}` },
+    { key: 'opportunity', label: 'Opportunity', kind: 'text', sort: sql`${opportunities.name}` },
+    { key: 'owner', label: 'Responsible owner', kind: 'text', sort: sql`${owner.fullName}` },
+    { key: 'section', label: 'Section', kind: 'text', sort: sql`${sections.name}` },
+    { key: 'route', label: 'Route', kind: 'text', sort: sql`${procurementCycles.route}` },
+    { key: 'milestone', label: 'Milestone', kind: 'text', sort: sql`${procurementCycles.milestone}` },
+    { key: 'deadline', label: 'Open deadline', kind: 'instant', sort: procurementOpenDeadline },
+    { key: 'indicator', label: 'Deadline indicator', kind: 'text', sort: procurementOpenDeadline },
+  ],
+  defaultSort: 'deadline',
+  defaultDir: 'asc',
+  async rows(context, order, limit, offset) {
+    const where = procurementWhere(context);
+    const query = context.db
+      .select({
+        opportunityId: opportunities.id,
+        cycle: procurementCycles,
+        opportunity: opportunities.name,
+        opportunityStage: opportunities.stage,
+        opportunityStatus: opportunities.status,
+        owner: owner.fullName,
+        section: sections.name,
+      })
+      .from(procurementCycles)
+      .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+      .innerJoin(owner, eq(owner.id, opportunities.ownerId))
+      .innerJoin(sections, eq(sections.id, opportunities.sectionId))
+      .where(where)
+      .orderBy(...order.sql, sql`${procurementOpenDeadline} ASC`, asc(procurementCycles.id));
+    const rows = limit === undefined ? await query : await query.limit(limit).offset(offset);
+    const [total] = await context.db
+      .select({ value: sql<number>`count(*)::int` })
+      .from(procurementCycles)
+      .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+      .where(where);
+    return {
+      rows: rows.map((row) => {
+        const deadline =
+          row.cycle.milestone === 'eoi_preparation' ? row.cycle.eoiDeadline : row.cycle.proposalDeadline;
+        return {
+          opportunityId: row.opportunityId,
+          cells: {
+            reference: row.cycle.reference,
+            cycle: row.cycle.title,
+            opportunity: row.opportunity,
+            owner: row.owner,
+            section: row.section,
+            route: PROCUREMENT_ROUTE_LABELS[row.cycle.route],
+            milestone: PROCUREMENT_MILESTONE_LABELS[row.cycle.milestone],
+            deadline: deadline?.toISOString() ?? null,
+            indicator: PROCUREMENT_INDICATOR_LABELS[procurementIndicator(row, context.at)],
+          },
+        };
+      }),
+      total: total?.value ?? 0,
+    };
+  },
+  async summary(context) {
+    const [row] = await context.db
+      .select({
+        total: sql<number>`count(*)::int`,
+        overdue: sql<number>`count(*) FILTER (WHERE ${procurementOverdue(context.at)})::int`,
+        dueSoon: sql<number>`count(*) FILTER (WHERE ${procurementDueWithin(context.at, TENDER_DUE_SOON_HOURS)})::int`,
+        dueWeek: sql<number>`count(*) FILTER (WHERE ${procurementDueWithin(context.at, SEVEN_DAYS_HOURS)})::int`,
+      })
+      .from(procurementCycles)
+      .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+      .where(procurementWhere(context));
+    return [
+      { label: 'Open deadlines', value: count(row?.total ?? 0), kind: 'count' },
+      { label: 'Overdue', value: count(row?.overdue ?? 0), kind: 'count' },
+      { label: 'Due within 72 hours', value: count(row?.dueSoon ?? 0), kind: 'count' },
+      { label: 'Due within 7 days', value: count(row?.dueWeek ?? 0), kind: 'count' },
+    ];
+  },
+  coveredOpportunityIds(context) {
+    return idsOf(
+      context.db
+        .select({ id: opportunities.id })
+        .from(procurementCycles)
+        .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+        .where(procurementWhere(context)),
+    );
+  },
+};
+
 // ---------------------------------------------------------------------------
 
 const SPECS: Record<ReportKey, ReportSpec> = {
@@ -663,6 +770,7 @@ const SPECS: Record<ReportKey, ReportSpec> = {
   upcoming_tenders: tenderReport,
   outcomes: outcomesReport,
   lost_reasons: lostReasonsReport,
+  procurement_deadlines: procurementReport,
 };
 
 export function reportColumns(key: ReportKey): ReportColumn[] {

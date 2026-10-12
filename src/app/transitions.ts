@@ -20,7 +20,7 @@ export type TransitionRequest =
 
 export type TransitionSubject = Pick<
   OpportunityListItemDto,
-  'id' | 'name' | 'workflow' | 'stage' | 'status' | 'version' | 'estimatedValue' | 'nextAction'
+  'id' | 'name' | 'stage' | 'status' | 'version' | 'estimatedValue' | 'nextAction'
 >;
 
 /**
@@ -30,7 +30,7 @@ export type TransitionSubject = Pick<
 export function needsTransitionDialog(subject: TransitionSubject, request: TransitionRequest): boolean {
   if (request.kind !== 'stage') return true;
   if (subject.status !== 'active' || isTerminalStage(subject.stage)) return true;
-  return classifyStageMove(subject.stage, request.target, subject.workflow) !== 'forward' || !subject.nextAction;
+  return classifyStageMove(subject.stage, request.target) !== 'forward' || !subject.nextAction;
 }
 
 /**

@@ -15,19 +15,7 @@ import { toast } from 'sonner';
 import { SearchIcon } from 'lucide-react';
 
 import type { TenderDto } from '../../../shared/api.js';
-import {
-  BID_STATUS_LABELS,
-  BUSINESS_TIME_LABEL,
-  EOI_OUTCOME_LABELS,
-  STAGE_LABELS,
-  TENDER_PHASES,
-  TENDER_PHASE_LABELS,
-  type BidStatus,
-  type EoiOutcome,
-  type TenderPhase,
-  type Workflow,
-} from '../../../shared/enums.js';
-import { dhakaToday } from '../ui/dates.js';
+import { BID_STATUS_LABELS, BUSINESS_TIME_LABEL, STAGE_LABELS, type BidStatus } from '../../../shared/enums.js';
 import { EDITABLE_BID_STATUSES } from '../../../shared/validation.js';
 import {
   cancelTenderNotice,
@@ -36,7 +24,6 @@ import {
   fetchOrganizations,
   submitTender,
   updateTender,
-  recordEoiOutcome,
 } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { Field, FormSection, inputCls } from '../../components/ui/FormFields';
@@ -63,11 +50,9 @@ export interface TenderParent {
   organizationId: string;
   organizationName: string;
   ownerName: string;
-  /** CR6: a Software Procurement notice needs its phase. */
-  workflow: Workflow;
 }
 
-function OrganizationSelect({
+export function OrganizationSelect({
   value,
   selectedName,
   onChange,
@@ -158,7 +143,6 @@ export function TenderFormDialog({
   const [bidStatus, setBidStatus] = useState<BidStatus>('reviewing');
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
-  const [phase, setPhase] = useState<TenderPhase | ''>('');
 
   useEffect(() => {
     if (!open) return;
@@ -177,7 +161,6 @@ export function TenderFormDialog({
     setBidStatus(tender?.bidStatus ?? 'reviewing');
     setReason(tender?.participationReason ?? '');
     setNotes(tender?.notes ?? '');
-    setPhase(tender?.phase ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tender?.id, fixedParent?.id]);
 
@@ -196,7 +179,6 @@ export function TenderFormDialog({
         organizationId: detail.organization.id,
         organizationName: detail.organization.name,
         ownerName: detail.ownerName,
-        workflow: detail.workflow,
       };
       setParent(next);
       setTitle((current) => current || detail.name);
@@ -227,8 +209,6 @@ export function TenderFormDialog({
       participationReason: bidStatus === 'not_participating' ? reason : null,
       notes: notes || null,
     };
-    // CR6: the phase is chosen once, when the notice is added.
-    if (!tender && parent?.workflow === 'software_procurement' && phase) body.phase = phase;
     // A recorded submission is not changed from this form.
     if (!tender || tender.bidStatus !== 'submitted') body.bidStatus = bidStatus;
     const result = await submission.run((key) =>
@@ -273,28 +253,6 @@ export function TenderFormDialog({
         )}
         <FormSection title="Tender">
           {!tender && !fixedParent && <OpportunityPicker value={opportunityId} onChange={(id) => void pick(id)} />}
-          {!tender && parent?.workflow === 'software_procurement' && (
-            <Field
-              label="Phase"
-              htmlFor="t-phase"
-              required
-              error={errors.phase}
-              hint="Software Procurement: the EOI comes first; the RFP follows once the EOI is recorded Shortlisted."
-              className="sm:col-span-2"
-            >
-              <select id="t-phase" className={inputCls(errors.phase)} value={phase} onChange={(event) => setPhase(event.target.value as TenderPhase)}>
-                <option value="">Select the phase…</option>
-                {TENDER_PHASES.map((value) => (
-                  <option key={value} value={value}>
-                    {TENDER_PHASE_LABELS[value]}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          )}
-          {tender?.phase && (
-            <p className="text-[13px] text-slate-600 sm:col-span-2">Phase: {TENDER_PHASE_LABELS[tender.phase]}</p>
-          )}
           <Field label="Tender title" htmlFor="t-title" required error={errors.title} className="sm:col-span-2">
             <input id="t-title" className={inputCls(errors.title)} value={title} onChange={(event) => setTitle(event.target.value)} />
           </Field>
@@ -419,14 +377,12 @@ export function MarkSubmittedDialog({
   if (!tender) return null;
   const offer = tender.canOfferBidSubmittedStage;
   const stageLabel = STAGE_LABELS[tender.opportunity.stage];
-  // Bid Submitted, or EOI / Proposal Submitted for Software Procurement (CR6).
-  const offeredLabel = STAGE_LABELS[tender.offeredStage];
   const late = at !== '' && new Date(fromDhakaInput(at)) > new Date(tender.submissionDeadline);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (offer && !choice) {
-      setChoiceError(`Choose whether to move the opportunity to ${offeredLabel}.`);
+      setChoiceError('Choose whether to move the opportunity to Bid Submitted.');
       return;
     }
     const result = await submission.run((key) =>
@@ -444,7 +400,7 @@ export function MarkSubmittedDialog({
     if (result) {
       toast.success('Bid marked as Submitted', {
         description: result.stageChanged
-          ? `${tender.reference} — the opportunity moved to ${offeredLabel}.`
+          ? `${tender.reference} — the opportunity moved to Bid Submitted.`
           : `${tender.reference} — the opportunity stage was not changed.`,
       });
       onDone();
@@ -488,11 +444,11 @@ export function MarkSubmittedDialog({
         {offer ? (
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-1 text-[13px] font-semibold text-slate-700">
-              The opportunity is at {stageLabel}. Move it to {offeredLabel}? <span className="text-red-600">*</span>
+              The opportunity is at {stageLabel}. Move it to Bid Submitted? <span className="text-red-600">*</span>
             </legend>
             <label className="flex items-start gap-2 text-[13px] text-slate-700">
               <input type="radio" name="stage-choice" className="mt-0.5" checked={choice === 'move'} onChange={() => { setChoice('move'); setChoiceError(''); }} />
-              Yes, move the opportunity to {offeredLabel}
+              Yes, move the opportunity to Bid Submitted
             </label>
             <label className="flex items-start gap-2 text-[13px] text-slate-700">
               <input type="radio" name="stage-choice" className="mt-0.5" checked={choice === 'keep'} onChange={() => { setChoice('keep'); setChoiceError(''); }} />
@@ -507,154 +463,6 @@ export function MarkSubmittedDialog({
             The opportunity stays at {stageLabel}
             {tender.opportunity.status !== 'active' ? ' because it is not Active' : ''}. Marking the bid Submitted never marks it Awarded.
           </p>
-        )}
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// EOI outcome (CR6, D-CR6-3, D-CR6-6)
-// ---------------------------------------------------------------------------
-
-export function EoiOutcomeDialog({
-  tender,
-  onClose,
-  onDone,
-}: {
-  tender: TenderDto | null;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const submission = useSubmission();
-  const errors = submission.fieldErrors;
-  const [outcome, setOutcome] = useState<EoiOutcome | ''>('');
-  const [date, setDate] = useState('');
-  const [choice, setChoice] = useState<'update' | 'keep' | ''>('');
-  const [lossNote, setLossNote] = useState('');
-  const [choiceError, setChoiceError] = useState('');
-
-  useEffect(() => {
-    if (!tender) return;
-    submission.reset();
-    setOutcome('');
-    setDate(dhakaToday());
-    setChoice('');
-    setLossNote('');
-    setChoiceError('');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tender?.id]);
-
-  if (!tender) return null;
-  const stageLabel = STAGE_LABELS[tender.opportunity.stage];
-  const canUpdate = tender.opportunity.status === 'active';
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!outcome) {
-      setChoiceError('Choose the outcome.');
-      return;
-    }
-    if (canUpdate && !choice) {
-      setChoiceError('Choose whether to update the opportunity too.');
-      return;
-    }
-    const result = await submission.run((key) =>
-      recordEoiOutcome(
-        tender.id,
-        {
-          version: tender.version,
-          outcome,
-          outcomeDate: date,
-          updateOpportunity: canUpdate && choice === 'update',
-          lossNote: outcome === 'not_shortlisted' && choice === 'update' && lossNote ? lossNote : null,
-        },
-        key,
-      ),
-    );
-    if (result) {
-      toast.success(`EOI recorded as ${EOI_OUTCOME_LABELS[outcome]}`, {
-        description: result.stageChanged
-          ? outcome === 'shortlisted'
-            ? `${tender.reference} — the opportunity moved to Shortlisted.`
-            : `${tender.reference} — the opportunity was closed as Lost (Not shortlisted).`
-          : `${tender.reference} — the opportunity stage was not changed.`,
-      });
-      onDone();
-    }
-  };
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      size="sm"
-      title="Record EOI outcome"
-      description={`${tender.reference} · ${tender.title}`}
-      footer={
-        <>
-          <Button onClick={onClose} disabled={submission.submitting}>
-            Cancel
-          </Button>
-          <Button variant="primary" type="submit" form="eoi-outcome-form" disabled={submission.submitting || submission.conflict}>
-            {submission.submitting ? 'Saving…' : 'Record outcome'}
-          </Button>
-        </>
-      }
-    >
-      <form id="eoi-outcome-form" onSubmit={(event) => void submit(event)} className="flex flex-col gap-3" noValidate>
-        <DialogAlert message={submission.formError} conflict={submission.conflict} />
-        <p className="text-[13px] text-slate-600">
-          Recording the outcome closes this EOI notice. If shortlisted, the RFP can then be added as the next notice.
-        </p>
-        <fieldset className="flex flex-col gap-2">
-          <legend className="mb-1 text-[13px] font-semibold text-slate-700">
-            Outcome <span className="text-red-600">*</span>
-          </legend>
-          {(['shortlisted', 'not_shortlisted'] as const).map((value) => (
-            <label key={value} className="flex items-start gap-2 text-[13px] text-slate-700">
-              <input
-                type="radio"
-                name="eoi-outcome"
-                className="mt-0.5"
-                checked={outcome === value}
-                onChange={() => {
-                  setOutcome(value);
-                  setChoiceError('');
-                }}
-              />
-              {EOI_OUTCOME_LABELS[value]}
-            </label>
-          ))}
-        </fieldset>
-        <Field label="Outcome date" htmlFor="eoi-date" required error={errors.outcomeDate}>
-          <input id="eoi-date" type="date" className={inputCls(errors.outcomeDate)} value={date} onChange={(event) => setDate(event.target.value)} />
-        </Field>
-        {outcome && canUpdate && (
-          <fieldset className="flex flex-col gap-2">
-            <legend className="mb-1 text-[13px] font-semibold text-slate-700">
-              {outcome === 'shortlisted'
-                ? `The opportunity is at ${stageLabel}. Move it to Shortlisted?`
-                : 'Close the opportunity as Lost, reason Not shortlisted?'}{' '}
-              <span className="text-red-600">*</span>
-            </legend>
-            <label className="flex items-start gap-2 text-[13px] text-slate-700">
-              <input type="radio" name="eoi-update" className="mt-0.5" checked={choice === 'update'} onChange={() => { setChoice('update'); setChoiceError(''); }} />
-              {outcome === 'shortlisted' ? 'Yes, move it to Shortlisted' : 'Yes, close it as Lost (Not shortlisted); open follow-ups are cancelled'}
-            </label>
-            <label className="flex items-start gap-2 text-[13px] text-slate-700">
-              <input type="radio" name="eoi-update" className="mt-0.5" checked={choice === 'keep'} onChange={() => { setChoice('keep'); setChoiceError(''); }} />
-              No, keep it at {stageLabel}
-            </label>
-          </fieldset>
-        )}
-        {outcome === 'not_shortlisted' && choice === 'update' && (
-          <Field label="Note" htmlFor="eoi-note" error={errors.lossNote} hint="Optional, recorded with the Lost outcome.">
-            <textarea id="eoi-note" rows={2} className={inputCls(errors.lossNote)} value={lossNote} onChange={(event) => setLossNote(event.target.value)} />
-          </Field>
-        )}
-        {(choiceError || errors.updateOpportunity) && (
-          <p className="text-xs font-medium text-red-600">{choiceError || errors.updateOpportunity}</p>
         )}
       </form>
     </Modal>

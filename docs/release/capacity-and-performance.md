@@ -110,7 +110,7 @@ The same machine, dataset generator and workload were re-run on branch
 now also holds the section memberships that CR5 requires, so salespeople's
 scope includes the membership check and leads' scope goes through
 `sections.lead_user_id`. Every record is in the Standard workflow, because
-the Software Procurement workflow changes no query. Email is not part of the
+no Software Procurement cycles exist in it (the cycles are a separate table that adds no work to the measured screens). Email is not part of the
 workload: alert emails are queued inside existing transactions, and sending
 is a background job.
 

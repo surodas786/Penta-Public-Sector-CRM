@@ -43,7 +43,7 @@ checks use desktop engines at that width.
 re-run with `npm run test:browsers` on branch `cr-change-requests` (Playwright
 1.63.0). All five passed in each browser: Chromium, Microsoft Edge and
 Firefox. The run refreshed the screenshots in `docs/evidence/m8/`. They now show the
-Workflow filter and the Change password button, in the existing layout,
+Change password button, in the existing layout,
 at all three widths.
 
 **Account access in three browsers.** `e2e/accountAccess.spec.ts` covers:
@@ -64,8 +64,9 @@ tables, status lines, panels, the board) and introduce no new styles:
 - multi-section membership and Replace lead in Administration;
 - the Section field on New opportunity when the owner has several sections;
 - the Email delivery, Email templates and Email delivery log panels;
-- the Workflow field and filter, and the software board lanes;
-- the tender phase and the Record EOI outcome dialog.
+- the Software Procurement area (Tender Tracker layout), the opportunity's
+  Software Procurement tab, the Record milestone dialog with its pipeline
+  offer, and the dashboard's procurement panel (CR6, rebuilt).
 
 **Browser checks.** Each new screen has one, in Chromium:
 

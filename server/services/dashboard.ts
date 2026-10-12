@@ -16,11 +16,11 @@ import type {
   DashboardStageDto,
   DashboardWorkloadRowDto,
 } from '../../shared/api.js';
-import { PIPELINE_STAGES, SOFTWARE_ONLY_STAGES } from '../../shared/enums.js';
+import { PIPELINE_STAGES } from '../../shared/enums.js';
 import type { dashboardQuerySchema } from '../../shared/validation.js';
 import { dhakaDateOf, dhakaQuarter, now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { activities, followUps, opportunities, sections, tenders, users } from '../db/schema.js';
+import { activities, followUps, opportunities, procurementCycles, sections, tenders, users } from '../db/schema.js';
 import { forbidden } from '../http/errors.js';
 import { currentSectionNamesSql, type Actor } from '../policy/actor.js';
 import {
@@ -39,10 +39,15 @@ import {
   opportunityOpen,
   overdueFollowUp,
   participatingCurrentNotice,
+  procurementDueWithin,
+  procurementOpenDeadline,
+  procurementOverdue,
   SEVEN_DAYS_HOURS,
   sumMoney,
   tenderDueWithin,
+  workingProcurementCycle,
 } from './metrics.js';
+import { procurementIndicator } from './procurement.js';
 import { tenderIndicator } from './tenders.js';
 
 type DashboardQuery = z.output<typeof dashboardQuerySchema>;
@@ -132,11 +137,8 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
     .from(opportunities)
     .where(inScope(eq(opportunities.stage, 'lost'), dateWithin(sql`${opportunities.closedDate}`, bounds?.from, bounds?.to)));
 
-  // CR6: the Software Procurement stages are shown once the scope has any
-  // such record in the active pipeline, after the standard ones.
-  const softwareInPipeline = stageRows.some((row) => SOFTWARE_ONLY_STAGES.includes(row.stage));
   const stages: DashboardStageDto[] = [
-    ...[...PIPELINE_STAGES, ...(softwareInPipeline ? SOFTWARE_ONLY_STAGES : [])].map((stage): DashboardStageDto => {
+    ...PIPELINE_STAGES.map((stage): DashboardStageDto => {
       const row = stageRows.find((candidate) => candidate.stage === stage);
       return { stage, count: row?.count ?? 0, value: row?.value ?? '0.00', valueBasis: 'estimated' };
     }),
@@ -160,6 +162,35 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
     .from(tenders)
     .innerJoin(opportunities, eq(opportunities.id, tenders.opportunityId))
     .where(inScope(tenderDueWithin(at, SEVEN_DAYS_HOURS)));
+
+  // --- Software Procurement deadlines (CR6), apart from goods tenders ------
+  const [procurementCounts] = await db
+    .select({
+      working: sql<number>`count(*) FILTER (WHERE ${workingProcurementCycle()})::int`,
+      overdue: sql<number>`count(*) FILTER (WHERE ${procurementOverdue(at)})::int`,
+      dueNext7Days: sql<number>`count(*) FILTER (WHERE ${procurementDueWithin(at, SEVEN_DAYS_HOURS)})::int`,
+    })
+    .from(procurementCycles)
+    .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+    .where(inScope());
+  const procurementRows = await db
+    .select({
+      cycle: procurementCycles,
+      opportunityName: opportunities.name,
+      opportunityStage: opportunities.stage,
+      opportunityStatus: opportunities.status,
+    })
+    .from(procurementCycles)
+    .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+    .where(
+      inScope(
+        workingProcurementCycle(),
+        sql`${procurementOpenDeadline} IS NOT NULL`,
+        sql`${procurementOpenDeadline} >= ${at.toISOString()}::timestamptz`,
+      ),
+    )
+    .orderBy(sql`${procurementOpenDeadline} ASC`, asc(procurementCycles.id))
+    .limit(5);
 
   // --- Team workload (leads and management) -------------------------------
   const workload = canFilterByOwner(actor) ? await loadWorkload(db, actor, query, today, at) : null;
@@ -325,6 +356,21 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
       bidStatus: row.bidStatus,
       indicator: tenderIndicator(row, at),
     })),
+    procurement: {
+      working: procurementCounts?.working ?? 0,
+      overdue: procurementCounts?.overdue ?? 0,
+      dueNext7Days: procurementCounts?.dueNext7Days ?? 0,
+      upcoming: procurementRows.map((row) => ({
+        id: row.cycle.id,
+        reference: row.cycle.reference,
+        title: row.cycle.title,
+        opportunityId: row.cycle.opportunityId,
+        opportunityName: row.opportunityName,
+        milestone: row.cycle.milestone,
+        deadline: ((row.cycle.milestone === 'eoi_preparation' ? row.cycle.eoiDeadline : row.cycle.proposalDeadline) as Date).toISOString(),
+        indicator: procurementIndicator(row, at),
+      })),
+    },
     recentActivity: activityRows.map((row) => ({
       ...row,
       occurredAt: row.occurredAt.toISOString(),

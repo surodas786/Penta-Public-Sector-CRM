@@ -5,15 +5,31 @@
 **Date:** 12 October 2026
 **Status:** Steps 1–7 are done. Steps 1–6 implemented CR3; CR4 + CR5 (migration 0008); the
 CR2 email foundation (migration 0009); CR1 invitation and reset emails; CR2
-alert emails; and CR6, the Software Procurement workflow (migration 0010).
-Penta confirmed D-CR6-2, -3, -4 and -6 on 12 October 2026; D-CR6-1 and
-D-CR6-5 use the proposed defaults. See `docs/progress.md` and ADRs
+alert emails; and CR6, Software Procurement. **CR6 was rebuilt** to Penta's
+step 5 instruction (12 October 2026). It now uses separate procurement
+cycles in their own area, with milestones distinct from the pipeline
+(migration 0011, ADR 0012). This supersedes D-CR6-2 and D-CR6-4 and retires
+0010's pipeline stages and tender phases. See `docs/progress.md` and ADRs
 0010–0012. Step 7 is complete: the final regression passed, apart from the
 aged m5 fixture, and the release documents are updated. Still open:
 D-EM-1, D-EM-2 and D-EM-4, and the three release blockers. Nothing is
 deployed.
 
-**Changes from this plan made during step 6:**
+**Changes made when CR6 was rebuilt (step 5 instruction):**
+
+- **Separate cycles.** Software Procurement is a separate cycle record, not
+  a workflow of the opportunity. The opportunity keeps the standard
+  pipeline, and a matching stage is only offered.
+- **Its own milestones.** The cycle ends Awarded, Unsuccessful or Cancelled,
+  or Not shortlisted. Not shortlisted offers Lost with the reason Not
+  shortlisted (D-CR6-3 kept).
+- **Direct RFP.** An RFP without an EOI is now a documented,
+  management-only exception (D-CR6-6 and the "RFP without an EOI" change
+  below are superseded).
+- **Retired 0010 structures.** Goods tenders keep their original workflow:
+  the EOI/RFP phase and `closed` state on tenders are retired.
+
+**Changes from this plan made during step 6 (first CR6 design, since superseded):**
 
 - **One current notice.** The EOI notice's new state is `closed`. The plan
   kept a single current notice, and this keeps the existing
@@ -130,6 +146,23 @@ single-use link, chooses a password and can then sign in.
 | CR5-AC6 | Existing users keep their current single section as their first membership, with no change in what anyone can see. |
 
 ### CR6 — Separate Software Procurement workflow (EOI → RFP)
+
+Revised to Penta's step 5 instruction (12 October 2026); the first draft
+below it is superseded.
+
+| ID | Acceptance criterion |
+| --- | --- |
+| CR6-AC1 | A separate Software Procurement area, in the Tender Tracker's patterns, lists procurement cycles. Each cycle is linked to an opportunity and inherits its owner, section, permissions and documents. Existing records are not classified or migrated. |
+| CR6-AC2 | Several cycles per opportunity, at most one current; a new cycle only after the current one has ended (for example Cancelled). The route is explicit: EOI then RFP, or the direct RFP exception. |
+| CR6-AC3 | Milestones: EOI preparation, EOI submitted, Shortlisted or Not shortlisted, RFP received, Proposal preparation, Proposal submitted, Evaluation, then Awarded, Unsuccessful or Cancelled. Forward only. |
+| CR6-AC4 | Milestones never move the opportunity pipeline. A matching stage is offered, and an accepted move follows the existing stage rules (Awarded needs value and date, Lost a reason). |
+| CR6-AC5 | Fields cover the EOI (publication, deadline, submission, outcome) and RFP (reference, invitation, clarification and proposal deadlines, submission, outcome), plus submission method, participation decision and reason, separate technical and financial submission, contacts and EOI/shortlist/RFP/proposal/decision documents. Later fields are optional while at EOI, required on advancing. |
+| CR6-AC6 | Late submissions are recorded with a note; a deadline cannot move once its submission is recorded. Dates and deadlines follow Asia/Dhaka. |
+| CR6-AC7 | Shortlisting is required before the RFP, except the documented, management-only direct RFP, which never carries an EOI. |
+| CR6-AC8 | Version checks, retry protection, transactions, audit and secure document storage/scanning are reused. |
+| CR6-AC9 | Filters, overdue/upcoming deadlines and stage history. The dashboard, report and export are scoped, with EOI/RFP submissions distinguishable from goods tenders. Notifications are left for a later step. |
+
+First draft (superseded):
 
 | ID | Acceptance criterion (draft; depends on D-CR6-1 to D-CR6-6) |
 | --- | --- |
@@ -291,7 +324,7 @@ Each ships with a reviewed production SQL script. None exists yet.
 | CR1 | `POST /api/admin/users` returns delivery state instead of always returning a link. `POST /api/admin/users/:id/link` takes `{delivery: 'email' \| 'manual'}`. `GET /api/admin/users` adds `invitationState`. Added after the step 4 review: `POST /api/auth/link-status` (what an opened link can do, without spending it), `GET /api/auth/recovery` and `POST /api/auth/forgot-password` ("Forgot your password?", same answer for every address); resends limited per account |
 | CR2 | `GET`/`PUT /api/admin/email/settings` (the password is write-only: `{password?: string \| null}`, where absent means unchanged). `POST /api/admin/email/test`. `GET /api/admin/email/templates`, `PUT /api/admin/email/templates/:key` (versioned), `POST /api/admin/email/templates/:key/preview` (synthetic values only). `GET /api/admin/email/deliveries` (paginated: status and recipient, no body). Added after the step 3 review: `POST /api/admin/email/verify` (connection check, sends nothing), `GET /api/admin/email/templates/:key/history` (saved versions, from the audit), `POST /api/admin/email/deliveries/:id/retry` (failed emails only, at most three times, audited) |
 | CR4/5 | `PATCH /api/admin/users/:id` accepts `sectionIds[]` for salespeople. `POST /api/admin/sections` requires a lead (existing lead or member to promote). `POST /api/admin/sections/:id/replace-lead` accepts an existing lead. `GET /api/auth/me` returns `sections[]`. `GET /api/lookups/opportunity-owners` returns owner-and-section pairs. The transfer request gains an optional `newSectionId` |
-| CR6 | Create and list accept and filter by `workflow`. `GET /api/opportunities/board?workflow=`. Tender create takes `phase`. An EOI outcome endpoint `POST /api/tenders/:id/eoi-outcome` |
+| CR6 | Rebuilt (0011): `GET`/`POST /api/opportunities/:id/procurement`; `GET /api/procurement` (filters: milestone, route, owner, section, `deadline=overdue\|72h\|7d`, `cycles=current\|all`, `q`); `GET`/`PATCH /api/procurement/:id`; `POST /api/procurement/:id/milestone` (retry-safe; optional `pipeline` for the offered stage); `POST`/`DELETE /api/procurement/:id/contacts[/:contactId]` and `.../documents[/:documentId]`; report and export kind `procurement_deadlines`. The 0010 endpoints (`workflow`, tender `phase`, `/eoi-outcome`) are removed |
 
 All new mutations carry version checks, idempotency where they create
 something, and an audit event inside their transaction. Each joins the
@@ -453,11 +486,11 @@ built if Penta confirms it. None weakens access control.
 | ID | Question | Proposed default |
 | --- | --- | --- |
 | D-CR6-1 | Confirm the scope is Penta's sales pursuit of software procurements (tracking EOI and RFP notices, shortlisting and proposals), not bid preparation or submission automation | Sales tracking only |
-| D-CR6-2 | What exactly are the stages? | **Needs Penta.** Draft for discussion only: Identified → EOI Published → EOI Submitted → Shortlisted → RFP Issued → Proposal Preparation → Proposal Submitted → Technical Evaluation → Financial Evaluation / Negotiation → Awarded / Lost |
+| D-CR6-2 | What exactly are the stages? | **Superseded by the step 5 instruction**: the milestones are a cycle's own, apart from the pipeline (CR6-AC3). Earlier draft: Identified → EOI Published → EOI Submitted → Shortlisted → RFP Issued → Proposal Preparation → Proposal Submitted → Technical Evaluation → Financial Evaluation / Negotiation → Awarded / Lost |
 | D-CR6-3 | Is "not shortlisted" a Lost outcome with its own loss reason, or a separate end state? | Lost with a new preset reason, "Not shortlisted" |
-| D-CR6-4 | Is it chosen per opportunity (a Workflow field), or does it need its own navigation entry? | A field on the opportunity, plus a workflow switch on the existing Opportunities board, to keep the approved navigation |
-| D-CR6-5 | Can an opportunity change workflow after creation? | No; it is fixed at creation. Management can correct it only while the record is at its first stage |
-| D-CR6-6 | Does the EOI notice stay "current" alongside the RFP notice? | No: one current notice. The EOI notice is closed with its shortlisting outcome when the RFP notice is created |
+| D-CR6-4 | Is it chosen per opportunity (a Workflow field), or does it need its own navigation entry? | **Superseded by the step 5 instruction**: a separate Software Procurement area and an opportunity tab. (Earlier: a Workflow field and a board switch) |
+| D-CR6-5 | Can an opportunity change workflow after creation? (No longer applies: there is no workflow field) | No; it is fixed at creation. Management can correct it only while the record is at its first stage |
+| D-CR6-6 | Does the EOI notice stay "current" alongside the RFP notice? | Superseded: EOI and RFP are one cycle's milestones; goods tender notices are unchanged |
 
 ---
 

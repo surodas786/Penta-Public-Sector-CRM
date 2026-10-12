@@ -29,6 +29,7 @@ export const DATE_BASES = [
   'activity_occurred',
   'follow_up_due',
   'tender_deadline',
+  'procurement_deadline',
   'outcome_date',
   'lost_date',
 ] as const;
@@ -40,6 +41,7 @@ export const DATE_BASIS_LABELS: Record<DateBasis, string> = {
   activity_occurred: 'Activity date',
   follow_up_due: 'Follow-up due date',
   tender_deadline: 'Tender submission deadline',
+  procurement_deadline: 'Open procurement deadline (EOI or proposal)',
   outcome_date: 'Award date (Awarded) or lost date (Lost)',
   lost_date: 'Lost date',
 };
@@ -55,6 +57,7 @@ export const REPORT_KEYS = [
   'upcoming_tenders',
   'outcomes',
   'lost_reasons',
+  'procurement_deadlines',
 ] as const;
 export type ReportKey = (typeof REPORT_KEYS)[number];
 
@@ -71,6 +74,8 @@ export const REPORTS: readonly ReportDefinition[] = [
   { key: 'upcoming_tenders', label: 'Upcoming tender submissions', dateBasis: 'tender_deadline' },
   { key: 'outcomes', label: 'Awarded and lost opportunities', dateBasis: 'outcome_date' },
   { key: 'lost_reasons', label: 'Lost reasons', dateBasis: 'lost_date' },
+  // CR6: kept apart from goods tenders, so the two kinds of submission are never mixed.
+  { key: 'procurement_deadlines', label: 'Software procurement deadlines', dateBasis: 'procurement_deadline' },
 ];
 
 export function reportDefinition(key: ReportKey): ReportDefinition {

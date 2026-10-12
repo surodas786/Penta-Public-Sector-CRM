@@ -21,11 +21,6 @@ import {
   STAGE_LABELS,
   STATUS_LABELS,
   OPPORTUNITY_STAGES,
-  TERMINAL_STAGES,
-  WORKFLOWS,
-  WORKFLOW_LABELS,
-  WORKFLOW_STAGES,
-  type Workflow,
   OPPORTUNITY_STATUSES,
   isTerminalStage,
   type BoardLane,
@@ -84,9 +79,6 @@ export function OpportunitiesPage() {
   const page = Math.max(1, Number(read('page', '1')) || 1);
   const q = read('q');
   const stage = read('stage');
-  // CR6: the table may show every workflow; a board shows one, standard by default.
-  const workflow = read('workflow');
-  const boardWorkflow = workflow === 'software_procurement' ? 'software_procurement' : 'standard';
   const status = read('status');
   const priority = read('priority');
   const solutionCategory = read('solutionCategory');
@@ -121,7 +113,6 @@ export function OpportunitiesPage() {
     () => ({
       q,
       stage,
-      workflow,
       status,
       priority,
       solutionCategory,
@@ -138,7 +129,7 @@ export function OpportunitiesPage() {
       sort,
       dir,
     }),
-    [q, stage, workflow, status, priority, solutionCategory, ownerId, sectionId, pipeline, awardFrom, awardTo, closedFrom, closedTo, expectedFrom, expectedTo, expectedUndated, sort, dir],
+    [q, stage, status, priority, solutionCategory, ownerId, sectionId, pipeline, awardFrom, awardTo, closedFrom, closedTo, expectedFrom, expectedTo, expectedUndated, sort, dir],
   );
   const query = useMemo(() => ({ page, pageSize: PAGE_SIZE, ...listFilters }), [page, listFilters]);
 
@@ -153,8 +144,8 @@ export function OpportunitiesPage() {
   );
 
   const boardQuery = useMemo(
-    () => ({ q, priority, solutionCategory, ownerId, sectionId, workflow: boardWorkflow }),
-    [q, priority, solutionCategory, ownerId, sectionId, boardWorkflow],
+    () => ({ q, priority, solutionCategory, ownerId, sectionId }),
+    [q, priority, solutionCategory, ownerId, sectionId],
   );
   const board = useApiResource(
     useCallback(
@@ -304,26 +295,12 @@ export function OpportunitiesPage() {
             </span>
           </label>
 
-          {/* CR6: the board shows one workflow's lanes; the table may show both. */}
-          <FilterSelect
-            label="Workflow"
-            value={view === 'table' ? workflow : boardWorkflow}
-            onChange={(value) => update({ workflow: value, stage: '' })}
-          >
-            {view === 'table' && <option value="">All workflows</option>}
-            {WORKFLOWS.map((value) => (
-              <option key={value} value={value}>
-                {WORKFLOW_LABELS[value]}
-              </option>
-            ))}
-          </FilterSelect>
-
           {/* On the board, stage and status are the lanes themselves. */}
           {view === 'table' && (
             <>
               <FilterSelect label="Stage" value={stage} onChange={(value) => update({ stage: value })}>
                 <option value="">All stages</option>
-                {(workflow ? [...WORKFLOW_STAGES[workflow as Workflow], ...TERMINAL_STAGES] : OPPORTUNITY_STAGES).map((value) => (
+                {OPPORTUNITY_STAGES.map((value) => (
                   <option key={value} value={value}>
                     {STAGE_LABELS[value]}
                   </option>

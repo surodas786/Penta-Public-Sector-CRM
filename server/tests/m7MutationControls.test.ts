@@ -287,6 +287,36 @@ describe('Milestone 7: audit and mutation controls', () => {
     admin: ids.admin,
   };
 
+  // CR6: a Software Procurement cycle on Rafiq's record, and its steps.
+  const procurementCycle = {
+    procuringOrganizationId: ids.orgSylvanHills,
+    title: 'Matrix procurement',
+    reference: 'MX/EOI/2026/01',
+    eoiPublicationDate: '2026-10-01',
+    eoiDeadline: '2026-11-01T12:00:00+06:00',
+  };
+  const rfpFacts = { rfpReference: 'MX/RFP/2026/01', rfpInvitationDate: TODAY, proposalDeadline: '2026-11-20T12:00:00+06:00' };
+
+  async function newCycle(c: SignedInClient): Promise<{ id: string; version: number }> {
+    const created = await send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, procurementCycle);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    return created.body;
+  }
+
+  /** A cycle shortlisted after its EOI, ready for the RFP. */
+  async function shortlistedCycle(c: SignedInClient): Promise<{ id: string; version: number }> {
+    let cycle = await newCycle(c);
+    for (const step of [
+      { milestone: 'eoi_submitted', eoiSubmittedAt: EARLIER },
+      { milestone: 'shortlisted', eoiOutcomeDate: TODAY },
+    ]) {
+      const response = await send(c, `/api/procurement/${cycle.id}/milestone`, { version: cycle.version, ...step });
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+      cycle = response.body.cycle;
+    }
+    return cycle;
+  }
+
   const auditCases: AuditCase[] = [
     {
       name: 'opportunity creation with its first follow-up',
@@ -874,44 +904,6 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'account.reset_queued', domain: 'administrative', changes: ['delivery'] }],
     },
     {
-      name: 'EOI outcome (CR6): the notice closes and the record moves to Shortlisted, together',
-      actor: 'salesGA1',
-      opportunityId: (response) => response.body.tender.opportunity.id as string,
-      run: async (c) => {
-        const created = await send(
-          c,
-          '/api/opportunities',
-          createOpportunityPayload({ name: 'Matrix software procurement', workflow: 'software_procurement', stage: 'eoi_published' }),
-        );
-        const opportunityId = created.body.opportunity.id as string;
-        const eoi = await send(c, `/api/opportunities/${opportunityId}/tenders`, {
-          procuringOrganizationId: ids.orgSylvanHills,
-          title: 'Matrix EOI',
-          reference: 'MX/EOI/2026/01',
-          publicationDate: '2026-10-01',
-          submissionDeadline: '2026-10-20T12:00:00+06:00',
-          bidStatus: 'preparing',
-          phase: 'eoi',
-        });
-        const submitted = await send(c, `/api/tenders/${eoi.body.id}/submit`, {
-          version: eoi.body.version,
-          submittedAt: EARLIER,
-          moveOpportunityToBidSubmitted: true,
-        });
-        return send(c, `/api/tenders/${eoi.body.id}/eoi-outcome`, {
-          version: submitted.body.tender.version,
-          outcome: 'shortlisted',
-          outcomeDate: TODAY,
-          updateOpportunity: true,
-        });
-      },
-      status: 200,
-      events: [
-        { action: 'tender.eoi_outcome_recorded', changes: ['eoiOutcome', 'noticeState'], reason: true },
-        { action: 'opportunity.stage_changed', changes: ['stage'], reason: true },
-      ],
-    },
-    {
       name: 'mail server settings (CR2), the password never recorded',
       actor: 'admin',
       opportunityId: null,
@@ -977,6 +969,75 @@ describe('Milestone 7: audit and mutation controls', () => {
       },
       status: 200,
       events: [{ action: 'email.delivery_retried', domain: 'administrative', changes: ['status', 'retry'] }],
+    },
+    {
+      name: 'procurement cycle (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: (c) => send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, procurementCycle),
+      status: 201,
+      events: [{ action: 'procurement.created', changes: ['title', 'reference', 'milestone'] }],
+    },
+    {
+      name: 'procurement edit (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await newCycle(c);
+        return patch(c, `/api/procurement/${cycle.id}`, { version: cycle.version, title: 'Matrix procurement, renamed' });
+      },
+      status: 200,
+      events: [{ action: 'procurement.updated', changes: ['title'] }],
+    },
+    {
+      name: 'procurement milestone with the offered stage (CR6): both audited, together',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await shortlistedCycle(c);
+        return send(c, `/api/procurement/${cycle.id}/milestone`, {
+          version: cycle.version,
+          milestone: 'rfp_received',
+          ...rfpFacts,
+          pipeline: { stage: 'tender_published', explanation: 'The RFP followed the shortlisting.' },
+        });
+      },
+      status: 200,
+      events: [
+        { action: 'procurement.milestone_changed', changes: ['milestone'], reason: true },
+        { action: 'opportunity.stage_changed', changes: ['stage'], reason: true },
+      ],
+    },
+    {
+      name: 'procurement reissue after cancellation (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await newCycle(c);
+        await send(c, `/api/procurement/${cycle.id}/milestone`, {
+          version: cycle.version,
+          milestone: 'cancelled',
+          outcomeDate: TODAY,
+          outcomeNote: 'Withdrawn by the city.',
+        }).expect(200);
+        return send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, { ...procurementCycle, reference: 'MX/EOI/2026/02' });
+      },
+      status: 201,
+      events: [
+        { action: 'procurement.superseded', changes: ['isCurrent'], reason: true },
+        { action: 'procurement.created', changes: ['reference'] },
+      ],
+    },
+    {
+      name: 'procurement contact link (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await newCycle(c);
+        return send(c, `/api/procurement/${cycle.id}/contacts`, { contactId: ids.contactGolam });
+      },
+      status: 200,
+      events: [{ action: 'procurement.contact_linked', changes: ['contact'] }],
     },
     {
       name: 'CSV export request',
@@ -1048,6 +1109,9 @@ describe('Milestone 7: audit and mutation controls', () => {
         ['account.reset_requested', 'accountRecovery.test.ts: the system event of the reset-request job'],
         ['report.exported', 'reports.test.ts (job), and the export case in §6 below'],
         ['report.export_downloaded', 'reports.test.ts, and §6 below'],
+        ['procurement.contact_unlinked', 'procurement.test.ts (contacts and documents)'],
+        ['procurement.document_linked', 'procurement.test.ts (contacts and documents)'],
+        ['procurement.document_unlinked', 'procurement.test.ts (contacts and documents); the route mirrors contact unlinking'],
         // A background job kind that shares the prefix; it writes no audit event.
         ['email.send', 'not an audit action: the job kind that sends queued email (email.test.ts)'],
         ['account.reset_request', 'not an audit action: the job kind behind "Forgot your password?" (accountRecovery.test.ts)'],
@@ -1059,7 +1123,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       const written = new Set<string>();
       for (const file of readdirSync(servicesDir)) {
         const source = readFileSync(path.join(servicesDir, file), 'utf8');
-        for (const match of source.matchAll(/'((?:opportunity|follow_up|contact|organization|activity|tender|document|account|section|report|email)\.[a-z_]+)'/g)) {
+        for (const match of source.matchAll(/'((?:opportunity|follow_up|contact|organization|activity|tender|document|account|section|report|email|procurement)\.[a-z_]+)'/g)) {
           written.add(match[1]!);
         }
       }
@@ -1154,6 +1218,36 @@ describe('Milestone 7: audit and mutation controls', () => {
   }
 
   const idempotentCases: IdempotentCase[] = [
+    {
+      name: 'procurement cycle creation (CR6)',
+      actor: 'salesGA1',
+      prepare: async () => ({
+        path: `/api/opportunities/${ids.oppRafiq}/procurement`,
+        body: procurementCycle,
+        altered: { ...procurementCycle, title: 'A different procurement' },
+      }),
+      created: 201,
+      entity: (r) => r.body.id,
+      revokes: ids.oppRafiq,
+      locks: ids.oppRafiq,
+    },
+    {
+      name: 'procurement milestone (CR6)',
+      actor: 'salesGA1',
+      prepare: async (as) => {
+        const cycle = await newCycle(await as('salesGA1'));
+        const body = { version: cycle.version, milestone: 'eoi_submitted', eoiSubmittedAt: EARLIER };
+        return {
+          path: `/api/procurement/${cycle.id}/milestone`,
+          body,
+          altered: { ...body, eoiSubmittedAt: '2026-10-05T08:00:00+06:00' },
+        };
+      },
+      created: 200,
+      entity: (r) => r.body.cycle.id,
+      revokes: ids.oppRafiq,
+      locks: ids.oppRafiq,
+    },
     {
       name: 'opportunity creation',
       actor: 'salesGA1',
@@ -1564,6 +1658,24 @@ describe('Milestone 7: audit and mutation controls', () => {
 
   const staleCases: StaleCase[] = [
     {
+      name: 'procurement edit (CR6)',
+      actor: 'salesGA1',
+      table: 'procurement_cycles',
+      target: async (as) => (await newCycle(await as('salesGA1'))).id,
+      request: (id, version) => ({ method: 'patch', path: `/api/procurement/${id}`, body: { version, title: 'Overwritten?' } }),
+    },
+    {
+      name: 'procurement milestone (CR6)',
+      actor: 'salesGA1',
+      table: 'procurement_cycles',
+      target: async (as) => (await newCycle(await as('salesGA1'))).id,
+      request: (id, version) => ({
+        method: 'post',
+        path: `/api/procurement/${id}/milestone`,
+        body: { version, milestone: 'cancelled', outcomeDate: TODAY, outcomeNote: 'Stale?' },
+      }),
+    },
+    {
       name: 'basic opportunity edit',
       actor: 'salesGA1',
       table: 'opportunities',
@@ -1859,6 +1971,24 @@ describe('Milestone 7: audit and mutation controls', () => {
 
   const failureCases: FailureCase[] = [
     {
+      name: 'procurement milestone with the offered stage, failing at the stage change (CR6)',
+      actor: 'salesGA1',
+      failOn: 'opportunity.stage_changed',
+      prepare: async (as) => {
+        const cycle = await shortlistedCycle(await as('salesGA1'));
+        return {
+          path: `/api/procurement/${cycle.id}/milestone`,
+          body: {
+            version: cycle.version,
+            milestone: 'rfp_received',
+            ...rfpFacts,
+            pipeline: { stage: 'tender_published', explanation: 'The RFP followed the shortlisting.' },
+          },
+        };
+      },
+      succeeds: 200,
+    },
+    {
       name: 'opportunity creation',
       actor: 'salesGA1',
       failOn: 'opportunity.created',
@@ -2149,6 +2279,24 @@ describe('Milestone 7: audit and mutation controls', () => {
       /** Prepares what the write needs and returns the (not yet started) request. */
       build: (rafiq: SignedInClient) => Promise<() => PromiseLike<Response>>;
     }[] = [
+      {
+        name: 'procurement cycle creation (CR6)',
+        opportunityId: ids.oppRafiq,
+        build: async (c) => async () => send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, procurementCycle),
+      },
+      {
+        name: 'procurement milestone (CR6)',
+        opportunityId: ids.oppRafiq,
+        build: async (c) => {
+          const cycle = await newCycle(c);
+          return () =>
+            send(c, `/api/procurement/${cycle.id}/milestone`, {
+              version: cycle.version,
+              milestone: 'eoi_submitted',
+              eoiSubmittedAt: EARLIER,
+            });
+        },
+      },
       {
         name: 'basic edit',
         opportunityId: ids.oppRafiq,

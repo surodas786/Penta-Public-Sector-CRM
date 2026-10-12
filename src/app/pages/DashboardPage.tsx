@@ -8,7 +8,7 @@ import { useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import type { DashboardDto } from '../../../shared/api.js';
-import { isWorkingStage, type OpportunityStage } from '../../../shared/enums.js';
+import { PIPELINE_STAGES, type OpportunityStage } from '../../../shared/enums.js';
 import { DASHBOARD_RANGES, DASHBOARD_RANGE_LABELS, type DashboardRange } from '../../../shared/reporting.js';
 import { fetchDashboard } from '../../api/endpoints.js';
 import { FilterSelect } from '../../components/ui/FormFields';
@@ -24,6 +24,7 @@ import {
   StageFunnel,
   TeamWorkload,
   TenderDeadlineList,
+  ProcurementDeadlineList,
   type KpiTarget,
 } from '../components/dashboard/DashboardWidgets.js';
 import { useApiResource } from '../useApiResource.js';
@@ -83,7 +84,7 @@ export function DashboardPage() {
 
   const openStage = (dashboard: DashboardDto) => (stage: OpportunityStage) => {
     const bounds = dashboard.rangeBounds;
-    if (isWorkingStage(stage)) navigate(toOpportunities({ stage, pipeline: 'active' }));
+    if (PIPELINE_STAGES.includes(stage)) navigate(toOpportunities({ stage, pipeline: 'active' }));
     else if (stage === 'awarded') navigate(toOpportunities({ stage, ...(bounds ? { awardFrom: bounds.from, awardTo: bounds.to } : {}) }));
     else navigate(toOpportunities({ stage, ...(bounds ? { closedFrom: bounds.from, closedTo: bounds.to } : {}) }));
   };
@@ -261,6 +262,19 @@ export function DashboardPage() {
               >
                 <TenderDeadlineList tenders={data.upcomingTenders} onOpen={(tender) => navigate(`/opportunities/${tender.opportunityId}?tab=tender`)} />
               </Panel>
+              {/* CR6: shown only where Software Procurement cycles are in progress. */}
+              {data.procurement.working > 0 && (
+                <Panel
+                  title="Software Procurement Deadlines"
+                  subtitle="Open EOI and proposal deadlines, soonest first"
+                  action={<PanelLink onClick={() => navigate('/procurement?deadline=7d')}>Software Procurement →</PanelLink>}
+                >
+                  <ProcurementDeadlineList
+                    procurement={data.procurement}
+                    onOpen={(opportunityId) => navigate(`/opportunities/${opportunityId}?tab=procurement`)}
+                  />
+                </Panel>
+              )}
             </div>
           </div>
 

@@ -138,7 +138,7 @@ identity provider and MFA, and a staging environment. No production
 deployment or real data without explicit written authorization.
 
 Change requests CR1–CR6 (branch `cr-change-requests`, `docs/change-requests.md`,
-ADRs 0010–0012, migrations 0008–0010, each with a reviewed production script
+ADRs 0010–0012, migrations 0008–0011, each with a reviewed production script
 in `docs/operations/sql/`) supersede the single-section rules:
 
 - **Sections.** `sections.lead_user_id` is the only source of leadership. A
@@ -151,5 +151,11 @@ in `docs/operations/sql/`) supersede the single-section rules:
   link tokens are issued at send time. `EMAIL_TRANSPORT=capture` is refused in
   production, and no mail server is configured (D-EM-1). Never send real
   email from a test.
-- **Workflows.** `WORKFLOW_STAGES` in `shared/enums.ts` is the single
-  per-workflow stage definition. Stage moves go through `applyStageMove`.
+- **Software Procurement (CR6).** `procurement_cycles` are children of an
+  opportunity (scope, lock order and documents follow it), with milestones
+  kept apart from the pipeline (`nextMilestones`,
+  `PROCUREMENT_PIPELINE_OFFERS` in `shared/enums.ts`). An accepted pipeline
+  offer goes through `changeStageInTransaction`, never a direct stage write.
+  The direct-RFP exception is `canApproveDirectRfp` (management). Deadline
+  metrics are `procurement*` in `metrics.ts`. 0010's workflow stages and
+  tender phases are retired: CHECKs refuse the leftover enum values.
