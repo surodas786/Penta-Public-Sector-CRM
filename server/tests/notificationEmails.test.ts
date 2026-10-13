@@ -225,8 +225,10 @@ describe('CR2: alert emails', () => {
       .where(eq(tenders.id, tender!.id));
     await scanOnly();
     await runAll();
-    const message = captured().find((candidate) => candidate.subject === 'A tender submission deadline is approaching');
-    expect(message).toMatchObject({ to: emails.salesGA1 });
+    const message = captured().find(
+      (candidate) => candidate.subject === 'A tender submission deadline is approaching' && candidate.to === emails.salesGA1,
+    );
+    expect(message).toBeTruthy();
     expect(message!.text).toContain('04 Oct 2026, 15:00 Bangladesh time (UTC+6)');
   });
 

@@ -65,6 +65,7 @@ import { signalJobsEnqueued } from '../jobs/queue.js';
 import type { Actor } from '../policy/actor.js';
 import { canApproveDirectRfp, canManageProcurement, opportunityScope, scopedWhere } from '../policy/scope.js';
 import { diffRecords, recordAuditEvent } from './audit.js';
+import { alertsChangedInTransaction } from './notifications.js';
 import { lockOpportunity, type LockedOpportunity } from './followUps.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
 import { SEVEN_DAYS_HOURS, procurementDueWithin, procurementOpenDeadline, procurementOverdue } from './metrics.js';
@@ -615,10 +616,13 @@ export async function createProcurementCycle(options: {
       reason: direct ? `Direct RFP approved by management: ${created.directRfpReason}` : null,
       requestId,
     });
+    // Step 6: the new cycle's deadline alert, and the previous cycle's retired.
+    await alertsChangedInTransaction(tx, { opportunityId, resolution: 'procurement_changed' });
     await completeClaim(tx, created.id);
     return created.id;
   });
 
+  signalJobsEnqueued();
   return getProcurementCycle(db, actor, id);
 }
 
@@ -692,8 +696,12 @@ export async function updateProcurementCycle(options: {
       after: { about: merged.reference, ...diff.after },
       requestId,
     });
+    // Step 6: a moved deadline or a Not participating decision retires the
+    // old reminder (and its queued email) and queues the new one.
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'procurement_changed' });
   });
 
+  signalJobsEnqueued();
   return getProcurementCycle(db, actor, cycleId);
 }
 
@@ -870,6 +878,10 @@ export async function advanceProcurementCycle(options: {
           : null,
       requestId,
     });
+
+    // Step 6: a submission, a cancellation or any other milestone ends the
+    // reminder for the deadline it passed.
+    await alertsChangedInTransaction(tx, { opportunityId: opportunity.id, resolution: 'procurement_changed' });
 
     if (command.pipeline) {
       // Re-read the lock's view of the opportunity: the cycle write did not touch it.

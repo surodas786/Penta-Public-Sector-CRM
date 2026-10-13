@@ -6,17 +6,19 @@
  * primitives as every other screen (FR-010, A.6 deviation 1).
  */
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { ApiRequestError } from '../../api/client.js';
 import { fetchRecoveryOptions } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { Field, inputCls } from '../../components/ui/FormFields';
 import { useAuth } from '../AuthContext.js';
+import { returnPath } from '../returnPath.js';
 
 export function LoginPage() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -45,9 +47,9 @@ export function LoginPage() {
 
     try {
       await signIn(email, password);
-      // Send everyone to the role-aware landing route rather than assuming a
-      // sales destination: an administrator has no commercial screens at all.
-      navigate('/', { replace: true });
+      // Back to the page that asked for sign-in (an email link, say), else the
+      // role-aware landing route: an administrator has no commercial screens.
+      navigate(returnPath(location.state), { replace: true });
     } catch (error) {
       if (error instanceof ApiRequestError) {
         setFieldErrors(error.fieldErrors);

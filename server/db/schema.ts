@@ -47,7 +47,15 @@ import {
   type NoticeState,
   type OpportunityStage,
 } from '../../shared/enums.js';
-import { EMAIL_DELIVERY_STATUSES, EMAIL_SECURITY_MODES, EMAIL_TEMPLATE_KEYS } from '../../shared/email.js';
+import {
+  DEADLINE_REMINDER_MAX_HOURS,
+  EMAIL_DELIVERY_STATUSES,
+  EMAIL_SECURITY_MODES,
+  EMAIL_TEMPLATE_KEYS,
+  MANDATORY_EMAIL_KEYS,
+  NOTIFICATION_TIMING_DEFAULTS,
+  SUMMARY_FREQUENCIES,
+} from '../../shared/email.js';
 import { EXPORT_KINDS, EXPORT_STATUSES, NOTIFICATION_TYPES } from '../../shared/reporting.js';
 
 // ---------------------------------------------------------------------------
@@ -1023,11 +1031,13 @@ export const notifications = pgTable(
       .references(() => opportunities.id, { onDelete: 'restrict' }),
     followUpId: uuid('follow_up_id').references(() => followUps.id, { onDelete: 'restrict' }),
     tenderId: uuid('tender_id').references(() => tenders.id, { onDelete: 'restrict' }),
+    /** For EOI and RFP deadline alerts (CR6), the procurement cycle. */
+    procurementCycleId: uuid('procurement_cycle_id').references(() => procurementCycles.id, { onDelete: 'restrict' }),
     type: notificationTypeEnum('type').notNull(),
     triggerKey: text('trigger_key').notNull(),
     /** The task due date the alert is about. */
     triggerDate: date('trigger_date'),
-    /** The submission deadline the alert is about. */
+    /** The submission deadline (tender, EOI or proposal) the alert is about. */
     triggerAt: timestamp('trigger_at', { withTimezone: true }),
     /** For ownership alerts, the owner the record was transferred to. */
     subjectUserId: uuid('subject_user_id').references(() => users.id, { onDelete: 'restrict' }),
@@ -1041,12 +1051,16 @@ export const notifications = pgTable(
     index('notifications_recipient_idx').on(table.recipientId, table.resolvedAt, table.createdAt),
     index('notifications_follow_up_idx').on(table.followUpId),
     index('notifications_tender_idx').on(table.tenderId),
+    index('notifications_procurement_cycle_idx').on(table.procurementCycleId),
     index('notifications_opportunity_idx').on(table.opportunityId),
+    // Compared as text: the procurement types are added to the enum by the
+    // same migration, and a new enum value cannot be used before it commits.
     check(
       'notifications_subject_present',
-      sql`(${table.type} IN ('follow_up_due_today', 'follow_up_overdue') AND ${table.followUpId} IS NOT NULL AND ${table.triggerDate} IS NOT NULL)
-        OR (${table.type} = 'tender_deadline' AND ${table.tenderId} IS NOT NULL AND ${table.triggerAt} IS NOT NULL)
-        OR (${table.type} = 'ownership_changed' AND ${table.subjectUserId} IS NOT NULL)`,
+      sql`(${table.type}::text IN ('follow_up_due_today', 'follow_up_overdue') AND ${table.followUpId} IS NOT NULL AND ${table.triggerDate} IS NOT NULL)
+        OR (${table.type}::text = 'tender_deadline' AND ${table.tenderId} IS NOT NULL AND ${table.triggerAt} IS NOT NULL)
+        OR (${table.type}::text = 'ownership_changed' AND ${table.subjectUserId} IS NOT NULL)
+        OR (${table.type}::text IN ('eoi_deadline', 'rfp_deadline') AND ${table.procurementCycleId} IS NOT NULL AND ${table.triggerAt} IS NOT NULL)`,
     ),
     check('notifications_resolution_recorded', sql`(${table.resolvedAt} IS NULL) = (${table.resolution} IS NULL)`),
   ],
@@ -1182,6 +1196,47 @@ export const emailTemplates = pgTable(
       sql`position(chr(10) in ${table.subject}) = 0 AND position(chr(13) in ${table.subject}) = 0`,
     ),
     check('email_templates_body_length', sql`char_length(${table.bodyText}) BETWEEN 1 AND 10000`),
+    // Security messages stay on while delivery is on (step 6; MANDATORY_EMAIL_KEYS).
+    check(
+      'email_templates_security_enabled',
+      sql`${table.enabled} OR ${table.key}::text NOT IN (${textList(MANDATORY_EMAIL_KEYS)})`,
+    ),
+  ],
+);
+
+/**
+ * When notification emails go out and who receives the management summary
+ * (CR2, step 6). One row at most; until an administrator saves, the defaults
+ * in shared/email.ts apply. The recipient ids are re-checked against the
+ * users table when saved and again when each summary is sent, so a stored id
+ * grants nothing by itself.
+ */
+export const emailNotificationSettings = pgTable(
+  'email_notification_settings',
+  {
+    id: integer('id').primaryKey().default(1),
+    reminderHour: integer('reminder_hour').notNull().default(NOTIFICATION_TIMING_DEFAULTS.reminderHour),
+    tenderReminderHours: integer('tender_reminder_hours').notNull().default(NOTIFICATION_TIMING_DEFAULTS.tenderReminderHours),
+    eoiReminderHours: integer('eoi_reminder_hours').notNull().default(NOTIFICATION_TIMING_DEFAULTS.eoiReminderHours),
+    rfpReminderHours: integer('rfp_reminder_hours').notNull().default(NOTIFICATION_TIMING_DEFAULTS.rfpReminderHours),
+    summaryFrequency: text('summary_frequency').notNull().default(NOTIFICATION_TIMING_DEFAULTS.summaryFrequency),
+    summaryWeekday: integer('summary_weekday').notNull().default(NOTIFICATION_TIMING_DEFAULTS.summaryWeekday),
+    managementSummaryRecipientIds: uuid('management_summary_recipient_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'restrict' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    version: integer('version').notNull().default(1),
+  },
+  (table) => [
+    check('email_notification_settings_single_row', sql`${table.id} = 1`),
+    check('email_notification_settings_reminder_hour', sql`${table.reminderHour} BETWEEN 0 AND 23`),
+    check(
+      'email_notification_settings_deadline_hours',
+      sql`${table.tenderReminderHours} BETWEEN 1 AND ${sql.raw(String(DEADLINE_REMINDER_MAX_HOURS))}
+        AND ${table.eoiReminderHours} BETWEEN 1 AND ${sql.raw(String(DEADLINE_REMINDER_MAX_HOURS))}
+        AND ${table.rfpReminderHours} BETWEEN 1 AND ${sql.raw(String(DEADLINE_REMINDER_MAX_HOURS))}`,
+    ),
+    check('email_notification_settings_frequency', sql`${table.summaryFrequency} IN (${textList(SUMMARY_FREQUENCIES)})`),
+    check('email_notification_settings_weekday', sql`${table.summaryWeekday} BETWEEN 0 AND 6`),
   ],
 );
 

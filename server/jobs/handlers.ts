@@ -4,10 +4,14 @@
  *   notifications.scan     hourly (FR-090: tender deadlines at least hourly;
  *                          follow-ups at the start of the Dhaka day, which the
  *                          first scan after 00:00 Asia/Dhaka is). Retires
- *                          obsolete alerts, then adds due ones.
- *   notifications.refresh  queued by a transfer, a reschedule or a tender
- *                          change, so replacement alerts appear without
- *                          waiting for the next scan.
+ *                          obsolete alerts, then adds due ones, then queues
+ *                          the reminder and summary emails whose time has
+ *                          come (CR2, step 6). Also queued by an account or
+ *                          section change that can take access away.
+ *   notifications.refresh  queued by a transfer, a reschedule, a tender or a
+ *                          procurement change, so replacement alerts (and an
+ *                          assignment email) appear without waiting for the
+ *                          next scan.
  *   report_export          produces one queued CSV export.
  *   housekeeping           daily: expired exports, expired idempotency
  *                          records, finished jobs older than 30 days.
@@ -31,7 +35,7 @@ import { deliverEmail, failEmailAfterRetries } from '../services/email.js';
 import { failExportAfterRetries, generateExport, purgeExpiredExports } from '../services/exports.js';
 import { pruneExpiredIdempotencyRecords } from '../services/idempotency.js';
 import { processPasswordResetRequest } from '../services/passwordRecovery.js';
-import { generateDeadlineAlerts, generateOwnershipAlerts, runNotificationScan } from '../services/notifications.js';
+import { generateDeadlineAlerts, generateOwnershipAlerts, queueDueAlertEmails, runNotificationScan } from '../services/notifications.js';
 import { enqueueJob, type JobHandlers } from './queue.js';
 
 const FINISHED_JOB_RETENTION_DAYS = 30;
@@ -54,6 +58,7 @@ export function createJobHandlers(
         await generateDeadlineAlerts(db, { opportunityId });
         const ownership = job.payload.ownership as { newOwnerId: string; version: number; actorId: string } | undefined;
         if (ownership) await generateOwnershipAlerts(db, { opportunityId, ...ownership });
+        await queueDueAlertEmails(db, { opportunityId });
       },
     },
     report_export: {

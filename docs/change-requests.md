@@ -11,9 +11,34 @@ cycles in their own area, with milestones distinct from the pipeline
 (migration 0011, ADR 0012). This supersedes D-CR6-2 and D-CR6-4 and retires
 0010's pipeline stages and tender phases. See `docs/progress.md` and ADRs
 0010–0012. Step 7 is complete: the final regression passed, apart from the
-aged m5 fixture, and the release documents are updated. Still open:
-D-EM-1, D-EM-2 and D-EM-4, and the three release blockers. Nothing is
-deployed.
+aged m5 fixture, and the release documents are updated. **CR2 step 6**
+(13 October 2026) connected email to the in-app notifications and the
+procurement cycles: configurable events, recipients, timing, summaries and
+failure notices (migration 0012, ADR 0011 addendum; see "Changes made in CR2
+step 6" below). Still open: D-EM-1, D-EM-2 and D-EM-4, and the three release
+blockers. Nothing is deployed.
+
+**Changes made in CR2 step 6 (13 October 2026):**
+
+- **Events.** EOI and RFP proposal deadline reminders (new in-app alerts
+  too), a team summary, a management summary and an administrators'
+  delivery-failure notice. Security emails can no longer be turned off. The
+  two summaries are off until an administrator turns them on.
+- **Recipients.** Reminders: the person responsible. Assignment: the new
+  owner. Team summary: each current section lead, once. Management summary:
+  only the people the administrator chose. Failures: active administrators,
+  with a count and a link. Salespeople receive no summary.
+- **Timing.** The administrator sets a Bangladesh-time reminder hour,
+  deadline reminder hours (1 to 72, never before the in-app alert) and a
+  daily or weekly summary. Emails are queued when due, not when the alert is
+  created; one older than 24 hours is never sent late.
+- **Staleness.** Completion, rescheduling, transfer, any procurement cycle
+  change and account or section changes suppress queued reminders; every
+  email is re-checked just before sending.
+- **Links.** After sign-in the reader returns to the linked page. The API
+  checks their access afresh.
+- **API.** `GET`/`PUT /api/admin/email/notification-timing` (versioned,
+  audited as `email.notification_timing_updated`).
 
 **Changes made when CR6 was rebuilt (step 5 instruction):**
 
@@ -465,7 +490,7 @@ built if Penta confirms it. None weakens access control.
 | D-EM-1 | Which mail server will production use (Penta's Exchange or Microsoft 365, Google Workspace, or a relay service), and with which sender address? | Configured by the administrator; none is assumed. **Sending real email is a deployment decision, like storage and scanning** |
 | D-EM-2 | May commercial details (project name, deadline, owner) appear in notification emails, which leave the system? | Minimal: alert type, due date and a link. The project name appears only if Penta approves. The record itself is always opened in the app, where access is rechecked |
 | D-EM-3 | Can users opt out of notification emails, per type? | No opt-out in this change; administrators can disable a template globally |
-| D-EM-4 | Who is emailed about an alert? (Added in step 5.) Leads and management already receive every alert for their scope in the app | Only the person responsible: the task's assignee, the tender's owner, the new owner after a transfer. Leads and management keep the in-app alert |
+| D-EM-4 | Who is emailed about an alert? (Added in step 5.) Leads and management already receive every alert for their scope in the app | Only the person responsible: the task's assignee, the tender's or procurement cycle's owner, the new owner after a transfer. Leads and management keep the in-app alert. **Step 6** adds, as instructed: a team summary to each current section lead (once, however many sections), a management summary to chosen management accounts only, and delivery-failure counts to administrators |
 | D-CR1-1 | When email is enabled, should the administrator still be able to see or copy a link manually? | Yes, as an explicit "Copy link instead" action, audited separately, for when delivery fails |
 | D-CR1-2 | Should self-service "Forgot password" on the sign-in page be added now that email exists? It is not in CR1–CR6 | Not added; it can be a separate request. **Superseded on 12 October 2026**: the step 4 instruction asks for it, so it was added (ADR 0002 addendum) |
 | D-CR3-1 | After a password change, keep the current session or sign out everywhere? | Keep the current session (regenerated id); end every other session |
@@ -496,8 +521,10 @@ built if Penta confirms it. None weakens access control.
 
 ## 10. Production database changes
 
-**This assessment step changed nothing in any database**, so there is no
-SQL script to apply to production now. Each implementation step that adds a
+**This assessment step changed nothing in any database.** The
+implementation steps since added migrations 0008–0012; each has a reviewed
+production script in `docs/operations/sql/` (instructions in
+`sql_instructions.md`). 0012 is CR2 step 6's. Each implementation step that adds a
 migration (0008, 0009, 0010 and the later contract step) will ship with:
 
 - the migration file;

@@ -11,6 +11,7 @@ import { AccessDeniedPanel } from './components/Feedback.js';
 import { ApiShell } from './layout/ApiShell.js';
 
 import { LoginPage } from './pages/LoginPage.js';
+import { returnPath } from './returnPath.js';
 import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
 
 // Screens most accounts never open load on demand, keeping them out of the
@@ -136,7 +137,8 @@ function AppRoutes() {
 
 function SignInRoute() {
   const { status } = useAuth();
-  if (status === 'authenticated') return <Navigate to="/" replace />;
+  const location = useLocation();
+  if (status === 'authenticated') return <Navigate to={returnPath(location.state)} replace />;
   return <LoginPage />;
 }
 
@@ -145,7 +147,8 @@ function RequireSession() {
   const location = useLocation();
 
   if (status !== 'authenticated') {
-    return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />;
+    // An email link (CR2) comes back here after sign-in, tab and all.
+    return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
   // Rendered by the parent Route element; children come from the nested routes.
   return <Outlet />;

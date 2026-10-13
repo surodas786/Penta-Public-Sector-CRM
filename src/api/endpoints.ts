@@ -54,6 +54,7 @@ import type {
   EmailTemplateDto,
   EmailTemplateVersionDto,
   EmailTestResultDto,
+  NotificationTimingDto,
 } from '../../shared/api.js';
 import type { ExportKind, ReportKey } from '../../shared/reporting.js';
 import { BACKGROUND_REQUEST_HEADER, FILE_NAME_HEADER } from '../../shared/api.js';
@@ -350,6 +351,15 @@ export function fetchAdminAudit(
 }
 
 // --- Email administration (CR2) -----------------------------------------------
+
+/** CR2, step 6: reminder timing, the summary schedule and its management recipients. */
+export function fetchNotificationTiming(signal?: AbortSignal): Promise<NotificationTimingDto> {
+  return apiRequest('/api/admin/email/notification-timing', { signal });
+}
+
+export function updateNotificationTiming(body: Record<string, unknown>): Promise<NotificationTimingDto> {
+  return apiRequest('/api/admin/email/notification-timing', { method: 'PUT', body });
+}
 
 export function fetchEmailSettings(signal?: AbortSignal): Promise<EmailSettingsDto> {
   return apiRequest('/api/admin/email/settings', { signal });

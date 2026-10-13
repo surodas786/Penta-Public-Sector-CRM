@@ -4,7 +4,7 @@
  * These are DTOs, not database rows: they deliberately omit password hashes,
  * session data and any private account field (plan 7.3).
  */
-import type { EmailDeliveryStatus, EmailSecurityMode, EmailTemplateKey, EmailTransportKind } from './email.js';
+import type { EmailDeliveryStatus, EmailSecurityMode, EmailTemplateKey, EmailTransportKind, SummaryFrequency } from './email.js';
 import type {
   ActivityType,
   BidStatus,
@@ -903,6 +903,10 @@ export interface EmailTemplateDto {
   key: EmailTemplateKey;
   label: string;
   sentWhen: string;
+  /** Who receives it. */
+  recipients: string;
+  /** A security message: always on while delivery is on. */
+  mandatory: boolean;
   placeholders: string[];
   required: string[];
   subject: string;
@@ -965,6 +969,25 @@ export interface EmailTemplateVersionDto {
   enabled: boolean;
   /** Which fields this save changed. */
   changed: ('subject' | 'bodyText' | 'enabled')[];
+}
+
+/** When notification emails go out, and who gets the management summary (CR2, step 6). */
+export interface NotificationTimingDto {
+  /** The Bangladesh-time hour from which follow-up reminders and summaries are sent. */
+  reminderHour: number;
+  tenderReminderHours: number;
+  eoiReminderHours: number;
+  rfpReminderHours: number;
+  summaryFrequency: SummaryFrequency;
+  /** 0 = Sunday. */
+  summaryWeekday: number;
+  managementSummaryRecipientIds: string[];
+  /** Active management accounts, plus any chosen one that no longer qualifies. */
+  managementCandidates: { id: string; fullName: string; email: string; eligible: boolean }[];
+  /** 0 while the defaults are in use. */
+  version: number;
+  updatedAt: string | null;
+  updatedByName: string | null;
 }
 
 /** At most this many administrator retries of one failed email (CR2). */

@@ -13,6 +13,7 @@ import {
   sendTestEmailSchema,
   updateEmailSettingsSchema,
   updateEmailTemplateSchema,
+  updateNotificationTimingSchema,
   uuidField,
 } from '../../shared/validation.js';
 import type { Database } from '../db/client.js';
@@ -32,6 +33,7 @@ import {
   updateEmailSettings,
   updateEmailTemplate,
 } from '../services/email.js';
+import { getNotificationTiming, updateNotificationTiming } from '../services/notificationEmails.js';
 
 function handle(fn: (...args: Parameters<RequestHandler>) => Promise<void>): RequestHandler {
   return (req, res, next) => {
@@ -128,6 +130,23 @@ export function createAdminEmailRouter(options: { db: Database; csrfGuard: Reque
       const key = readTemplateKey(req.params.key);
       const content = parseOrThrow(emailTemplateContentSchema, req.body);
       res.json(previewEmailTemplate(actorOf(req), key, content, email.appOrigin));
+    }),
+  );
+
+  // Step 6: reminder timing, the summary schedule and its management recipients.
+  router.get(
+    '/notification-timing',
+    handle(async (req, res) => {
+      res.json(await getNotificationTiming(db, actorOf(req)));
+    }),
+  );
+
+  router.put(
+    '/notification-timing',
+    csrfGuard,
+    handle(async (req, res) => {
+      const command = parseOrThrow(updateNotificationTimingSchema, req.body);
+      res.json(await updateNotificationTiming({ db, actor: actorOf(req), command, requestId: req.requestId }));
     }),
   );
 

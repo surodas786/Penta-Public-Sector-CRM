@@ -19,6 +19,7 @@ Run each script **once**, in this order:
 | 2 | `0009_email_settings_templates_and_deliveries.production.sql` | CR1/CR2/CR3: email settings, templates and delivery log |
 | 3 | `0010_software_procurement_workflow.production.sql` | CR6, first design: needed only as the step before 0011 |
 | 4 | `0011_software_procurement_cycles.production.sql` | CR6, final design: Software Procurement cycles; retires 0010's workflow column and tender phases |
+| 5 | `0012_notification_email_events.production.sql` | CR2, step 6: EOI and RFP deadline alerts, the new notification emails, notification timing; security emails can no longer be turned off |
 
 0010 must be applied before 0011 even though 0011 retires most of it. Each
 script checks that the previous migration is the latest one applied.
@@ -37,6 +38,7 @@ sha256sum 00*.production.sql
 | 0009 | `a6279e6041f11ce456474bb8df664f3fe7c3a6e4928a64e4e3f7fc5211cba5cd` |
 | 0010 | `63ef0b33d4c4fe21113af5d5036e8f47a03802246308313daafbacddfc944a02` |
 | 0011 | `500d9a7519a8b37f965dfe1db34008848cbb114948c5f5447260e46153567106` |
+| 0012 | `acb2c1c88f800d606dbf6eb73aa2f0d4fed2d1ec004b95d5430abeb124ad4d46` |
 
 If a checksum differs, stop. Do not use copies of 0009 or 0010 taken before
 commit `52b0e2a`: those embed outdated migration hashes.
@@ -89,7 +91,8 @@ commit `52b0e2a`: those embed outdated migration hashes.
    | 0008 | `1791785742484` | 0009 |
    | 0009 | `1791788309890` | 0010 |
    | 0010 | `1791792829758` | 0011 |
-   | 0011 | `1791806810438` | Nothing; already up to date |
+   | 0011 | `1791806810438` | 0012 |
+   | 0012 | `1791867164750` | Nothing; already up to date |
 
    Start at the first script not yet applied, and skip the ones already
    applied. A script run out of order refuses to run and changes nothing.
@@ -103,6 +106,7 @@ psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f 0008_section_memberships_an
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f 0009_email_settings_templates_and_deliveries.production.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f 0010_software_procurement_workflow.production.sql
 psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f 0011_software_procurement_cycles.production.sql
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f 0012_notification_email_events.production.sql
 ```
 
 Run them one at a time and read the output before the next. A successful
@@ -119,18 +123,19 @@ then rerun the same script. A script that already ran refuses to run again
 | --- | --- | --- |
 | 0008 | An active section has no active lead; a section's lead pointer disagrees with the users table; or an opportunity's section is not its owner's section | Fix it with the release-one application (appoint a lead, deactivate the section, or transfer the opportunity), then rerun. The error names each record. No lead is ever invented |
 | 0011 | An opportunity still uses 0010's Software Procurement workflow or one of its stages, or a tender still has an EOI/RFP phase or the `closed` state | This only happens if 0010's design was used in production. Close or correct the named records, then rerun. Nothing is converted automatically |
+| 0012 | A security email (invitation, password reset or password changed) was turned off in Administration | Turn it back on in Administration > Email templates (the change is audited), then rerun. Nothing is changed silently |
 
 0009 and 0010 have no data pre-flight. They only check the order.
 
 ## 5. After the scripts
 
-1. **Confirm the database is at 0011:**
+1. **Confirm the database is at 0012:**
 
    ```bash
    psql "$MIGRATION_DATABASE_URL" -c "SELECT max(created_at) FROM drizzle.__drizzle_migrations;"
    ```
 
-   Expected: `1791806810438`.
+   Expected: `1791867164750`.
 
 2. **Spot-check the new tables and the runtime role's rights:**
 
@@ -139,13 +144,16 @@ then rerun the same script. A script that already ran refuses to run again
      SELECT to_regclass('section_memberships')  IS NOT NULL AS memberships,
             to_regclass('email_settings')       IS NOT NULL AS email,
             to_regclass('procurement_cycles')   IS NOT NULL AS procurement,
-            has_table_privilege('penta_app', 'procurement_cycles', 'DELETE') AS app_can_delete_cycles;"
+            to_regclass('email_notification_settings') IS NOT NULL AS timing,
+            has_table_privilege('penta_app', 'procurement_cycles', 'DELETE') AS app_can_delete_cycles,
+            has_table_privilege('penta_app', 'email_notification_settings', 'DELETE') AS app_can_delete_timing;"
    ```
 
-   Expected: `t | t | t | f`.
+   Expected: `t | t | t | t | f | f`.
 
 3. **Set the application environment**, then deploy the change-request code
-   (branch `cr-change-requests`, at or after commit `d503f47`):
+   (branch `cr-change-requests`, at or after the step 6 commit, "CR2 step 6:
+   notification email events"; that code expects 0012):
    - `EMAIL_SECRET_KEY`: the new 64-hex secret.
    - `EMAIL_TRANSPORT=none` until Penta's mail server is decided (D-EM-1).
      `capture` is refused in production.
@@ -170,8 +178,8 @@ then rerun the same script. A script that already ran refuses to run again
     script's header. These are clean only before new data (memberships,
     email rows, procurement cycles) has been written.
 
-  PostgreSQL cannot drop enum values, so values added by 0010 and 0011 stay
-  in their types, unused.
+  PostgreSQL cannot drop enum values, so values added by 0010, 0011 and 0012
+  stay in their types, unused.
 
-More detail: `docs/operations/deployment-and-migrations.md` §3.1–§3.4 and
+More detail: `docs/operations/deployment-and-migrations.md` §3.1–§3.5 and
 ADRs 0010–0012.

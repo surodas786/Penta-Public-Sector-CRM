@@ -85,6 +85,13 @@
       "when": 1791806810438,
       "tag": "0011_software_procurement_cycles",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791867164750,
+      "tag": "0012_notification_email_events",
+      "breakpoints": true
     }
   ]
 }

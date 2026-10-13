@@ -147,3 +147,119 @@ supports Node 22, and added no production audit findings.
     organization (D-EM-2).
   - Dates use the interface's own format (`notifications.ts`), so
     "29 Sep 2026" reads the same in the app and in an email.
+
+## Addendum: step 6, notification email events (13 October 2026)
+
+Step 6 connects email to the in-app notifications and to the Software
+Procurement cycles (CR6). Migration 0012.
+
+### Events
+
+| Event | Template | On by default |
+| --- | --- | --- |
+| Invitation, password reset, password changed | `invitation`, `password_reset`, `password_changed` | **Always.** Security messages cannot be turned off, in the service or in the database (`email_templates_security_enabled`) |
+| Ownership assignment or change | `ownership_changed` | Yes |
+| Follow-up due today, overdue | `follow_up_due_today`, `follow_up_overdue` | Yes |
+| Tender deadline approaching | `tender_deadline` | Yes |
+| EOI deadline approaching | `eoi_deadline` (new) | Yes |
+| RFP proposal deadline approaching | `rfp_deadline` (new) | Yes |
+| Team summary | `team_summary` (new) | **No**: a new kind of email, turned on by an administrator |
+| Management summary | `management_summary` (new) | **No**, and sent only to the people chosen |
+| Delivery failures | `delivery_failures` (new) | Yes |
+
+No email was added for any other event.
+
+### Recipients
+
+- **Reminders** go to the person responsible: the task's assignee, the
+  owner of the tender's or procurement cycle's opportunity (D-EM-4).
+- **Assignment** goes to the new owner.
+- **Team summary** goes to each current lead of an active section, once a
+  day however many sections they lead (the dedupe key is the person and the
+  Dhaka date). It counts what the lead can see when it is sent.
+- **Management summary** goes only to the management accounts the
+  administrator ticked. The ids are checked when saved (active management
+  accounts only) and again when sent.
+- **Delivery failures** go to active administrators: a count and a link to
+  the delivery log, never a record, a recipient or a message.
+- **Salespeople** receive no summary. Their reminders concern only tasks
+  assigned to them and records they own, so a shared section never shows
+  them a colleague's records by email.
+
+### Content
+
+D-EM-2 is unchanged: no project name, organization, value or reference. A
+summary is a list of counts from the dashboard's metric definitions
+(`metrics.ts`, inside `scopedWhere`): overdue follow-ups, follow-ups due
+today, tender submissions in the next 7 days, EOI and proposal deadlines in
+the next 7 days, and missed EOI and proposal deadlines. A summary with
+nothing to report is not sent.
+
+### Timing (`email_notification_settings`)
+
+- **Reminder hour**, Bangladesh time (default 09:00): follow-up reminders
+  and summaries wait until then.
+- **Deadline reminders**: tender, EOI and RFP, each 1 to 72 hours before
+  the deadline (default 72). The email follows the in-app alert, which
+  appears 72 hours ahead (FR-090), so it can be later, never earlier.
+  FR-090's alert window is unchanged.
+- **Summaries**: daily, or weekly on a chosen day (default Sunday).
+
+Alert emails are no longer queued in the alert's own transaction.
+`queueDueAlertEmails` runs in every scan and refresh and queues each alert's
+email once its time has come. The alert's id remains the dedupe key, so
+there is still at most one email per alert.
+
+**No flood.** An email whose moment passed more than 24 hours ago is not
+sent late. Turning delivery on, or restarting a stopped worker, never
+releases a backlog of old reminders. The alerts stay in the app.
+
+### Staleness
+
+An email is re-checked before it is sent, and suppressed with the reason if
+anything has changed:
+
+- **Alert emails:** the alert must still be true, unread, permitted and the
+  recipient's responsibility.
+- **Summaries:** must be for today. The recipient must still lead an active
+  section, or still be a chosen, active management account.
+- **Failure notices:** the recipient must still be an administrator.
+
+Some changes suppress a queued email at once:
+
+- **Opportunity and cycle changes:** completion, rescheduling, a transfer,
+  a stage change, a tender change, and every procurement cycle change
+  (created, edited, milestone reached, cancelled). These retire the alert in
+  their own transaction, and `retireObsoleteAlerts` marks its queued email
+  `suppressed`.
+- **Account and section changes** (step 6): a role change, a membership
+  ended, a lead replaced, an account or section deactivated. These queue a
+  scan in their own transaction, which does the same once they commit.
+
+### Failures and retry
+
+- **Retries:** a failing message is retried with the queue's backoff.
+- **Final failure:** after the last attempt it is `failed`, and each active
+  administrator is sent one notice that Bangladesh day, however many emails
+  fail. A failed notice causes no further notice.
+- **Controlled retry:** unchanged. It re-runs every check, creates no new
+  delivery and can never send an obsolete reminder.
+
+### Links
+
+- **What they contain:** a path into the application and nothing else, no
+  token.
+- **Sign-in:** the page that receives a signed-out reader sends them to sign
+  in, then back to that path (`returnPath`, same-site paths only).
+- **Access:** the record is then loaded through the API, which checks the
+  reader's access at that moment. A record they can no longer see is the
+  standard 404.
+
+### In-app notifications without email
+
+- **Alerts do not depend on email.** They are created whether or not
+  delivery is on, `EMAIL_TRANSPORT=none` or the mail server fails.
+- **New alert types:** `eoi_deadline` and `rfp_deadline`, linked to the
+  cycle, cover the current cycle's open deadline within 72 hours. They follow
+  the same rule as the procurement dashboard metric
+  (`workingProcurementCycle`).

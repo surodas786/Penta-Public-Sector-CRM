@@ -1,6 +1,7 @@
 /**
  * Email delivery on the Administration page (CR2): the mail server, the
- * wording of each email, a test message and the delivery log.
+ * wording of each email and who receives it, the notification timing (step
+ * 6), a test message and the delivery log.
  *
  * Built from the page's existing Panel, table, Modal and form primitives. The
  * SMTP password is write-only: the server says whether one is stored, never
@@ -43,6 +44,7 @@ import { useApiResource } from '../useApiResource.js';
 import { useSubmission } from '../useSubmission.js';
 import { ErrorPanel, LoadingPanel } from './Feedback.js';
 import { DialogAlert } from './FormBits.js';
+import { NotificationTimingPanel } from './NotificationTimingPanel.js';
 
 const TRANSPORT_NOTES: Record<EmailSettingsDto['transport'], string> = {
   none: 'This server is set to send no email (EMAIL_TRANSPORT=none). Settings can be prepared, but nothing is sent.',
@@ -203,10 +205,11 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
                     <td className={`${tdCls} pl-4`}>
                       <span className="block font-semibold text-slate-900">{template.label}</span>
                       <span className="block text-[11.5px] text-slate-500">{template.sentWhen}</span>
+                      <span className="block text-[11.5px] text-slate-500">Sent to: {template.recipients}</span>
                     </td>
                     <td className={tdCls}>{template.subject}</td>
                     <td className={tdCls}>
-                      {template.enabled ? 'On' : 'Off'}
+                      {template.mandatory ? 'Always on (security)' : template.enabled ? 'On' : 'Off'}
                       {template.customized ? ' · edited' : ' · default wording'}
                     </td>
                     <td className={`${tdCls} pr-4 text-right`}>
@@ -221,6 +224,8 @@ export function EmailAdministration({ onSettingsChanged }: { onSettingsChanged?:
           </div>
         )}
       </Panel>
+
+      <NotificationTimingPanel />
 
       <Panel title="Email delivery log" subtitle="What was sent, to whom, and what happened. Message contents are never stored." bodyClassName="p-0">
         {deliveries.error ? (
@@ -663,10 +668,22 @@ function EmailTemplateDialog({
     >
       <form id="email-template-form" onSubmit={(event) => void submit(event)} className="flex flex-col gap-4" noValidate>
         <DialogAlert message={submission.formError} conflict={submission.conflict} />
-        <label className="flex items-center gap-2 text-[13px] text-slate-700">
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          Send this email
-        </label>
+        <p className="text-[12.5px] text-slate-600">Sent to: {template.recipients}</p>
+        {template.mandatory ? (
+          <p className="text-[12.5px] text-slate-600">
+            A security message: always sent while email delivery is on. It cannot be turned off.
+          </p>
+        ) : (
+          <label className="flex items-center gap-2 text-[13px] text-slate-700">
+            <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+            Send this email
+          </label>
+        )}
+        {errors.enabled && (
+          <p role="alert" className="text-[12.5px] font-medium text-red-700">
+            {errors.enabled}
+          </p>
+        )}
         <Field label="Subject" htmlFor="t-subject" required error={errors.subject}>
           <input id="t-subject" className={inputCls(errors.subject)} value={subject} onChange={(event) => setSubject(event.target.value)} />
         </Field>

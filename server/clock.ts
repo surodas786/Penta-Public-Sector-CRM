@@ -82,6 +82,18 @@ export function dhakaDateOf(at: Date): string {
   return dhakaDateFormatter.format(at);
 }
 
+const dhakaHourFormatter = new Intl.DateTimeFormat('en-GB', { timeZone: BUSINESS_TIME_ZONE, hour: '2-digit', hourCycle: 'h23' });
+
+/** The Dhaka clock hour of an instant, 0–23. */
+export function dhakaHourOf(at: Date): number {
+  return Number(dhakaHourFormatter.format(at));
+}
+
+/** The day of the week of a Dhaka calendar date, 0 = Sunday. */
+export function weekdayOf(date: string): number {
+  return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
 /**
  * Bangladesh has kept UTC+6 all year since 2009 (no daylight saving), so a
  * Dhaka calendar date starts at a fixed offset. Instants are still stored in

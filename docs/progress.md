@@ -1,10 +1,12 @@
 # Implementation progress
 
-**Current state (12 October 2026):** Milestone 8 is complete, and change
+**Current state (13 October 2026):** Milestone 8 is complete, and change
 requests CR1–CR6 are **implemented and regression-tested** on branch
-`cr-change-requests` (steps 1–7 below; `docs/change-requests.md`). The
-database changes are migrations 0008–0011, each with a production script
-(0011 rebuilt CR6 as separate procurement cycles, §15).
+`cr-change-requests` (steps 1–7 below; `docs/change-requests.md`). CR2
+step 6 connected email to the in-app notifications and the procurement
+cycles (§16). The database changes are migrations 0008–0012, each with a
+production script (0011 rebuilt CR6 as separate procurement cycles, §15;
+0012 is §16).
 No email has been sent outside the local capture folder. Nothing is
 deployed. **Not production-ready:** production document storage and malware
 scanning, the identity provider and MFA, and a staging environment are
@@ -739,7 +741,114 @@ junction. Removing the worktree followed the junction and deleted part of
 - **Not touched:** your running dev servers.
 - **Later rehearsals:** the worktree is placed inside `.git`, with no links.
 
-### 16. Next task
+### 16. CR2 step 6: notification email events (13 October 2026)
+
+**Instruction.** Connect email to the in-app notifications and the
+procurement workflow: configurable events, recipients, timing, send-time
+re-checks, stale-reminder suppression, failures and controlled retry.
+Decisions are in the ADR 0011 step 6 addendum.
+
+**Database: migration 0012** (production script, rehearsed).
+
+- **Adds:**
+  - notification types `eoi_deadline` and `rfp_deadline`, and
+    `notifications.procurement_cycle_id`;
+  - five email templates;
+  - `email_notification_settings` (one row at most; no DELETE for the
+    runtime role);
+  - `email_templates_security_enabled`.
+- **Pre-flight:** refuses, naming it, if a security email was turned off.
+- **Existing rows:** unchanged.
+
+**What was built**
+
+| Area | Change |
+| --- | --- |
+| Events | Security emails (invitation, reset, password changed) are **mandatory**: refused by the service (422) and the database. New: EOI deadline and RFP proposal deadline reminders (on), team summary and management summary (**off** until an administrator turns them on), delivery-failure notice to administrators (on). Existing: ownership, follow-up due today and overdue, tender deadline. No other event emails |
+| In-app | New `eoi_deadline` and `rfp_deadline` alerts for a working cycle's open deadline within 72 hours (the dashboard's procurement rule), with the owner, the section lead and management as recipients, linking to the opportunity's Software Procurement tab. Alerts never depend on email |
+| Recipients | Reminders: the person responsible only. Assignment: the new owner. Team summary: each current section lead, **one email however many sections** (dedupe key: person and Dhaka date). Management summary: only the accounts ticked by the administrator, validated as active management when saved and when sent. Failures: active administrators, a count and a link. Salespeople get no summary |
+| Timing | Administration > **Notification timing** (`GET`/`PUT /api/admin/email/notification-timing`, versioned, audited as `email.notification_timing_updated`): reminder hour in Bangladesh time (default 09:00), tender/EOI/RFP reminder hours (1–72, default 72), daily or weekly summaries (default Sunday). Alert emails are queued when due by `queueDueAlertEmails` (every scan and refresh), no longer at alert creation. A reminder more than 24 hours late is never sent, so turning delivery on cannot release a backlog |
+| Staleness | Retiring an alert now suppresses its queued email in the same transaction. Procurement create, edit and milestone (including cancellation) now retire and refresh alerts. Role changes, ended memberships, replaced leads and deactivated accounts or sections queue a scan in their transaction. At send: alert still true, unread, permitted **and the recipient's responsibility**; summary for today, recipient still a lead / still chosen management; notice recipient still an administrator |
+| Summaries | Counts only, from `metrics.ts` inside `scopedWhere`, computed at send in the recipient's scope then: overdue follow-ups, due today, tenders in 7 days, EOI/proposal deadlines in 7 days, missed EOI/proposal deadlines. Nothing to report: not sent |
+| Failures | After the last attempt: `failed`, plus at most one notice per administrator per Dhaka day; a failed notice causes no further notice. Controlled retry unchanged; it re-checks everything and adds no delivery row |
+| Links | A path only, no token. Signed out, the app sends the reader to sign in and **back to the linked page** (`src/app/returnPath.ts`, same-site paths only); the API then checks access, so a lost record shows "Not available" |
+| Interface | Email templates show who receives each email and "Always on (security)"; the editor has no on/off for security emails. New Notification timing panel and dialog (`NotificationTimingPanel.tsx`) |
+
+**Tests**
+
+- **`notificationEmailEvents.test.ts` (17, new):**
+  - **Timing:** reminders held until the reminder hour in Dhaka time, then
+    sent once; the administrator's hour and deadline hours (72-hour cap,
+    stale save); no backlog when delivery is turned on two days later.
+  - **EOI/RFP:** the EOI reminder at 24 hours with link and Dhaka date only;
+    a moved deadline suppresses the queued email at once and the new
+    deadline is reminded once; a cancelled cycle suppresses it; the RFP
+    proposal reminder.
+  - **Recipients:** after a transfer the previous owner's queued reminder is
+    suppressed and only the new owner is told; a salesperson in two sections
+    is emailed only about their own records and never a summary; a lead of
+    two sections gets one team summary whose counts equal their dashboard; a
+    lead replaced before sending is suppressed; management summary
+    recipients validated (salesperson, absent id and administrator refused)
+    and re-checked at send.
+  - **Stale and failing:** completion suppresses at once; a disabled account
+    is suppressed at send; failures produce one administrator notice (count
+    and link, no names), a retry of a reminder read meanwhile is suppressed
+    without a new row, and a later scan adds no second notice.
+  - **Without email:** delivery off, and `EMAIL_TRANSPORT=none`, both keep
+    in-app alerts.
+  - **Links:** 401 signed out; for someone without access, the 404 is
+    identical to an absent record's; no token in the link.
+- **Changed:**
+  - `email.test.ts`: the default-state list, the security emails refused
+    when turned off (API 422, database CHECK `23514`), and the retry tests
+    reading their delivery by id (a failure now adds a notice row).
+  - `notificationEmails.test.ts`: the tender message is found by recipient,
+    not by file order.
+  - The M7 audit matrix gains the timing case.
+- **`e2e/cr2-step6.spec.ts` (new, in `test:smoke`):** the timing dialog
+  (72-hour refusal, daily summaries, a management recipient) and security
+  emails always on. An email-style link signed out goes to sign-in and back
+  to the Software Procurement tab; for Imran it shows "Not available".
+  Evidence: `docs/evidence/cr/cr2-step6-timing-dialog.png`,
+  `cr2-step6-timing.png` and `cr2-step6-link-no-access.png`.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **774 passed, 0 failed**, 30 files. Before the full run, the targeted suites first failed in 6 tests in `email.test.ts` and 1 in `notificationEmails.test.ts`. These were expected consequences, updated as above: default-off summaries, mandatory security emails, a second delivery row from the failure notice, and capture file order. The new suite's first run had 7 failures. Six were in the tests: running jobs where a queued state was expected, `sentAt` on a re-queued row, a fixed clock against the database clock, a response's `requestId`, and a missing `await`. One was in the code: array comparison in the audit diff, which is fixed |
+| M7 matrices | 176 of 176 |
+| Browser checks | `cr2.spec.ts` 1 passed. `cr2-step6.spec.ts` 2 passed, after fixing an ambiguous label in the test. The rest of `test:smoke` was not rerun in this step |
+| `npm run build`, `npm run check:production-server` | Pass, including demo exclusion; 20 passed, 0 failed |
+| `drizzle-kit generate` after 0012 | "No schema changes" |
+| 0012 rehearsal | The scratch database was migrated to 0011. With "Password changed" turned off, the pre-flight refused, naming it, and nothing changed. After turning it on, the script applied: grants correct (no DELETE), a turned-off reminder kept its setting, the security CHECK enforced, an EOI alert without its cycle refused. A rerun was refused, and `db:migrate` skipped it with the same hash. The database was dropped |
+
+**Production SQL:** `docs/operations/sql/0012_notification_email_events.production.sql`
+(file sha256 `acb2c1c8…ad4d46`; migration sha256 `970f51f2…57875ab`;
+journal `1791867164750`). Apply it after 0011 (runbook §3.5,
+`sql_instructions.md`).
+
+**Limitations, stated plainly**
+
+- **Delivery:** no mail server is configured (D-EM-1). All sending was to
+  the capture folder.
+- **Pending Penta confirmation:**
+  - D-EM-2 (content);
+  - D-EM-4 as extended (recipients);
+  - the defaults (09:00, 72 hours, weekly on Sunday, summaries off).
+- **Deadline reminders:** they cannot be earlier than 72 hours, because the
+  email follows the FR-090 in-app alert. An earlier reminder would need a
+  change to FR-090.
+- **A stopped worker:** reminders more than 24 hours late are dropped by
+  design, and the alerts remain in the app.
+- **Failure notices:** if the mail server is down, the administrators'
+  notice fails too. The job health check (NFR-003) remains the reliable
+  signal.
+
+### 17. Next task
 
 Penta's decisions:
 

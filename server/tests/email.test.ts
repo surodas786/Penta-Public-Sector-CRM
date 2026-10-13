@@ -210,8 +210,12 @@ describe('CR2: email foundation', () => {
       const response = await admin.agent.get('/api/admin/email/templates').expect(200);
       expect(response.body.items.map((item: { key: string }) => item.key)).toEqual([...EMAIL_TEMPLATE_KEYS]);
       for (const item of response.body.items) {
-        expect(item).toMatchObject({ customized: false, enabled: true, version: 0 });
+        // Step 6: the summaries are new kinds of email, off until turned on.
+        const enabled = !['team_summary', 'management_summary'].includes(item.key);
+        expect(item).toMatchObject({ customized: false, enabled, version: 0 });
         expect(item.subject).toBe(item.defaultSubject);
+        expect(item.recipients).toBeTruthy();
+        expect(item.mandatory).toBe(['invitation', 'password_reset', 'password_changed'].includes(item.key));
       }
     });
 
@@ -348,22 +352,32 @@ describe('CR2: email foundation', () => {
       expect(await ctx.database.db.select().from(emailDeliveries)).toHaveLength(0);
     });
 
-    it('is suppressed, not sent, when its template is turned off or the server sends nothing', async () => {
+    it('cannot be turned off (step 6), and is suppressed, not sent, when the server sends nothing', async () => {
       const { admin } = await configure(ctx);
-      const template = (await admin.agent.get('/api/admin/email/templates').expect(200)).body.items.find(
-        (item: { key: string }) => item.key === 'password_changed',
-      );
-      await put(admin, '/api/admin/email/templates/password_changed', {
-        version: template.version,
-        subject: template.subject,
-        bodyText: template.bodyText,
-        enabled: false,
-      }).expect(200);
+      for (const key of ['invitation', 'password_reset', 'password_changed']) {
+        const template = (await admin.agent.get('/api/admin/email/templates').expect(200)).body.items.find(
+          (item: { key: string }) => item.key === key,
+        );
+        const refused = await put(admin, `/api/admin/email/templates/${key}`, {
+          version: template.version,
+          subject: template.subject,
+          bodyText: template.bodyText,
+          enabled: false,
+        });
+        expect(refused.status).toBe(422);
+        expect(refused.body.fieldErrors.enabled).toMatch(/always sent while email delivery is on/);
+      }
+      // The database refuses it too, whatever the code path.
+      const refusedByDatabase = await ctx.database.db
+        .execute(sql`INSERT INTO email_templates (key, subject, body_text, enabled) VALUES ('password_changed', 'Changed', 'Changed', false)`)
+        .then(
+          () => null,
+          (error: { cause?: { code?: string; constraint?: string } }) => error.cause,
+        );
+      expect(refusedByDatabase).toMatchObject({ code: '23514', constraint: 'email_templates_security_enabled' });
       await changePassword(ctx);
       await runJobs(ctx);
-      const [suppressed] = await ctx.database.db.select().from(emailDeliveries);
-      expect(suppressed).toMatchObject({ status: 'suppressed', statusDetail: 'This email is turned off in Email templates.' });
-      expect(captured(ctx)).toHaveLength(0);
+      expect(captured(ctx)).toHaveLength(1);
 
       const silent = app({ email: { transport: 'none' } });
       await resetFixtures();
@@ -503,7 +517,7 @@ describe('CR2: email foundation', () => {
       expect(early.body.message).toBe('Only a failed email can be retried.');
 
       await failQueued(smtp);
-      const [failed] = await smtp.database.db.select().from(emailDeliveries);
+      const [failed] = await smtp.database.db.select().from(emailDeliveries).where(eq(emailDeliveries.id, delivery.id));
       expect(failed).toMatchObject({ status: 'failed', attempts: 1 });
 
       const retried = await send(admin, retryUrl(delivery.id), {}, null);
@@ -515,7 +529,7 @@ describe('CR2: email foundation', () => {
 
       // The mail server is fixed (the capture transport stands in for it): one message.
       await runJobs(ctx);
-      const [sent] = await ctx.database.db.select().from(emailDeliveries);
+      const [sent] = await ctx.database.db.select().from(emailDeliveries).where(eq(emailDeliveries.id, delivery.id));
       expect(sent).toMatchObject({ status: 'sent', attempts: 2 });
       expect(captured(ctx)).toHaveLength(1);
       expect((await send(admin, retryUrl(delivery.id), {}, null)).status).toBe(409);
@@ -528,7 +542,7 @@ describe('CR2: email foundation', () => {
         expect((await send(admin, retryUrl(delivery.id), {}, null)).status).toBe(200);
         await failQueued(smtp);
       }
-      const [row] = await smtp.database.db.select().from(emailDeliveries);
+      const [row] = await smtp.database.db.select().from(emailDeliveries).where(eq(emailDeliveries.id, delivery.id));
       expect(row).toMatchObject({ status: 'failed', attempts: 4 });
       const refused = await send(admin, retryUrl(delivery.id), {}, null);
       expect(refused.status).toBe(409);
@@ -541,7 +555,7 @@ describe('CR2: email foundation', () => {
       await smtp.database.db.update(users).set({ active: false }).where(eq(users.id, ids.salesGA1));
       expect((await send(admin, retryUrl(delivery.id), {}, null)).status).toBe(200);
       await runJobs(ctx);
-      const [row] = await ctx.database.db.select().from(emailDeliveries);
+      const [row] = await ctx.database.db.select().from(emailDeliveries).where(eq(emailDeliveries.id, delivery.id));
       expect(row).toMatchObject({ status: 'suppressed', statusDetail: 'The recipient account is inactive.' });
       expect(captured(ctx)).toHaveLength(0);
     });

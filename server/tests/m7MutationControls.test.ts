@@ -941,6 +941,34 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'email.template_updated', domain: 'administrative', changes: ['subject', 'bodyText'] }],
     },
     {
+      name: 'notification timing (CR2, step 6)',
+      actor: 'admin',
+      opportunityId: null,
+      run: (c) =>
+        c.agent
+          .put('/api/admin/email/notification-timing')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, c.csrfToken)
+          .send({
+            version: 0,
+            reminderHour: 8,
+            tenderReminderHours: 72,
+            eoiReminderHours: 48,
+            rfpReminderHours: 72,
+            summaryFrequency: 'daily',
+            summaryWeekday: 0,
+            managementSummaryRecipientIds: [ids.management],
+          }),
+      status: 200,
+      events: [
+        {
+          action: 'email.notification_timing_updated',
+          domain: 'administrative',
+          changes: ['reminderHour', 'eoiReminderHours', 'summaryFrequency', 'managementSummaryRecipientIds'],
+        },
+      ],
+    },
+    {
       name: 'test email (CR2)',
       actor: 'admin',
       opportunityId: null,

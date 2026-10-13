@@ -130,6 +130,9 @@ export const NOTIFICATION_TYPES = [
   'follow_up_overdue',
   'tender_deadline',
   'ownership_changed',
+  // CR6 procurement deadlines (step 6): the EOI, then the RFP proposal.
+  'eoi_deadline',
+  'rfp_deadline',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -138,4 +141,6 @@ export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
   follow_up_overdue: 'Overdue follow-up',
   tender_deadline: 'Tender deadline within 72 hours',
   ownership_changed: 'Ownership changed',
+  eoi_deadline: 'EOI deadline within 72 hours',
+  rfp_deadline: 'RFP proposal deadline within 72 hours',
 };

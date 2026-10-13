@@ -37,15 +37,17 @@ import {
   type Paginated,
 } from '../../shared/api.js';
 import {
+  ALERT_EMAIL_KEYS,
   EMAIL_APP_NAME,
   EMAIL_TEMPLATE_KEYS,
   EMAIL_TEMPLATES,
+  isMandatoryEmail,
   renderTemplate,
   templateProblems,
   type EmailTemplateKey,
 } from '../../shared/email.js';
 import type { emailTemplateContentSchema, updateEmailSettingsSchema, updateEmailTemplateSchema } from '../../shared/validation.js';
-import { now } from '../clock.js';
+import { dhakaDateOf, now } from '../clock.js';
 import type { Database } from '../db/client.js';
 import { auditEvents, emailDeliveries, emailSettings, emailTemplates, users } from '../db/schema.js';
 import type { EmailRuntime } from '../email/runtime.js';
@@ -58,6 +60,7 @@ import { canAdministerAccounts } from '../policy/scope.js';
 import { issueAccountLink } from './accountTokens.js';
 import { beginAdministrativeChange } from './admin.js';
 import { deliverableAlert, formatDate, formatInstant } from './notifications.js';
+import { deliveryFailureCount, summaryFor } from './notificationEmails.js';
 import { diffRecords, recordAuditEvent } from './audit.js';
 
 function assertAdministrator(actor: Actor): void {
@@ -74,7 +77,7 @@ const CAPTURED_DETAIL = 'Captured locally (EMAIL_TRANSPORT=capture); not sent.';
  * its own (the settings row, a template key), so all of its history shares
  * one id. Name-based, UUIDv5-shaped.
  */
-function configurationEntityId(name: string): string {
+export function configurationEntityId(name: string): string {
   const bytes = createHash('sha1').update(`penta-crm-configuration:${name}`).digest().subarray(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x50;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
@@ -254,11 +257,13 @@ function toTemplateDto(key: EmailTemplateKey, row: (typeof emailTemplates.$infer
     key,
     label: definition.label,
     sentWhen: definition.sentWhen,
+    recipients: definition.recipients,
+    mandatory: isMandatoryEmail(key),
     placeholders: [...definition.placeholders],
     required: [...definition.required],
     subject: row?.subject ?? definition.defaultSubject,
     bodyText: row?.bodyText ?? definition.defaultBody,
-    enabled: row?.enabled ?? true,
+    enabled: row?.enabled ?? definition.defaultEnabled,
     customized: Boolean(row),
     defaultSubject: definition.defaultSubject,
     defaultBody: definition.defaultBody,
@@ -270,6 +275,12 @@ function toTemplateDto(key: EmailTemplateKey, row: (typeof emailTemplates.$infer
 async function readTemplate(db: Database, key: EmailTemplateKey): Promise<EmailTemplateDto> {
   const [row] = await db.select().from(emailTemplates).where(eq(emailTemplates.key, key)).limit(1);
   return toTemplateDto(key, row);
+}
+
+/** The emails that are turned on now: an administrator's choice, or the default. */
+export async function enabledEmailKeys(db: Database): Promise<EmailTemplateKey[]> {
+  const rows = await readTemplateRows(db);
+  return EMAIL_TEMPLATE_KEYS.filter((key) => toTemplateDto(key, rows.find((row) => row.key === key)).enabled);
 }
 
 export async function listEmailTemplates(db: Database, actor: Actor): Promise<EmailTemplateDto[]> {
@@ -293,6 +304,11 @@ export async function updateEmailTemplate(options: {
   const { db, actor, key, command, requestId } = options;
   assertAdministrator(actor);
   assertTemplateContent(key, command);
+  // Step 6: security messages stay on while delivery is on. The database
+  // refuses it too (email_templates_security_enabled).
+  if (isMandatoryEmail(key) && !command.enabled) {
+    throw validationFailed({ enabled: 'Security messages are always sent while email delivery is on. They cannot be turned off.' });
+  }
 
   await db.transaction(async (tx) => {
     await beginAdministrativeChange(tx, actor);
@@ -359,7 +375,7 @@ export async function listEmailTemplateHistory(db: Database, actor: Actor, key: 
     .orderBy(asc(auditEvents.occurredAt), asc(auditEvents.sequence));
 
   const definition = EMAIL_TEMPLATES[key];
-  let state = { subject: definition.defaultSubject, bodyText: definition.defaultBody, enabled: true };
+  let state = { subject: definition.defaultSubject, bodyText: definition.defaultBody, enabled: definition.defaultEnabled };
   const versions: EmailTemplateVersionDto[] = [];
   for (const row of rows) {
     const after = (row.after ?? {}) as Record<string, unknown>;
@@ -390,6 +406,14 @@ function sampleValues(appOrigin: string): Record<string, string> {
     changedAt: formatDhakaInstant(SAMPLE_INSTANT),
     dueDate: '15 Oct 2026',
     deadline: formatDhakaInstant(SAMPLE_INSTANT),
+    summaryDate: '15 Oct 2026',
+    summary: [
+      '- Overdue follow-ups: 3',
+      '- Follow-ups due today: 2',
+      '- Tender submissions in the next 7 days: 1',
+      '- EOI and proposal deadlines in the next 7 days: 1',
+    ].join('\n'),
+    failedCount: '2',
   };
 }
 
@@ -666,12 +690,10 @@ export async function suppressQueuedAccountEmails(tx: Database, userId: string, 
     );
 }
 
-const ALERT_EMAILS: readonly EmailTemplateKey[] = ['follow_up_due_today', 'follow_up_overdue', 'tender_deadline', 'ownership_changed'];
-
 /**
- * Emails for newly created alerts (CR2), in the alert generator's
- * transaction. Nothing while delivery is turned off. One email per alert:
- * the dedupe key is the alert's id.
+ * Emails for alerts whose reminder time has come (CR2, step 6), as chosen by
+ * `queueDueAlertEmails`. Nothing while delivery is turned off. One email per
+ * alert: the dedupe key is the alert's id.
  */
 export async function queueAlertEmails(tx: Database, alerts: { id: string; recipientId: string; type: string }[]): Promise<void> {
   if (alerts.length === 0 || !(await isEmailDeliveryOn(tx))) return;
@@ -774,11 +796,18 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
     if (!EMAIL_TEMPLATE_KEYS.includes(delivery.templateKey as EmailTemplateKey)) return suppress('Unknown email.');
     const key = delivery.templateKey as EmailTemplateKey;
     const template = await readTemplate(tx, key);
-    if (!template.enabled) return suppress('This email is turned off in Email templates.');
+    if (!template.enabled && !isMandatoryEmail(key)) return suppress('This email is turned off in Email templates.');
 
     const [recipient] = delivery.recipientUserId
       ? await tx
-          .select({ id: users.id, fullName: users.fullName, email: users.email, active: users.active, passwordHash: users.passwordHash })
+          .select({
+            id: users.id,
+            fullName: users.fullName,
+            email: users.email,
+            role: users.role,
+            active: users.active,
+            passwordHash: users.passwordHash,
+          })
           .from(users)
           .where(eq(users.id, delivery.recipientUserId))
           .limit(1)
@@ -788,20 +817,41 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
     const server = toMailServer(settings, runtime.config.secretKey);
     if ('unreadablePassword' in server) {
       await settle(tx, delivery.id, { status: 'failed', detail: UNREADABLE_PASSWORD });
+      await queueDeliveryFailureNotices(tx, key);
       return null;
     }
 
     const values = renderValues(key, delivery.context as Record<string, unknown>, recipient, runtime.appOrigin);
 
-    // CR2: an alert email goes only while the alert is still true, unread
-    // and permitted; it links to the record, where access is checked again.
-    if (ALERT_EMAILS.includes(key)) {
+    // CR2: an alert email goes only while the alert is still true, unread,
+    // permitted and the recipient's responsibility. It links to the record,
+    // where sign-in and access are checked again.
+    if (ALERT_EMAIL_KEYS.includes(key)) {
       const notificationId = (delivery.context as { notificationId?: unknown }).notificationId;
       const alert = typeof notificationId === 'string' ? await deliverableAlert(tx, notificationId) : null;
       if (!alert || !alert.ok) return suppress(alert && !alert.ok ? alert.reason : 'The alert no longer exists.');
-      values.link = `${runtime.appOrigin}/opportunities/${alert.opportunityId}`;
+      values.link = `${runtime.appOrigin}${alert.path}`;
       if (alert.triggerDate) values.dueDate = formatDhakaDate(alert.triggerDate);
       if (alert.triggerAt) values.deadline = formatDhakaInstant(alert.triggerAt);
+    }
+
+    // Step 6: a summary is counted now, in the recipient's scope now, and
+    // only while they still lead a section or are still a chosen recipient.
+    if (key === 'team_summary' || key === 'management_summary') {
+      const summary = await summaryFor(tx, key, recipient.id, (delivery.context as { summaryDate?: unknown }).summaryDate);
+      if (!summary.ok) return suppress(summary.reason);
+      values.summary = summary.text;
+      values.summaryDate = formatDhakaDate(summary.summaryDate);
+      values.link = `${runtime.appOrigin}/dashboard`;
+    }
+
+    // Step 6: administrators get a count and a link, nothing about records.
+    if (key === 'delivery_failures') {
+      if (recipient.role !== 'admin') return suppress('The recipient is no longer an administrator.');
+      const failed = await deliveryFailureCount(tx);
+      if (failed === 0) return suppress('No email has failed in the last 24 hours.');
+      values.failedCount = String(failed);
+      values.link = `${runtime.appOrigin}/administration`;
     }
 
     // CR1: the link is issued now, inside this transaction, and exists in
@@ -855,10 +905,41 @@ export async function deliverEmail(db: Database, runtime: EmailRuntime, delivery
   });
 }
 
-/** After the job's last attempt: the delivery is failed, keeping its last error. */
+/**
+ * After the job's last attempt: the delivery is failed, keeping its last
+ * error, and the administrators are told (step 6).
+ */
 export async function failEmailAfterRetries(db: Database, deliveryId: string): Promise<void> {
-  await db
-    .update(emailDeliveries)
-    .set({ status: 'failed', updatedAt: now() })
-    .where(and(eq(emailDeliveries.id, deliveryId), eq(emailDeliveries.status, 'queued')));
+  await db.transaction(async (tx) => {
+    const failed = await tx
+      .update(emailDeliveries)
+      .set({ status: 'failed', updatedAt: now() })
+      .where(and(eq(emailDeliveries.id, deliveryId), eq(emailDeliveries.status, 'queued')))
+      .returning({ templateKey: emailDeliveries.templateKey });
+    if (failed[0]) await queueDeliveryFailureNotices(tx, failed[0].templateKey);
+  });
+}
+
+/**
+ * Tells each active administrator that emails are failing (step 6): at most
+ * one notice per administrator per Bangladesh day however many fail, and none
+ * about a failed notice itself, so a broken mail server cannot cause a flood.
+ * The notice is a count and a link, counted again when it is sent.
+ */
+async function queueDeliveryFailureNotices(tx: Database, failedTemplateKey: string): Promise<void> {
+  if (failedTemplateKey === 'delivery_failures' || failedTemplateKey === 'test') return;
+  if (!(await enabledEmailKeys(tx)).includes('delivery_failures')) return;
+  const today = dhakaDateOf(now());
+  const administrators = await tx
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.role, 'admin'), eq(users.active, true)))
+    .orderBy(asc(users.id));
+  for (const administrator of administrators) {
+    await queueEmail(tx, {
+      templateKey: 'delivery_failures',
+      recipientUserId: administrator.id,
+      dedupeKey: `delivery_failures:${administrator.id}:${today}`,
+    });
+  }
 }

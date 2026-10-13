@@ -204,6 +204,41 @@ with the code before the rebuild and filled with the synthetic test data
 
 The scratch database was dropped.
 
+### 3.5 Migration 0012: notification email events (CR2, step 6)
+
+Additive (ADR 0011, step 6 addendum).
+
+- **Adds:**
+  - the `eoi_deadline` and `rfp_deadline` notification types, and
+    `notifications.procurement_cycle_id` (the cycle an EOI or proposal
+    deadline alert is about), with the subject check extended;
+  - five email templates: the EOI and RFP deadline reminders, the team and
+    management summaries, and the administrators' delivery-failure notice;
+  - `email_notification_settings`: one row at most, the administrator's
+    reminder timing, summary schedule and management summary recipients.
+    The runtime role can read, insert and update it, never delete it;
+  - `email_templates_security_enabled`: the invitation, password reset and
+    password changed emails cannot be turned off.
+- **Existing records:** unchanged. Nothing is seeded and nothing is sent.
+
+**Pre-flight.** The script refuses to run, and changes nothing, if a
+security email was turned off in Administration. It names the template. Turn
+it back on there (the change is audited), then rerun.
+
+**How to apply.** Run `npm run db:migrate`, or have a database administrator
+run `docs/operations/sql/0012_notification_email_events.production.sql` as
+`penta_migrator`. It is one transaction, and it refuses to run unless `0011`
+is the latest applied migration.
+
+**Rehearsal (13 October 2026).** A scratch database was migrated to `0011`.
+A turned-off "Password changed" template made the pre-flight refuse, naming
+it, with nothing changed. After turning it on, the script applied: the table
+and its grants were created (no DELETE for the runtime role), a turned-off
+reminder template kept its setting, the security check refused turning
+"Password changed" off again, an EOI alert without its cycle was refused by
+`notifications_subject_present`, a rerun was refused, and `db:migrate`
+skipped it. The scratch database was dropped.
+
 Rules for future migrations (unchanged from earlier milestones): additive
 first; a destructive change ships in a later release after the code no
 longer needs the old shape; every new table gets explicit runtime-role grants;

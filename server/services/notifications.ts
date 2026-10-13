@@ -20,28 +20,44 @@
  *  - Reading an alert records `read_at` and nothing else. It never completes,
  *    reschedules or otherwise touches the task (BR-070).
  *
- * Email (CR2): while email delivery is on, a new alert is also emailed, in the
- * same transaction, to the person responsible for it (the task's assignee,
- * the record's owner, the new owner after a transfer). Leads and management
- * keep their in-app alerts without an email for each (decision D-EM-4,
- * proposed default). When the email is sent, `deliverableAlert` checks again
- * that the alert is still true, still unread and still permitted.
+ * Software Procurement (CR6, step 6): an EOI deadline, then an RFP proposal
+ * deadline, within 72 hours raises its own alert, kept apart from goods
+ * tenders, while the cycle is still working towards it.
+ *
+ * Email (CR2, step 6): while email delivery is on, an alert is also emailed to
+ * the person responsible for it (the task's assignee, the record's owner, the
+ * new owner after a transfer), once, when its reminder time comes
+ * (`queueDueAlertEmails`, run by every scan and refresh). Leads and
+ * management keep their in-app alerts without an email for each (D-EM-4).
+ * Retiring an alert suppresses its queued email at once, and when the email is
+ * sent `deliverableAlert` checks again that the alert is still true, unread,
+ * permitted and the recipient's responsibility. In-app alerts never depend on
+ * email: they are created whether or not delivery is on.
  */
-import { and, asc, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import type { NotificationDto, NotificationListDto } from '../../shared/api.js';
+import { ALERT_EMAIL_KEYS } from '../../shared/email.js';
 import type { NotificationType } from '../../shared/reporting.js';
 import { BUSINESS_TIME_LABEL, BUSINESS_TIME_ZONE, TENDER_DUE_SOON_HOURS } from '../../shared/enums.js';
 import { dhakaDateOf, now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { followUps, notifications, opportunities, tenders, users } from '../db/schema.js';
+import { emailDeliveries, followUps, notifications, opportunities, procurementCycles, tenders, users } from '../db/schema.js';
 import { notFound } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { alertRecipientSql, opportunityScope } from '../policy/scope.js';
 import { enqueueJob } from '../jobs/queue.js';
-import { queueAlertEmails } from './email.js';
-import { opportunityOpen, participatingCurrentNotice, tenderDueWithin } from './metrics.js';
+import { enabledEmailKeys, isEmailDeliveryOn, queueAlertEmails } from './email.js';
+import {
+  opportunityOpen,
+  participatingCurrentNotice,
+  procurementDueWithin,
+  procurementOpenDeadline,
+  tenderDueWithin,
+  workingProcurementCycle,
+} from './metrics.js';
+import { queueSummaryEmails, readNotificationTiming } from './notificationEmails.js';
 
 const recipient = alias(users, 'recipient');
 const assignee = alias(users, 'alert_assignee');
@@ -54,8 +70,8 @@ const subject = alias(users, 'alert_subject');
 /**
  * True while the alert in `notifications` still describes the current state
  * and its recipient (`recipient`) may still see the record. Expects
- * `opportunities`, `recipient`, and left-joined `follow_ups` and `tenders`
- * in the same query.
+ * `opportunities`, `recipient`, and left-joined `follow_ups`, `tenders` and
+ * `procurement_cycles` in the same query.
  */
 function stillValid(at: Date): SQL {
   const today = dhakaDateOf(at);
@@ -75,8 +91,33 @@ function stillValid(at: Date): SQL {
     WHEN 'ownership_changed' THEN
       ${opportunities.ownerId} = ${notifications.subjectUserId}
       AND ${alertRecipientSql(recipient, notifications.subjectUserId)}
+    WHEN 'eoi_deadline' THEN
+      ${workingProcurementCycle()} AND ${procurementCycles.milestone} = 'eoi_preparation'
+      AND ${procurementCycles.eoiDeadline} = ${notifications.triggerAt}
+      AND ${procurementCycles.eoiDeadline} > ${at.toISOString()}::timestamptz
+      AND ${alertRecipientSql(recipient, opportunities.ownerId)}
+    WHEN 'rfp_deadline' THEN
+      ${workingProcurementCycle()} AND ${procurementCycles.milestone} IN ('rfp_received', 'proposal_preparation')
+      AND ${procurementCycles.proposalDeadline} = ${notifications.triggerAt}
+      AND ${procurementCycles.proposalDeadline} > ${at.toISOString()}::timestamptz
+      AND ${alertRecipientSql(recipient, opportunities.ownerId)}
     ELSE false END)`;
 }
+
+/**
+ * The alert's recipient is the person responsible for it now: the task's
+ * assignee, the record's owner, or the new owner of a transfer. Only they are
+ * emailed (D-EM-4). Same joins as `stillValid`.
+ */
+function recipientResponsible(): SQL {
+  return sql`((CASE ${notifications.type}
+    WHEN 'follow_up_due_today' THEN ${followUps.assignedUserId}
+    WHEN 'follow_up_overdue' THEN ${followUps.assignedUserId}
+    WHEN 'ownership_changed' THEN ${notifications.subjectUserId}
+    ELSE ${opportunities.ownerId} END) = ${notifications.recipientId})`;
+}
+
+const OBSOLETE_ALERT = 'The alert no longer applies, or the recipient can no longer see the record.';
 
 /**
  * Retires alerts that are no longer true or no longer permitted. Called inside
@@ -94,7 +135,7 @@ export async function retireObsoleteAlerts(
   if (options.followUpId) narrow.push(sql`${notifications.followUpId} = ${options.followUpId}`);
   if (options.tenderId) narrow.push(sql`${notifications.tenderId} = ${options.tenderId}`);
 
-  const result = await tx.execute(sql`
+  const result = await tx.execute<{ id: string }>(sql`
     UPDATE ${notifications}
     SET resolved_at = ${at.toISOString()}::timestamptz, resolution = ${options.resolution}
     WHERE ${notifications.resolvedAt} IS NULL
@@ -104,11 +145,23 @@ export async function retireObsoleteAlerts(
         JOIN ${users} AS ${sql.identifier('recipient')} ON ${recipient.id} = ${notifications.recipientId}
         LEFT JOIN ${followUps} ON ${followUps.id} = ${notifications.followUpId}
         LEFT JOIN ${tenders} ON ${tenders.id} = ${notifications.tenderId}
+        LEFT JOIN ${procurementCycles} ON ${procurementCycles.id} = ${notifications.procurementCycleId}
         WHERE ${opportunities.id} = ${notifications.opportunityId}
           AND ${stillValid(at)}
       )
+    RETURNING ${notifications.id}
   `);
-  return result.rowCount ?? 0;
+  const retired = result.rows.map((row) => row.id);
+  // Step 6: a reminder still waiting to be sent is suppressed with its alert,
+  // so the delivery log says so at once (the send job would refuse it anyway).
+  for (let index = 0; index < retired.length; index += 500) {
+    const keys = retired.slice(index, index + 500).map((id) => `alert:${id}`);
+    await tx
+      .update(emailDeliveries)
+      .set({ status: 'suppressed', statusDetail: OBSOLETE_ALERT, updatedAt: at })
+      .where(and(eq(emailDeliveries.status, 'queued'), inArray(emailDeliveries.dedupeKey, keys)));
+  }
+  return retired.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,12 +169,11 @@ export async function retireObsoleteAlerts(
 // ---------------------------------------------------------------------------
 
 interface AlertCandidate {
-  /** The person the alert is about (assignee, owner, new owner): the one emailed. */
-  responsibleUserId: string;
   recipientId: string;
   opportunityId: string;
   followUpId: string | null;
   tenderId: string | null;
+  procurementCycleId: string | null;
   type: NotificationType;
   triggerKey: string;
   triggerDate: string | null;
@@ -137,21 +189,14 @@ async function insertAlerts(db: Database, candidates: AlertCandidate[], at: Date
   let inserted = 0;
   for (let index = 0; index < sorted.length; index += 500) {
     const batch = sorted.slice(index, index + 500);
-    // The alerts and their emails commit together, so a new alert is never
-    // left without the email it should have had.
-    inserted += await db.transaction(async (tx) => {
-      const rows = await tx
-        .insert(notifications)
-        .values(batch.map(({ responsibleUserId: _responsible, ...candidate }) => ({ ...candidate, createdAt: at })))
-        .onConflictDoNothing({ target: notifications.triggerKey })
-        .returning({ id: notifications.id, recipientId: notifications.recipientId, type: notifications.type, triggerKey: notifications.triggerKey });
-      const responsibleByKey = new Map(batch.map((candidate) => [candidate.triggerKey, candidate.responsibleUserId]));
-      await queueAlertEmails(
-        tx,
-        rows.filter((row) => responsibleByKey.get(row.triggerKey) === row.recipientId),
-      );
-      return rows.length;
-    });
+    // Emails follow separately (`queueDueAlertEmails`), when each one's
+    // reminder time comes: an alert never waits for email.
+    const rows = await db
+      .insert(notifications)
+      .values(batch.map((candidate) => ({ ...candidate, createdAt: at })))
+      .onConflictDoNothing({ target: notifications.triggerKey })
+      .returning({ id: notifications.id });
+    inserted += rows.length;
   }
   return inserted;
 }
@@ -177,7 +222,6 @@ export async function generateDeadlineAlerts(
   const taskKey = sql<string>`(${taskType} || ':' || ${recipient.id} || ':' || ${followUps.id} || ':' || ${followUps.dueDate}::text)`;
   const taskRows = await db
     .select({
-      responsibleUserId: followUps.assignedUserId,
       recipientId: recipient.id,
       opportunityId: opportunities.id,
       followUpId: followUps.id,
@@ -203,7 +247,6 @@ export async function generateDeadlineAlerts(
     || to_char(${tenders.submissionDeadline} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))`;
   const tenderRows = await db
     .select({
-      responsibleUserId: opportunities.ownerId,
       recipientId: recipient.id,
       opportunityId: opportunities.id,
       tenderId: tenders.id,
@@ -222,19 +265,56 @@ export async function generateDeadlineAlerts(
       ),
     );
 
+  // CR6: the EOI deadline while the EOI is prepared, then the RFP proposal
+  // deadline, of a working cycle: the dashboard's procurement metric.
+  const procurementType = sql<NotificationType>`(CASE WHEN ${procurementCycles.milestone} = 'eoi_preparation'
+    THEN 'eoi_deadline' ELSE 'rfp_deadline' END)`;
+  const procurementKey = sql<string>`(${procurementType} || ':' || ${recipient.id} || ':' || ${procurementCycles.id} || ':'
+    || to_char(${procurementOpenDeadline} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))`;
+  const procurementRows = await db
+    .select({
+      recipientId: recipient.id,
+      opportunityId: opportunities.id,
+      procurementCycleId: procurementCycles.id,
+      type: procurementType,
+      triggerKey: procurementKey,
+      triggerAt: sql<string>`${procurementOpenDeadline}`,
+    })
+    .from(procurementCycles)
+    .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+    .innerJoin(recipient, alertRecipientSql(recipient, opportunities.ownerId))
+    .where(
+      and(
+        procurementDueWithin(at, TENDER_DUE_SOON_HOURS),
+        sql`${procurementOpenDeadline} > ${at.toISOString()}::timestamptz`,
+        onlyOpportunity,
+        notYetAlerted(procurementKey),
+      ),
+    );
+
   return insertAlerts(
     db,
     [
       ...taskRows.map((row) => ({
         ...row,
         tenderId: null,
+        procurementCycleId: null,
         triggerAt: null,
         subjectUserId: null,
       })),
       ...tenderRows.map((row) => ({
         ...row,
         followUpId: null,
+        procurementCycleId: null,
         type: 'tender_deadline' as const,
+        triggerDate: null,
+        subjectUserId: null,
+      })),
+      ...procurementRows.map((row) => ({
+        ...row,
+        followUpId: null,
+        tenderId: null,
+        triggerAt: new Date(row.triggerAt),
         triggerDate: null,
         subjectUserId: null,
       })),
@@ -273,9 +353,9 @@ export async function generateOwnershipAlerts(
     db,
     rows.map((row) => ({
       ...row,
-      responsibleUserId: options.newOwnerId,
       followUpId: null,
       tenderId: null,
+      procurementCycleId: null,
       type: 'ownership_changed' as const,
       triggerDate: null,
       triggerAt: null,
@@ -315,43 +395,141 @@ export async function alertsChangedInTransaction(
 }
 
 /**
- * For the email job (CR2): the alert, if it is still true, still unread and
- * its recipient may still see the record; otherwise why not. The same
- * `stillValid` definition as every inbox read.
+ * For the email job (CR2): the alert, if it is still true, still unread, its
+ * recipient may still see the record and is still the person responsible for
+ * it; otherwise why not. The same `stillValid` definition as every inbox read.
  */
 export async function deliverableAlert(
   db: Database,
   notificationId: string,
   at: Date = now(),
 ): Promise<
-  | { ok: true; opportunityId: string; triggerDate: string | null; triggerAt: Date | null }
+  | { ok: true; type: NotificationType; path: string; triggerDate: string | null; triggerAt: Date | null }
   | { ok: false; reason: string }
 > {
   const [row] = await db
     .select({
+      type: notifications.type,
       opportunityId: notifications.opportunityId,
       triggerDate: notifications.triggerDate,
       triggerAt: notifications.triggerAt,
       readAt: notifications.readAt,
       valid: sql<boolean>`${stillValid(at)}`,
+      responsible: sql<boolean>`${recipientResponsible()}`,
     })
     .from(notifications)
     .innerJoin(opportunities, eq(opportunities.id, notifications.opportunityId))
     .innerJoin(recipient, eq(recipient.id, notifications.recipientId))
     .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
     .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .leftJoin(procurementCycles, eq(procurementCycles.id, notifications.procurementCycleId))
     .where(eq(notifications.id, notificationId))
     .limit(1);
-  if (!row || !row.valid) return { ok: false, reason: 'The alert no longer applies, or the recipient can no longer see the record.' };
+  if (!row || !row.valid) return { ok: false, reason: OBSOLETE_ALERT };
+  if (!row.responsible) return { ok: false, reason: 'The recipient is no longer the person responsible for it.' };
   if (row.readAt) return { ok: false, reason: 'Already read in the CRM.' };
-  return { ok: true, opportunityId: row.opportunityId, triggerDate: row.triggerDate, triggerAt: row.triggerAt };
+  return {
+    ok: true,
+    type: row.type,
+    path: alertPath(row.type, row.opportunityId),
+    triggerDate: row.triggerDate,
+    triggerAt: row.triggerAt,
+  };
 }
 
-/** The scheduled scan: retire what is obsolete, then add what is due. */
-export async function runNotificationScan(db: Database, at: Date = now()): Promise<{ retired: number; created: number }> {
+/**
+ * When an alert's email is due (step 6), in the administrator's timing:
+ * follow-up reminders from the reminder hour of their day, in Bangladesh
+ * time; deadline reminders the chosen number of hours before the deadline;
+ * an assignment at once. Never before the alert itself exists.
+ */
+function emailDueAt(timing: { reminderHour: number; tenderReminderHours: number; eoiReminderHours: number; rfpReminderHours: number }): SQL {
+  const hour = sql`make_interval(hours => ${timing.reminderHour})`;
+  const before = (hours: number) => sql`${notifications.triggerAt} - make_interval(hours => ${hours})`;
+  return sql`GREATEST(${notifications.createdAt}, CASE ${notifications.type}
+    WHEN 'follow_up_due_today' THEN (${notifications.triggerDate} + ${hour}) AT TIME ZONE 'Asia/Dhaka'
+    WHEN 'follow_up_overdue' THEN ((${notifications.createdAt} AT TIME ZONE 'Asia/Dhaka')::date + ${hour}) AT TIME ZONE 'Asia/Dhaka'
+    WHEN 'tender_deadline' THEN ${before(timing.tenderReminderHours)}
+    WHEN 'eoi_deadline' THEN ${before(timing.eoiReminderHours)}
+    WHEN 'rfp_deadline' THEN ${before(timing.rfpReminderHours)}
+    ELSE ${notifications.createdAt} END)`;
+}
+
+/**
+ * A reminder whose moment passed more than this long ago is not emailed late:
+ * turning delivery on, or a worker that was stopped, never releases a flood
+ * of old reminders. The alert itself stays in the app.
+ */
+const EMAIL_CATCH_UP_HOURS = 24;
+
+/**
+ * Queues the alert emails that are due (step 6): one per alert, to the person
+ * responsible, while delivery and that email are on and the alert is still
+ * true, unread and permitted. Safe to run any number of times: the alert's
+ * id is the delivery's dedupe key.
+ */
+export async function queueDueAlertEmails(db: Database, options: { at?: Date; opportunityId?: string } = {}): Promise<number> {
+  const at = options.at ?? now();
+  if (!(await isEmailDeliveryOn(db))) return 0;
+  const enabled = (await enabledEmailKeys(db)).filter((key) => ALERT_EMAIL_KEYS.includes(key));
+  if (enabled.length === 0) return 0;
+  const timing = await readNotificationTiming(db);
+  const dueAt = emailDueAt(timing);
+
+  const due = await db
+    .select({ id: notifications.id, recipientId: notifications.recipientId, type: notifications.type })
+    .from(notifications)
+    .innerJoin(opportunities, eq(opportunities.id, notifications.opportunityId))
+    .innerJoin(recipient, eq(recipient.id, notifications.recipientId))
+    .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
+    .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .leftJoin(procurementCycles, eq(procurementCycles.id, notifications.procurementCycleId))
+    .where(
+      and(
+        options.opportunityId ? eq(notifications.opportunityId, options.opportunityId) : undefined,
+        sql`${notifications.type}::text IN (${sql.join(
+          enabled.map((key) => sql`${key}`),
+          sql`, `,
+        )})`,
+        isNull(notifications.readAt),
+        stillValid(at),
+        recipientResponsible(),
+        sql`${dueAt} <= ${at.toISOString()}::timestamptz`,
+        sql`${dueAt} > ${at.toISOString()}::timestamptz - make_interval(hours => ${EMAIL_CATCH_UP_HOURS})`,
+        sql`NOT EXISTS (SELECT 1 FROM ${emailDeliveries} WHERE ${emailDeliveries.dedupeKey} = 'alert:' || ${notifications.id}::text)`,
+      ),
+    )
+    .orderBy(asc(notifications.id));
+  if (due.length === 0) return 0;
+  await db.transaction((tx) => queueAlertEmails(tx, due));
+  return due.length;
+}
+
+/**
+ * The scheduled scan: retire what is obsolete (suppressing its queued email),
+ * add what is due, then queue the reminder and summary emails whose time has
+ * come.
+ */
+export async function runNotificationScan(
+  db: Database,
+  at: Date = now(),
+): Promise<{ retired: number; created: number; emailsQueued: number; summariesQueued: number }> {
   const retired = await retireObsoleteAlerts(db, { resolution: 'obsolete', at });
   const created = await generateDeadlineAlerts(db, { at });
-  return { retired, created };
+  const emailsQueued = await queueDueAlertEmails(db, { at });
+  const summariesQueued = await queueSummaryEmails(db, at);
+  return { retired, created, emailsQueued, summariesQueued };
+}
+
+/**
+ * For services whose change can take away someone's access without touching
+ * an opportunity (a membership ended, a lead replaced, an account or section
+ * deactivated): queue a scan inside the change's transaction, so obsolete
+ * alerts are retired and their queued emails suppressed right after it
+ * commits. Reads and the send job re-check access in the meantime.
+ */
+export async function accessChangedInTransaction(tx: Database, requestId: string): Promise<void> {
+  await enqueueJob(tx, { kind: 'notifications.scan', dedupeKey: `notifications.scan:access:${requestId}` });
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +569,8 @@ function baseQuery(db: Database) {
       followUpTitle: followUps.title,
       assigneeName: assignee.fullName,
       tenderReference: tenders.reference,
+      procurementReference: procurementCycles.reference,
+      rfpReference: procurementCycles.rfpReference,
       subjectId: subject.id,
       subjectName: subject.fullName,
     })
@@ -400,10 +580,27 @@ function baseQuery(db: Database) {
     .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
     .leftJoin(assignee, eq(assignee.id, followUps.assignedUserId))
     .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .leftJoin(procurementCycles, eq(procurementCycles.id, notifications.procurementCycleId))
     .leftJoin(subject, eq(subject.id, notifications.subjectUserId));
 }
 
 type Row = Awaited<ReturnType<ReturnType<typeof baseQuery>['execute']>>[number];
+
+/** Where an alert leads, in the app and in its email (ids only, never names). */
+export function alertPath(type: NotificationType, opportunityId: string): string {
+  switch (type) {
+    case 'follow_up_due_today':
+    case 'follow_up_overdue':
+      return `/opportunities/${opportunityId}?tab=activities`;
+    case 'tender_deadline':
+      return `/opportunities/${opportunityId}?tab=tender`;
+    case 'eoi_deadline':
+    case 'rfp_deadline':
+      return `/opportunities/${opportunityId}?tab=procurement`;
+    case 'ownership_changed':
+      return `/opportunities/${opportunityId}`;
+  }
+}
 
 function toDto(actor: Actor, row: Row): NotificationDto {
   const common = { id: row.id, type: row.type, createdAt: row.createdAt.toISOString(), readAt: row.readAt?.toISOString() ?? null };
@@ -414,7 +611,7 @@ function toDto(actor: Actor, row: Row): NotificationDto {
         title: `Due today: ${row.followUpTitle ?? 'Follow-up'}`,
         detail: `${row.opportunityName} · ${row.assigneeName ?? ''}`,
         tone: 'amber',
-        path: `/opportunities/${row.opportunityId}?tab=activities`,
+        path: alertPath(row.type, row.opportunityId),
       };
     case 'follow_up_overdue':
       return {
@@ -422,7 +619,7 @@ function toDto(actor: Actor, row: Row): NotificationDto {
         title: `Overdue: ${row.followUpTitle ?? 'Follow-up'}`,
         detail: `${row.opportunityName} · due ${row.triggerDate ? formatDate(row.triggerDate) : ''} · ${row.assigneeName ?? ''}`,
         tone: 'red',
-        path: `/opportunities/${row.opportunityId}?tab=activities`,
+        path: alertPath(row.type, row.opportunityId),
       };
     case 'tender_deadline':
       return {
@@ -430,7 +627,7 @@ function toDto(actor: Actor, row: Row): NotificationDto {
         title: `Tender due within 72 hours: ${row.tenderReference ?? ''}`,
         detail: `${row.opportunityName} · ${row.triggerAt ? formatInstant(row.triggerAt) : ''}`,
         tone: 'amber',
-        path: `/opportunities/${row.opportunityId}?tab=tender`,
+        path: alertPath(row.type, row.opportunityId),
       };
     case 'ownership_changed':
       return {
@@ -438,7 +635,23 @@ function toDto(actor: Actor, row: Row): NotificationDto {
         title: row.subjectId === actor.id ? `Assigned to you: ${row.opportunityName}` : `Ownership changed: ${row.opportunityName}`,
         detail: `Now owned by ${row.subjectName ?? ''} · ${formatInstant(row.createdAt)}`,
         tone: 'teal',
-        path: `/opportunities/${row.opportunityId}`,
+        path: alertPath(row.type, row.opportunityId),
+      };
+    case 'eoi_deadline':
+      return {
+        ...common,
+        title: `EOI due within 72 hours: ${row.procurementReference ?? ''}`,
+        detail: `${row.opportunityName} · ${row.triggerAt ? formatInstant(row.triggerAt) : ''}`,
+        tone: 'amber',
+        path: alertPath(row.type, row.opportunityId),
+      };
+    case 'rfp_deadline':
+      return {
+        ...common,
+        title: `Proposal due within 72 hours: ${row.rfpReference ?? row.procurementReference ?? ''}`,
+        detail: `${row.opportunityName} · ${row.triggerAt ? formatInstant(row.triggerAt) : ''}`,
+        tone: 'amber',
+        path: alertPath(row.type, row.opportunityId),
       };
   }
 }
@@ -451,6 +664,7 @@ export async function unreadCount(db: Database, actor: Actor, at: Date = now()):
     .innerJoin(recipient, eq(recipient.id, notifications.recipientId))
     .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
     .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .leftJoin(procurementCycles, eq(procurementCycles.id, notifications.procurementCycleId))
     .where(and(visibleTo(actor, at), isNull(notifications.readAt)));
   return row?.value ?? 0;
 }
@@ -469,6 +683,7 @@ export async function listNotifications(
     .innerJoin(recipient, eq(recipient.id, notifications.recipientId))
     .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
     .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .leftJoin(procurementCycles, eq(procurementCycles.id, notifications.procurementCycleId))
     .where(where);
   const rows = await baseQuery(db)
     .where(where)
@@ -510,6 +725,7 @@ export async function markAllNotificationsRead(db: Database, actor: Actor): Prom
     .innerJoin(recipient, eq(recipient.id, notifications.recipientId))
     .leftJoin(followUps, eq(followUps.id, notifications.followUpId))
     .leftJoin(tenders, eq(tenders.id, notifications.tenderId))
+    .leftJoin(procurementCycles, eq(procurementCycles.id, notifications.procurementCycleId))
     .where(and(visibleTo(actor, at), isNull(notifications.readAt)));
   const updated = await db
     .update(notifications)

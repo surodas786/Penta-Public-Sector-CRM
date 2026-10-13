@@ -52,6 +52,7 @@ import { issueAccountLink, revokeAccountLinks, type AccountTokenPurpose } from '
 import { diffRecords, recordAuditEvent } from './audit.js';
 import type { CompleteClaimInTransaction } from './idempotency.js';
 import { isEmailDeliveryOn, queueEmail, suppressQueuedAccountEmails } from './email.js';
+import { accessChangedInTransaction } from './notifications.js';
 import { presentChanges } from './opportunities.js';
 
 function assertAdministrator(actor: Actor): void {
@@ -683,6 +684,9 @@ export async function updateUser(options: {
         requestId,
       });
     }
+    // Step 6: a role or membership change can end access; retire its alerts
+    // and suppress their queued reminders.
+    if (roleChanged || moved.left > 0) await accessChangedInTransaction(tx, requestId);
   });
 
   return readUser(db, userId);
@@ -739,6 +743,7 @@ export async function deactivateUser(options: {
       reason: command.reason,
       requestId,
     });
+    await accessChangedInTransaction(tx, requestId);
   });
 
   return readUser(db, userId);
@@ -1027,6 +1032,7 @@ export async function replaceSectionLead(options: {
       reason: command.reason,
       requestId,
     });
+    await accessChangedInTransaction(tx, requestId);
   });
 
   return getSection(db, actor, sectionId);
@@ -1098,6 +1104,7 @@ export async function setSectionActive(options: {
       reason: command.reason,
       requestId,
     });
+    if (!active) await accessChangedInTransaction(tx, requestId);
   });
 
   return getSection(db, actor, sectionId);

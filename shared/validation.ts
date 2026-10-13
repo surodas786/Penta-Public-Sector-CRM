@@ -26,7 +26,7 @@ import {
   isTerminalStage,
   type OpportunityStage,
 } from './enums.js';
-import { EMAIL_SECURITY_MODES } from './email.js';
+import { DEADLINE_REMINDER_MAX_HOURS, EMAIL_SECURITY_MODES, SUMMARY_FREQUENCIES } from './email.js';
 import { isValidMoneyString } from './money.js';
 import { DASHBOARD_RANGES, EXPORT_KINDS, REPORT_KEYS, SEARCH_MIN_LENGTH, SEARCH_RESULT_TYPES } from './reporting.js';
 
@@ -1129,6 +1129,21 @@ export const updateEmailTemplateSchema = emailTemplateContentSchema
   .strict();
 
 export const sendTestEmailSchema = z.object({ to: emailField }).strict();
+
+/** Notification timing (CR2, step 6). The recipient ids are re-checked by the server. */
+export const updateNotificationTimingSchema = z
+  .object({
+    /** 0 while the defaults are in use. */
+    version: z.number().int().min(0),
+    reminderHour: z.number().int().min(0, 'Choose an hour from 00 to 23.').max(23, 'Choose an hour from 00 to 23.'),
+    tenderReminderHours: z.number().int().min(1, 'Use at least 1 hour.').max(DEADLINE_REMINDER_MAX_HOURS, `Use at most ${DEADLINE_REMINDER_MAX_HOURS} hours: the in-app alert appears 72 hours before the deadline.`),
+    eoiReminderHours: z.number().int().min(1, 'Use at least 1 hour.').max(DEADLINE_REMINDER_MAX_HOURS, `Use at most ${DEADLINE_REMINDER_MAX_HOURS} hours: the in-app alert appears 72 hours before the deadline.`),
+    rfpReminderHours: z.number().int().min(1, 'Use at least 1 hour.').max(DEADLINE_REMINDER_MAX_HOURS, `Use at most ${DEADLINE_REMINDER_MAX_HOURS} hours: the in-app alert appears 72 hours before the deadline.`),
+    summaryFrequency: z.enum(SUMMARY_FREQUENCIES),
+    summaryWeekday: z.number().int().min(0).max(6),
+    managementSummaryRecipientIds: z.array(uuidField).max(50, 'Choose at most 50 people.'),
+  })
+  .strict();
 
 /**
  * How an invitation or reset link goes out (CR1). Omitted: by email while
