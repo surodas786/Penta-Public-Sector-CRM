@@ -44,6 +44,10 @@ test('a salesperson tracks tenders, records a submission without moving the stag
   const row = main.getByRole('row').filter({ hasText: 'DCR/PROC/2026/221' });
   await row.getByRole('button', { name: 'Mark Submitted' }).click();
   const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Mark bid as Submitted' }) });
+  // The seeded deadline is fixed (8 Oct 2026). After it, the application
+  // rightly asks why the submission is late; the check answers and goes on.
+  const lateNote = dialog.getByLabel('Explain the late submission');
+  if (await lateNote.isVisible()) await lateNote.fill('Synthetic browser check run after the fixed seed deadline.');
   await dialog.getByRole('button', { name: 'Mark Submitted' }).click();
   await expect(dialog.getByText('Choose whether to move the opportunity to Bid Submitted.')).toBeVisible();
   await dialog.getByLabel('No, keep it at Tender Published').check();

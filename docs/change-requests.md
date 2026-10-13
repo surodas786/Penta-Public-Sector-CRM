@@ -15,8 +15,11 @@ aged m5 fixture, and the release documents are updated. **CR2 step 6**
 (13 October 2026) connected email to the in-app notifications and the
 procurement cycles: configurable events, recipients, timing, summaries and
 failure notices (migration 0012, ADR 0011 addendum; see "Changes made in CR2
-step 6" below). Still open: D-EM-1, D-EM-2 and D-EM-4, and the three release
-blockers. Nothing is deployed.
+step 6" below). **Step 7 of the final sequence** (13 October 2026) verified CR1–CR6 as one change set: an
+integrated acceptance suite, an upgrade rehearsal from release-one data and
+responsive/keyboard checks. Release handover:
+`docs/release/cr-release-handover.md`. Still open: D-EM-1, D-EM-2 and
+D-EM-4, and the three release blockers. Nothing is deployed.
 
 **Changes made in CR2 step 6 (13 October 2026):**
 

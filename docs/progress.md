@@ -4,9 +4,11 @@
 requests CR1–CR6 are **implemented and regression-tested** on branch
 `cr-change-requests` (steps 1–7 below; `docs/change-requests.md`). CR2
 step 6 connected email to the in-app notifications and the procurement
-cycles (§16). The database changes are migrations 0008–0012, each with a
-production script (0011 rebuilt CR6 as separate procurement cycles, §15;
-0012 is §16).
+cycles (§16). **Step 7 verified CR1–CR6 as one change set (§17):** ready
+for staging UAT once a staging environment exists; release handover in
+`docs/release/cr-release-handover.md`. The database changes are migrations
+0008–0012, each with a production script (0011 rebuilt CR6 as separate
+procurement cycles, §15; 0012 is §16).
 No email has been sent outside the local capture folder. Nothing is
 deployed. **Not production-ready:** production document storage and malware
 scanning, the identity provider and MFA, and a staging environment are
@@ -848,15 +850,188 @@ journal `1791867164750`). Apply it after 0011 (runbook §3.5,
   notice fails too. The job health check (NFR-003) remains the reliable
   signal.
 
-### 17. Next task
+### 17. Step 7 — complete change set verified (13 October 2026)
+
+**Instruction.** Verify CR1–CR6 as one integrated change set, fix the
+remaining gaps without redesigning the interface, rehearse the upgrade, and
+prepare the release handover. No deployment, no live data, no real email.
+
+**Recorded completion compared with code and tests.** A read-only audit of
+the tests behind each of the nine demonstrations found these gaps:
+
+- **Lead of two sections:** never tested against a third section, and not
+  at all on search, export or documents.
+- **Salesperson in two sections:** the absence of colleagues' records was
+  not asserted.
+- **Queued email:** no test after a membership ends or an account is
+  deactivated through Administration.
+- **Refused links:** not compared for sameness, and not shown to leave
+  nothing changed.
+- **Email administration:** three endpoints had no test that other roles
+  are refused (notification timing, template save and preview, test
+  message).
+- **Changed screens:** no responsive or keyboard checks.
+- **Acceptance matrix:** still said procurement deadline notifications were
+  not built (true until step 6).
+
+All were closed as below.
+
+**Added**
+
+- **`server/tests/crAcceptance.test.ts` (10 tests):** the nine
+  demonstrations end to end.
+  1. Activation by an emailed invitation.
+  2. Expired, replaced, used and unknown links give identical refusals; the
+     password hash, session version and audit are unchanged.
+  3. A lead of Government Applications and a new Health Systems section
+     reaches both, and nothing of Infrastructure, on list, record (identical
+     404), search, dashboard, CSV export, documents (list and upload) and
+     in-app alerts.
+  4. A salesperson in two sections sees exactly her own records; every
+     colleague's record in either section is a 404 and absent from search.
+  5. Leaving a section and a lead replacement apply on the next request.
+  6. A queued reminder is not sent after the membership ends or after a
+     transfer. A queued management summary is not sent after deactivation
+     through Administration.
+  7. EOI → shortlisting → RFP → proposal preparation → proposal submitted,
+     the pipeline untouched.
+  8. A goods tender is submitted beside a procurement cycle; each stays in
+     its own list.
+  9. The SMTP password is absent from responses, the stored value and the
+     audit. Previews are synthetic. The administrator gets 403 on commercial
+     endpoints, and management, a lead and a salesperson get 403 on every
+     email administration endpoint, including the step 6 ones.
+- **`e2e/crInterface.spec.ts`:** the changed screens at 1440, 768 and
+  360 px (Software Procurement area and tab, change password,
+  Administration with sections, email delivery, templates and timing).
+  Three dialogs are driven from the keyboard. Added to
+  `npm run test:browsers`.
+
+**Fixed**
+
+- **Defect: email administration at 360 px** (found by the new interface
+  check). The Email delivery panel's actions sat beside the title on one
+  line; the title collapsed and the last button was cut off. The shared
+  `Panel` header (`src/components/ui/Layout.tsx`) now wraps its actions
+  below the title only when they do not fit. The M8 checks were re-run in
+  three browsers: no other screen changed.
+- **`e2e/m5.spec.ts`, failing since 8 October:** it now answers the
+  late-submission question the application correctly asks after the fixed
+  seed deadline. The fixture is unchanged.
+- **`e2e/accountAccess.spec.ts`:** step 6's sign-in return path made it fail
+  in Chromium and Edge. The second browser had been sent to sign-in from
+  `/opportunities`, and those browsers keep that across a reload of
+  `/sign-in`, so it rightly returned there. The helper now accepts the
+  returned page. The application is unchanged.
+- **First-run failures in the new acceptance suite:** all three were in the
+  test itself (the create response's id path, and a membership end without
+  `endedBy`). None was a product defect.
+
+**Upgrade rehearsal from release-one data**
+
+- **Setup:**
+  - A worktree of `e9a8e1b` (release one with the cookie fix) was placed
+    inside `.git`, with no links.
+  - The release-one code migrated a fresh database to 0007 and seeded it:
+    2 sections, 10 users, 23 opportunities, 17 open follow-ups, 22
+    contacts, 34 activities, 8 tenders.
+  - The release-one job runner then created its own 40 alerts.
+  - Every account's visible records were recorded with **release one's own
+    policy code**.
+- **Upgrade:** the five production scripts, 0008–0012, were applied in
+  order with `psql` as `penta_migrator`. Each ended with COMMIT.
+- **Results:**
+  - **Scope:** every account's visible records, recorded with the current
+    policy code, match the release-one record exactly. 10 of 10 accounts
+    identical (admin 0, management 23, Nadia 13, Farhan 10, Rafiq 5, Tasnia
+    4, Imran 4, Sadia 4, Mehjabin 1, inactive Shuvo 0).
+  - **Data:** every row count is unchanged.
+  - **Memberships:** one open membership for each of the 7 salespeople, the
+    inactive one included. Leads come only from `sections.lead_user_id`.
+  - **Migrator:** `db:migrate` afterwards was a no-op (13 recorded
+    migrations, latest `1791867164750`).
+  - **Alerts:** the current notification scan kept all 40 release-one
+    alerts (none retired, none duplicated) and queued no email, since
+    delivery is off.
+- **Clean-up:** the rehearsal database and worktree were removed, and the
+  real test database was restored. `node_modules` is intact.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | Baseline at the step 6 commit: **774 passed**, 30 files. Final, with the acceptance suite: **784 passed, 0 failed**, 31 files |
+| `crAcceptance.test.ts` | 10 of 10 (after fixing the test's own mistakes, above) |
+| `npm run test:smoke` | Every spec passed (smoke+m2 12, m3 2, m4 3, **m5 3**, m6 4, m7 1, cr3 1, cr45 1, cr2 1, cr2-step6 2, cr1 1, cr6 1), except `accountAccess` in the first run. After the helper fix it passed: Chromium 1 of 1 |
+| `npm run test:browsers` | m8: Chromium, Edge and Firefox passed. crInterface: Chromium, Edge and Firefox passed. accountAccess: Firefox passed; Chromium and Edge failed as above, then passed when re-run (1 of 1 each) |
+| `npm run build` | Pass, with demo exclusion |
+| `npm run check:production-server` | 20 passed, 0 failed |
+| Upgrade rehearsal 0007 → 0012 | As above: 10 of 10 accounts identical |
+
+**Browser checks covering the demonstrations:**
+
+- **Activation:** `cr1.spec.ts`, `m3.spec.ts`.
+- **Link states:** `accountAccess.spec.ts`, in three browsers.
+- **Password change:** `cr3.spec.ts`, `accountAccess.spec.ts`.
+- **The earlier Chrome session-token problem** (stale duplicate `penta.sid`
+  and CSRF cookies injected, then sign-in): `accountAccess.spec.ts`, in three
+  browsers.
+- **Multi-section administration:** `cr45.spec.ts`.
+- **Procurement:** `cr6.spec.ts`.
+- **Email administration:** `cr2.spec.ts`, `cr2-step6.spec.ts`.
+
+**Documents updated**
+
+- **Requirements:** `docs/Penta_CRM_Requirements.md`. The single-section
+  rules are amended in place: the central rule, the permission matrix,
+  FR-002, BR-001, BR-002, BR-051, BR-052, FR-090, SEC-030, the data model,
+  AT-02, AT-03 and AT-09. The original wording is kept beside each
+  amendment.
+- **Plan:** `Plan.md` §3.1 (scope is `section_id IN actor.sectionIds`, read
+  fresh), §3.2, and a change-request entry in §6.
+- **Release documents:**
+  - `docs/release/acceptance-matrix.md`: 47 change-request rows, 43
+    complete and 4 partial;
+  - `docs/release/interface-quality.md`;
+  - new `docs/release/cr-release-handover.md`: migration, configuration,
+    worker, backup, rollback and remaining issues.
+- **Project notes:** `CLAUDE.md`.
+
+**Database.** No schema change in step 7, so there is no new production
+script. The five existing scripts (0008–0012) are the complete set. Their
+order, checksums and instructions are in
+`docs/operations/sql/sql_instructions.md`.
+
+**Readiness.**
+
+- **Ready for staging UAT,** on synthetic data, with `EMAIL_TRANSPORT=none`
+  or, once D-EM-1 is decided, `smtp`.
+- **Not ready for production.** The three release blockers remain:
+  document storage and scanning, the identity provider and MFA, and a
+  staging environment.
+- **Not run here:** real email, staging capacity, the restore drill and
+  monitoring on staging, Safari and mobile browsers, screen readers, and
+  AT-17 sign-off.
+
+### 18. Next task
+
+**Staging UAT** (`docs/release/cr-release-handover.md`, `pilot-handover.md` §4):
+
+1. Provision staging.
+2. Apply 0008–0012 with the production scripts.
+3. Run the UAT scenarios with management, a lead and a salesperson.
 
 Penta's decisions:
 
 - **D-EM-1:** the mail server. Then a test email on staging.
 - **D-EM-2:** email content.
-- **D-EM-4:** alert recipients.
-- **The aged m5 fixture:** make the deadline relative to today, or move that
-  one tender's date.
+- **D-EM-4:** recipients, as extended in step 6.
+- **Defaults to confirm:** reminder 09:00, 72 hours, weekly summaries on
+  Sunday, summaries off.
+- **The aged m5 fixture:** the browser check now copes, but making seeded
+  dates relative is still open.
 - **Review** of the check-production-server rule for empty expired cookie
   headers (step 1).
 

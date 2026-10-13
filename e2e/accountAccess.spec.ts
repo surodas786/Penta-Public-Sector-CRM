@@ -31,7 +31,9 @@ async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel('Email address').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.waitForURL(/\/(dashboard|administration)$/);
+  // The landing page, or (CR2 step 6) the page that sent this browser to sign
+  // in: Chromium and Edge keep that across a reload of /sign-in.
+  await page.waitForURL(/\/(dashboard|administration|opportunities)$/);
 }
 
 async function latestEmailTo(to: string, since: number): Promise<{ subject: string; text: string }> {

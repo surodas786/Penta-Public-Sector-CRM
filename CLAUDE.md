@@ -139,7 +139,11 @@ deployment or real data without explicit written authorization.
 
 Change requests CR1–CR6 (branch `cr-change-requests`, `docs/change-requests.md`,
 ADRs 0010–0012, migrations 0008–0012, each with a reviewed production script
-in `docs/operations/sql/`) supersede the single-section rules:
+in `docs/operations/sql/`) supersede the single-section rules. The
+requirements and `Plan.md` §3 are amended in place. They were verified
+together in step 7: `server/tests/crAcceptance.test.ts`,
+`e2e/crInterface.spec.ts` and an upgrade rehearsal from release-one data.
+The release handover is in `docs/release/cr-release-handover.md`. The rules:
 
 - **Sections.** `sections.lead_user_id` is the only source of leadership. A
   lead may lead several sections. Salespeople belong to sections through

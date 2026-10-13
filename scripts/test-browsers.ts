@@ -19,7 +19,7 @@ const cli = path.join('node_modules', '@playwright', 'test', 'cli.js');
 const results: string[] = [];
 let failed = false;
 
-const specs = ['e2e/m8.spec.ts', 'e2e/accountAccess.spec.ts'];
+const specs = ['e2e/m8.spec.ts', 'e2e/accountAccess.spec.ts', 'e2e/crInterface.spec.ts'];
 
 for (const browser of browsers) {
   for (const spec of specs) {

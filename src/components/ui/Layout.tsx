@@ -36,7 +36,8 @@ export function Panel({
   return (
     <section className={twMerge('overflow-hidden rounded-lg border border-slate-200 bg-white', className)}>
       {(title || action) &&
-      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
+      // Wraps only when the actions do not fit beside the title (narrow screens).
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-2.5">
           <div className="min-w-0">
             {title && <h2 className="text-[13.5px] font-bold text-slate-900">{title}</h2>}
             {subtitle && <p className="mt-px text-[11px] font-medium text-slate-500">{subtitle}</p>}

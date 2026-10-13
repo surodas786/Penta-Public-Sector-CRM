@@ -6,9 +6,9 @@ Version 1.0 | 03 October 2026 | Product owner Penta | Intended implementation to
 
 This document defines the first production release of Penta's CRM for public sector project sales in Bangladesh. It converts the agreed demo prompts into functional requirements, permission rules, data definitions, backend behavior and testable acceptance criteria. The goal is to give Penta and its developers a shared implementation baseline.
 
-The central rule is that top management sees all sales records, section leads see their section and direct reports, and salespeople see only opportunities they own. Production must enforce this rule on the server for every operation, including files, search, dashboards and exports.
+The central rule is that top management sees all sales records, section leads see their section and direct reports (amended by CR4: every section they currently lead), and salespeople see only opportunities they own (amended by CR5: and only in sections they currently belong to). Production must enforce this rule on the server for every operation, including files, search, dashboards and exports.
 
-> **Amended by change requests CR1–CR6 (12 October 2026).** A lead may lead several sections, and a salesperson may belong to several sections (each opportunity still has exactly one section). Email delivery, self-service password change and a Software Procurement workflow (EOI → RFP) are added. Where these rules conflict with a single-section rule below, the change requests apply; every other requirement stands. See `docs/change-requests.md` and ADRs 0010–0012.
+> **Amended by change requests CR1–CR6 (12–13 October 2026).** A lead may lead several sections, and a salesperson may belong to several sections (each opportunity still has exactly one section). Email delivery (invitations, password emails and notification emails), self-service password change and separate Software Procurement cycles (EOI → shortlisting → RFP → proposal) are added. The rules below are amended in place where they changed: each amendment is marked and the original text is kept beside it. Where an unmarked single-section phrase remains, read "section" as "the sections the person currently leads or belongs to". Every other requirement stands. See `docs/change-requests.md` and ADRs 0010–0012.
 
 Reference demo supplied by Penta: https://project-penta-public-sector-crm-400.magicpatterns.app
 
@@ -33,7 +33,7 @@ Authenticated accounts; sections and reporting lines; organizations and contacts
 
 ### 1.3 Excluded from release one
 
-Live e-GP integration, tender scraping or automatic bid submission; email and SMS sending; email inbox synchronization; outreach campaigns; AI recommendations; finance, invoicing and payment collection; sales commission calculation; contract execution and project delivery; native mobile apps; multi-company SaaS tenancy; multi-level recursive reporting hierarchies; offline synchronization. Excel import can be added later and is not part of this accepted demo baseline.
+Live e-GP integration, tender scraping or automatic bid submission; email and SMS sending (email sending is no longer excluded: CR1–CR3 add it; SMS stays excluded); email inbox synchronization; outreach campaigns; AI recommendations; finance, invoicing and payment collection; sales commission calculation; contract execution and project delivery; native mobile apps; multi-company SaaS tenancy; multi-level recursive reporting hierarchies; offline synchronization. Excel import can be added later and is not part of this accepted demo baseline.
 
 ## 2 Roles and reporting structure
 
@@ -41,15 +41,15 @@ Live e-GP integration, tender scraping or automatic bid submission; email and SM
 
 | Capability | Management | Section lead | Salesperson | System administrator |
 | --- | --- | --- | --- | --- |
-| View sales opportunities | All | Own section | Owned records | None by default |
-| Create opportunities | Any section | Own section | Self as owner | No |
-| Edit sales records | All | Own section | Owned records | No |
-| Reassign opportunities | Across sections | Within own section | No | No |
-| View reports and export | All | Own section | Own records | No |
+| View sales opportunities | All | Own section (CR4: every section they lead now) | Owned records (CR5: in sections they belong to now) | None by default |
+| Create opportunities | Any section | Own section (CR4: any section they lead) | Self as owner (CR5: in one of their sections, chosen when several) | No |
+| Edit sales records | All | Own section (CR4: sections they lead) | Owned records | No |
+| Reassign opportunities | Across sections | Within own section (CR4, D-CR4-2: also between two sections they both lead) | No | No |
+| View reports and export | All | Own section (CR4: sections they lead) | Own records | No |
 | View organization basics | All | All | All | No sales directory by default |
 | View contacts and documents | All | Associated section records | Associated owned records | No |
 | Maintain users and sections | No account administration by default | No | No | Yes |
-| View reporting and workload | All | Own section | Own profile only | Account structure only |
+| View reporting and workload | All | Own section (CR4: sections they lead) | Own profile only | Account structure only |
 | View commercial audit history | All | Permitted opportunities | Permitted opportunities | No |
 | View account administration audit | No by default | No | No | Yes |
 
@@ -57,9 +57,15 @@ FR-001: Every user has one primary role. Management and system administration ar
 
 FR-002: A section has one active section lead. A salesperson belongs to one active section and reports to that section's lead. A section lead may own opportunities in their own section. Management creates opportunities for an eligible section owner; the management account is not a sales owner in this release.
 
+**Amended by CR4/CR5 (12 October 2026):** every active section has exactly one active lead, enforced in the database (`sections.lead_user_id`). One lead may lead several sections. A salesperson belongs to one or more sections through `section_memberships` and reports to the lead of each. A lead's sections are the ones they lead (D-CR4-1: a lead is not also a member elsewhere). Former leadership or membership grants nothing.
+
 BR-001: Eligible owners are active salespeople and section leads in the chosen section. The opportunity's section must equal its owner's section. Historical creator and activity-author fields do not grant ongoing access.
 
+**Amended by CR4/CR5 (12 October 2026):** the opportunity's section must be one its owner currently works in: a section the salesperson is a current member of, or a section the lead leads. Each opportunity still has exactly one section. A salesperson's record in a section they no longer belong to is not visible to them (fail closed).
+
 BR-002: Within this one-level model, a section lead's team scope is their section. All salespeople in the section must report to its lead. Do not quietly allow unrelated users in a section or recursively grant access through arbitrary reporting lines.
+
+**Amended by CR4/CR5 (12 October 2026):** a lead's team scope is every active section they lead now; it changes on the next request when a section is given to someone else. The no-recursion rule is unchanged.
 
 ### 2.2 Access enforcement
 
@@ -211,9 +217,9 @@ BR-050: Transfer opportunity ownership and review all open follow-up assignments
 
 FR-071: Administrator forms create/edit users, assign roles and sections, set reporting lines, activate/deactivate accounts and maintain sections. Management's Team Management view shows structure and commercial workload, not password or role administration.
 
-BR-051: Block deactivation of a user who owns active nonterminal opportunities. Before changing a salesperson's section, require transfer or reassignment of those opportunities. To preserve all historical section-owner invariants, any remaining historical ownership must also be transferred or the old user record retained as an inactive historical owner without changing its section. Do not simply rewrite the user's section and leave mismatched opportunities.
+BR-051: Block deactivation of a user who owns active nonterminal opportunities. Before changing a salesperson's section (CR5: before they leave any one of their sections), require transfer or reassignment of those opportunities. To preserve all historical section-owner invariants, any remaining historical ownership must also be transferred or the old user record retained as an inactive historical owner without changing its section. Do not simply rewrite the user's section and leave mismatched opportunities.
 
-BR-052: Do not deactivate the only lead of an active section without selecting a replacement. Update the section lead and direct reports in one transaction. A section cannot be deactivated while it has active opportunities. Protect the last active administrator. No account can promote its own role through profile editing; privileged role changes are separately audited.
+BR-052: Do not deactivate the only lead of an active section without selecting a replacement (CR4: Replace lead may appoint an existing lead of another section, who keeps that section). Update the section lead and direct reports in one transaction. A section cannot be deactivated while it has active opportunities. Protect the last active administrator. No account can promote its own role through profile editing; privileged role changes are separately audited.
 
 ## 10 Dashboard calculations and reports
 
@@ -242,6 +248,8 @@ FR-083: CSV export uses the same access and filter rules as the visible report, 
 
 FR-090: In-app alerts cover follow-ups due today, overdue follow-ups, tender deadlines within 72 hours and ownership changes. A scheduler checks dates at least hourly for tenders and daily at the start of the Dhaka business day for tasks. Leads see their section alerts and management sees all permitted alerts.
 
+**Extended by CR2 and CR6 (12–13 October 2026):** alerts also cover EOI deadlines and RFP proposal deadlines within 72 hours. While email delivery is on, each alert is also emailed once to the person responsible, at the administrator's reminder time (never earlier than the alert). Optional team summaries go to current section leads and management summaries to chosen management accounts, as counts only. Every email is checked again when sent. In-app alerts do not depend on email. Recipients and content are the proposed defaults D-EM-2 and D-EM-4 (ADR 0011).
+
 BR-070: Deduplicate by recipient, related record, alert type and applicable deadline/date. A read notification does not mark a task complete. Rescheduling or transfer must update relevant alerts and invalidate old access. A notification link rechecks permission; inaccessible or obsolete alerts disappear from the inbox and unread count.
 
 FR-091: Search spans accessible opportunity names, permitted contacts, basic organization names and permitted tender references. Return result type and a safe summary. No attachment full-text indexing is required in release one. Debounce typing; paginate results; require at least two characters. Administrative search is restricted to accounts and sections.
@@ -252,17 +260,20 @@ Use stable internal identifiers such as UUIDs. Foreign keys enforce relationship
 
 | Entity | Core fields and relationships |
 | --- | --- |
-| User | id, full_name, email unique, role, section_id optional, manager_id optional, active, identity_provider_subject or password hash, session version |
-| Section | id, name unique, lead_user_id, active |
+| User | id, full_name, email unique, role, section_id optional (CR5: legacy, no longer read), manager_id optional, active, identity_provider_subject or password hash, session version |
+| Section | id, name unique, lead_user_id (CR4: the only source of leadership; one lead may lead several sections), active |
+| SectionMembership (CR5) | id, user_id, section_id, started_at, started_by, ended_at, ended_by, end_reason; at most one open membership per user and section; history kept, never deleted |
 | Organization | id, name, type, parent_id optional, location, website, basic_notes, archived_at |
 | Contact | id, organization_id, name, designation, department, email, phone, archived_at |
 | Opportunity | id, reference unique, organization_id, department, solution_category, description, estimated_value numeric, owner_id, section_id, stage, status, priority, funding_source, expected_publication_date, expected_award_date, awarded_value, award_date, loss_reason, loss_note, closed_date, status_note |
 | OpportunityContact | opportunity_id and contact_id unique pair, relationship_notes, created_by |
 | Activity | id, opportunity_id, occurred_at, type, subject, notes, contact_id optional, author_id |
 | FollowUp | id, opportunity_id, title, assigned_user_id, due_date, priority, state, completed_at, completed_by, completion_note, cancelled_at, cancellation_reason |
+| ProcurementCycle (CR6) | id, opportunity_id, procuring_organization_id, title, reference, route (EOI then RFP, or management-approved direct RFP), milestone, is_current, EOI and RFP fields and deadlines, separate technical/financial submissions, outcome; owner, section and access are the opportunity's |
+| Email settings, templates and deliveries (CR1–CR3) | one settings row (SMTP password encrypted), administrator wording per template, a delivery log without message bodies, notification timing |
 | Tender | id, opportunity_id, procuring_organization_id, title, reference, procurement_method, notice_url, publication_date, clarification_deadline, submission_deadline, bid_status, submitted_at, is_current, notice_state, notes |
 | Document | id, opportunity_id, category, filename, storage_key, MIME type, byte_size, checksum, uploaded_by, scan_state, previous_revision_id, archived_at |
-| Notification | id, recipient_id, opportunity_id, optional task/tender id, type, trigger_key unique, message, created_at, read_at, resolved_at |
+| Notification | id, recipient_id, opportunity_id, optional task/tender/procurement-cycle id, type, trigger_key unique, message, created_at, read_at, resolved_at |
 | AuditEvent | id, actor_id, opportunity_id optional, entity_type, entity_id, action, before_data, after_data, reason, occurred_at, request_id |
 | Session | id or token hash, user_id, issued_at, expires_at, revoked_at |
 
@@ -298,7 +309,7 @@ BR-091: Create/transfer/submit/upload-finalization operations accept an idempote
 
 ### 14.1 Authentication and account controls
 
-SEC-030: No public registration. Use Penta's identity provider if available; otherwise use a maintained authentication library and a modern password-hashing algorithm. Invite accounts through an approved process. Password recovery uses single-use expiring tokens and does not disclose account existence. Never implement demo-password authentication in production.
+SEC-030: No public registration. Use Penta's identity provider if available; otherwise use a maintained authentication library and a modern password-hashing algorithm. Invite accounts through an approved process. Password recovery uses single-use expiring tokens and does not disclose account existence. (CR1: invitation and reset links are emailed while delivery is on, issued only when sent; CR3: everyone can change their own password, ending their other sessions, and request a reset from the sign-in page.) Never implement demo-password authentication in production.
 
 SEC-031: Prefer secure HttpOnly SameSite cookies over browser-readable persistent tokens. Enforce HTTPS, CSRF protection for cookie-authenticated mutations, rate limits on login/recovery and idle/session expiry. Proposed defaults are 30-minute inactivity and 12-hour absolute expiry. Revoke sessions on deactivation or material role changes. Require MFA for privileged roles where the chosen identity service supports it.
 
@@ -343,11 +354,11 @@ Given opportunities in both sections, management sees all sales totals, details 
 
 ### AT 02 Section isolation
 
-Given Nadia leads Government Applications, she can see her own and Rafiq/Tasnia's opportunities. She cannot obtain Infrastructure and Security records by URL, API ID, search, contacts, totals, CSV, notification or document download. Traces FR-002 and SEC-002 through SEC-004.
+Given Nadia leads Government Applications, she can see her own and Rafiq/Tasnia's opportunities. She cannot obtain Infrastructure and Security records by URL, API ID, search, contacts, totals, CSV, notification or document download. Traces FR-002 and SEC-002 through SEC-004. (CR4: a lead of two sections sees both and nothing of a third, on the same surfaces.)
 
 ### AT 03 Individual isolation
 
-Rafiq can access his own records and cannot access Tasnia's despite sharing a section. Creator status alone does not grant visibility after reassignment. Test forbidden updates and forged owner/section fields, not just hidden UI buttons. Traces BR-001 and SEC-001.
+Rafiq can access his own records and cannot access Tasnia's despite sharing a section (CR5: also when a salesperson belongs to two sections). Creator status alone does not grant visibility after reassignment. Test forbidden updates and forged owner/section fields, not just hidden UI buttons. Traces BR-001 and SEC-001.
 
 ### AT 04 Opportunity creation and next action
 
@@ -371,7 +382,7 @@ Management transfers a project to Imran in Infrastructure and Security. Old team
 
 ### AT 09 Team restructuring and deactivation
 
-Deactivation is blocked when a user owns active opportunities. Moving a salesperson cannot leave owner-section mismatches. Replacing a lead updates direct reports atomically. The last administrator cannot be removed. Traces BR-051/052.
+Deactivation is blocked when a user owns active opportunities. Moving a salesperson cannot leave owner-section mismatches. Replacing a lead updates direct reports atomically (CR4/CR5: leaving a section is blocked while owning records there; access follows current leadership and membership on the next request). The last administrator cannot be removed. Traces BR-051/052.
 
 ### AT 10 Tender cycles and submission
 

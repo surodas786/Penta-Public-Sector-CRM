@@ -1,7 +1,8 @@
 # Requirement and acceptance matrix
 
-**As of:** 12 October 2026, branch `cr-change-requests`: Milestone 8 plus change
-requests CR1–CR6 (`docs/change-requests.md`). Rows changed by a change
+**As of:** 13 October 2026 (step 7 verification), branch `cr-change-requests`:
+Milestone 8 plus change requests CR1–CR6 (`docs/change-requests.md`,
+release handover in `cr-release-handover.md`). Rows changed by a change
 request say so. The change requests' own acceptance criteria are in their
 own section below. The release-one figures are as of 06 October 2026, except
 where a row was updated.
@@ -19,10 +20,12 @@ before it can be. Nothing is marked complete because a file or table exists.
 
 Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR, BR, SEC, NFR, AT and D identifier in the requirements, checked by script). Two of the partial items — SEC-010 and SEC-031 (MFA) — contain release blockers.
 
-Change requests: **39 rows. 36 complete, 3 partial.** That is 37 acceptance
-criteria plus two email rows (content and real sending). The partial rows
-wait on Penta's mail server (D-EM-1) or on confirming a proposed email
-default (D-EM-2, D-EM-4); see "Change requests CR1–CR6".
+Change requests: **47 rows. 43 complete, 4 partial.** That is 37 acceptance
+criteria, two email rows (content and real sending), five step 6 rows
+(notification email events) and three step 7 rows (integrated acceptance,
+upgrade rehearsal, interface). The partial rows wait on Penta's mail server
+(D-EM-1) or on confirming a proposed email default (D-EM-2, D-EM-4); see
+"Change requests CR1–CR6".
 
 ## Roles and access (§2)
 
@@ -122,7 +125,7 @@ default (D-EM-2, D-EM-4); see "Change requests CR1–CR6".
 | FR-082 | Six reports; filters by role | Complete | `reports.test.ts` | — |
 | BR-060 | Named date bases; undated shown | Complete | `reports.test.ts`, `dashboard.test.ts` | — |
 | FR-083 | CSV: same rules, all rows, UTF-8, formulas neutralized, audited | Complete | `reports.test.ts` | — |
-| FR-090 | Alerts: due today, overdue, 72 h tenders, ownership; schedules; recipients. **Extended by CR2**: each alert is also emailed to the person responsible for it | Partial | `notifications.test.ts`, `notificationEmails.test.ts`; scan timed at the envelope (2.8–5.9 s) | Penta to confirm: management receives every alert; business day starts 00:00 Dhaka; email recipients (D-EM-4) |
+| FR-090 | Alerts: due today, overdue, 72 h tenders, ownership; schedules; recipients. **Extended by CR2 and CR6**: EOI and RFP proposal deadline alerts; each alert is also emailed to the person responsible, at the administrator's reminder time | Partial | `notifications.test.ts`, `notificationEmails.test.ts`, `notificationEmailEvents.test.ts`, `crAcceptance.test.ts`; scan timed at the envelope (2.8–5.9 s, release one) | Penta to confirm: management receives every alert; business day starts 00:00 Dhaka; email recipients (D-EM-4) |
 | BR-070 | Dedupe; read ≠ complete; transfers/reschedules retire alerts | Complete | `notifications.test.ts`, `m7MutationControls.test.ts` §6 | — |
 | FR-091 | Scoped search; safe summaries; paging; admin search | Complete | `search.test.ts`, `e2e/m6.spec.ts` | — |
 
@@ -205,7 +208,7 @@ checks named below.
 | CR2-AC1 | SMTP settings managed by the administrator; password encrypted at rest, never returned, logged or audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
 | CR2-AC2 | Test email, with its result reported and audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | Real mail server not yet configured (D-EM-1) |
 | CR2-AC3 | Template wording edited; placeholders allowlisted; synthetic preview | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
-| CR2-AC4 | Each new alert queues an email once | Partial | `notificationEmails.test.ts` | Recipients follow the proposed D-EM-4 (responsible person only), not yet confirmed |
+| CR2-AC4 | Each new alert queues an email once | Partial | `notificationEmails.test.ts`, `notificationEmailEvents.test.ts` (once per alert, at its reminder time) | Recipients follow the proposed D-EM-4 (responsible person only, extended in step 6), not yet confirmed |
 | CR2-AC5 | Access and validity re-checked at send time | Complete | `notificationEmails.test.ts` (read, rescheduled, transferred → suppressed) | — |
 | CR2-AC6 | Retries with backoff; permanent failure recorded and visible in job health | Complete | `email.test.ts`, `invitations.test.ts` | — |
 | CR2-AC7 | Settings and wording versioned and audited; administrators gain no commercial access; no message bodies stored | Complete | `email.test.ts`, audit matrix | — |
@@ -244,7 +247,15 @@ checks named below.
 | CR6-AC6 | Late submissions recorded with a note; deadlines frozen under a recorded submission; Asia/Dhaka dates | Complete | `procurement.test.ts` (deadline boundaries at 72 h, Dhaka-date check) | — |
 | CR6-AC7 | Shortlisting before the RFP; direct RFP is management-only, documented, never with an EOI | Complete | `procurement.test.ts` (database refuses an invented EOI) | — |
 | CR6-AC8 | Version checks, retry protection, transactions, audit, protected documents | Complete | audit, retry, stale-version, atomicity and transfer-race matrices | — |
-| CR6-AC9 | Filters, deadline windows, stage history; scoped dashboard, report and CSV export, apart from goods tenders | Complete | `procurement.test.ts`, `e2e/cr6.spec.ts` | Procurement deadline notifications not built (instructed to stop before them) |
+| CR6-AC9 | Filters, deadline windows, stage history; scoped dashboard, report and CSV export, apart from goods tenders | Complete | `procurement.test.ts`, `e2e/cr6.spec.ts`; deadline alerts and reminders since step 6 (`notificationEmailEvents.test.ts`) | — |
+| CR2 step 6 events | EOI and RFP deadline reminders, team and management summaries, delivery-failure notices; security emails mandatory (service and database); no email for any other event | Complete | `notificationEmailEvents.test.ts`, `email.test.ts`, `e2e/cr2-step6.spec.ts`; migration 0012 rehearsal | Summaries are off until an administrator turns them on (proposed) |
+| CR2 step 6 recipients | Reminders to the person responsible; assignment to the new owner; one team summary per current lead however many sections; management summary to chosen accounts only; failures to administrators; salespeople never see colleagues' records by email | Partial | `notificationEmailEvents.test.ts`, `crAcceptance.test.ts` (6, 9) | D-EM-4 as extended, to be confirmed |
+| CR2 step 6 timing | Reminder hour (Asia/Dhaka), deadline reminder hours (1–72), daily or weekly summaries; versioned, audited; no late backlog | Complete | `notificationEmailEvents.test.ts`, audit matrix, `e2e/cr2-step6.spec.ts` | Earlier than 72 h would need FR-090 changed |
+| CR2 step 6 staleness | Completion, rescheduling, transfer, procurement changes, membership or lead changes and deactivation suppress queued reminders; every email re-checked at send; summaries scoped at send | Complete | `notificationEmailEvents.test.ts`, `crAcceptance.test.ts` (6) | — |
+| CR2 step 6 links | Email links carry no token, need sign-in, return to the linked page and are re-authorized | Complete | `notificationEmailEvents.test.ts`, `e2e/cr2-step6.spec.ts` | — |
+| CR integrated acceptance | The nine step 7 demonstrations, end to end: activation; expired/replaced/used links refused alike, nothing changed; a lead of two sections vs a third section on list, record, search, dashboard, export, documents and alerts; a salesperson in two sections; immediate access changes; no disclosure by queued email; EOI → proposal; goods tenders unchanged; email administration without secrets or commercial records | Complete | `crAcceptance.test.ts` (10 tests) | — |
+| CR upgrade rehearsal | Release-one data (seeded and processed by the release-one code) upgraded with the five production scripts; every account's scope identical before and after; counts unchanged; memberships backfilled; `db:migrate` then a no-op | Complete | step 7 rehearsal (`docs/progress.md`, `cr-release-handover.md` §2) | On a copy of real data only with Penta's authorization |
+| CR interface | Changed screens at 1440, 768 and 360 px without page-level horizontal scroll; their dialogs open from the keyboard, take focus and close with Escape; three browsers | Complete | `e2e/crInterface.spec.ts` (in `npm run test:browsers`) | Defect found and fixed: panel actions overflowed at 360 px (shared `Panel` header now wraps) |
 
 ## Unresolved, in one list
 
@@ -257,7 +268,7 @@ checks named below.
    - Penta's mail server (D-EM-1); real email is off until it is configured.
    - Confirming the email content (D-EM-2) and recipient (D-EM-4) defaults.
 7. **Test fixture:** the synthetic tender `DCR/PROC/2026/221` has a fixed
-   deadline of 8 October 2026. The `e2e/m5.spec.ts` browser check has failed
-   since that date (the application correctly asks for a late-submission
-   note). It waits on Penta's choice: dates relative to seeding, or an
-   updated fixture.
+   deadline of 8 October 2026. Since step 7 the `e2e/m5.spec.ts` browser
+   check answers the late-submission question the application correctly
+   asks after that date, so it passes again. The fixture itself is
+   unchanged; making seeded dates relative is still Penta's choice.
