@@ -14,10 +14,13 @@ import {
   Building2Icon,
   CalendarCheckIcon,
   FileTextIcon,
+  FileStackIcon,
+  KeyRoundIcon,
   KanbanSquareIcon,
   LayoutDashboardIcon,
   LockIcon,
   LogOutIcon,
+  MailIcon,
   MenuIcon,
   ShieldCheckIcon,
   UsersIcon,
@@ -26,6 +29,7 @@ import {
 
 import { ROLE_LABELS } from '../../../shared/enums.js';
 import { useAuth } from '../AuthContext.js';
+import { ChangePasswordDialog } from '../components/ChangePasswordDialog.js';
 import { Avatar } from '../ui/ApiBadges.js';
 import { BUSINESS_TIME_LABEL } from '../ui/dates.js';
 import { GlobalSearch } from './GlobalSearch.js';
@@ -39,12 +43,15 @@ interface NavItem {
   show: boolean;
   /** Shown as a tooltip and in the unavailable screen. */
   reason?: string;
+  /** Listed under this heading, after the ungrouped items. */
+  group?: 'Settings';
 }
 
 export function ApiShell() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   if (!user) return null;
 
@@ -75,6 +82,13 @@ export function ApiShell() {
       available: true,
       show: sales,
     },
+    {
+      to: '/procurement',
+      label: 'Software Procurement',
+      icon: FileStackIcon,
+      available: true,
+      show: sales,
+    },
     { to: '/reports', label: 'Reports', icon: BarChart3Icon, available: true, show: sales },
     {
       to: '/team',
@@ -84,7 +98,12 @@ export function ApiShell() {
       show: user.capabilities.teamView,
     },
     { to: '/administration', label: 'Administration', icon: ShieldCheckIcon, available: true, show: admin },
+    { to: '/settings/mail-server', label: 'Mail Server', icon: MailIcon, available: true, show: admin, group: 'Settings' as const },
   ].filter((item) => item.show);
+  const groups = [
+    { heading: null, items: items.filter((item) => !item.group) },
+    { heading: 'Settings', items: items.filter((item) => item.group === 'Settings') },
+  ].filter((group) => group.items.length > 0);
 
   const handleSignOut = async () => {
     await signOut();
@@ -123,37 +142,44 @@ export function ApiShell() {
 
         {/* The named landmark is the navigation itself, not the surrounding panel. */}
         <nav className="flex-1 overflow-y-auto px-2.5 py-3" aria-label="Main navigation">
-          <ul className="flex flex-col gap-0.5">
-            {items.map(({ to, label, icon: Icon, available, reason }) => (
-              <li key={to}>
-                {available ? (
-                  <NavLink
-                    to={to}
-                    onClick={() => setMobileOpen(false)}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
-                        isActive ? 'bg-brand text-white' : 'text-slate-300 hover:bg-white/5 hover:text-white'
-                      }`
-                    }
-                  >
-                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    {label}
-                  </NavLink>
-                ) : (
-                  <span
-                    className="flex cursor-not-allowed items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-slate-500"
-                    title={reason}
-                    aria-disabled="true"
-                  >
-                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span className="flex-1">{label}</span>
-                    <LockIcon className="h-3 w-3 shrink-0 text-slate-600" aria-hidden="true" />
-                    <span className="sr-only">Not available yet. {reason}</span>
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+          {groups.map((group) => (
+            <div key={group.heading ?? 'main'} className={group.heading ? 'mt-4' : undefined}>
+              {group.heading && (
+                <p className="px-3 pb-1 text-[10.5px] font-bold uppercase tracking-wide text-navy-muted">{group.heading}</p>
+              )}
+              <ul className="flex flex-col gap-0.5">
+                {group.items.map(({ to, label, icon: Icon, available, reason }) => (
+                  <li key={to}>
+                    {available ? (
+                      <NavLink
+                        to={to}
+                        onClick={() => setMobileOpen(false)}
+                        className={({ isActive }) =>
+                          `flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
+                            isActive ? 'bg-brand text-white' : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                          }`
+                        }
+                      >
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        {label}
+                      </NavLink>
+                    ) : (
+                      <span
+                        className="flex cursor-not-allowed items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-slate-500"
+                        title={reason}
+                        aria-disabled="true"
+                      >
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className="flex-1">{label}</span>
+                        <LockIcon className="h-3 w-3 shrink-0 text-slate-600" aria-hidden="true" />
+                        <span className="sr-only">Not available yet. {reason}</span>
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         <div className="border-t border-white/10 px-5 py-3 text-[10.5px] leading-relaxed text-[#7489A8]">
@@ -185,10 +211,19 @@ export function ApiShell() {
               <p className="text-[12.5px] font-semibold text-slate-900">{user.fullName}</p>
               <p className="text-[10.5px] text-slate-500">
                 {ROLE_LABELS[user.role]}
-                {user.section ? ` — ${user.section.name}` : ''}
+                {user.sections.length > 0 ? ` — ${user.sections.map((section) => section.name).join(', ')}` : ''}
               </p>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setChangingPassword(true)}
+            className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition-colors duration-150 hover:bg-slate-50 sm:px-3"
+            title="Change password"
+          >
+            <KeyRoundIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="sr-only sm:not-sr-only">Change password</span>
+          </button>
           <button
             type="button"
             onClick={() => void handleSignOut()}
@@ -202,6 +237,7 @@ export function ApiShell() {
         <main className="flex-1 overflow-y-auto" id="main-content">
           <Outlet />
         </main>
+        <ChangePasswordDialog open={changingPassword} onClose={() => setChangingPassword(false)} />
       </div>
     </div>
   );

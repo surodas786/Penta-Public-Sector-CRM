@@ -11,12 +11,15 @@ import { AccessDeniedPanel } from './components/Feedback.js';
 import { ApiShell } from './layout/ApiShell.js';
 
 import { LoginPage } from './pages/LoginPage.js';
+import { returnPath } from './returnPath.js';
 import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
 
 // Screens most accounts never open load on demand, keeping them out of the
 // bundle every salesperson downloads.
 const AdministrationPage = lazy(() => import('./pages/AdministrationPage.js').then((m) => ({ default: m.AdministrationPage })));
+const MailServerSettingsPage = lazy(() => import('./pages/MailServerSettingsPage.js').then((m) => ({ default: m.MailServerSettingsPage })));
 const SetPasswordPage = lazy(() => import('./pages/SetPasswordPage.js').then((m) => ({ default: m.SetPasswordPage })));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage.js').then((m) => ({ default: m.ForgotPasswordPage })));
 const OpportunityDetailPage = lazy(() =>
   import('./pages/OpportunityDetailPage.js').then((m) => ({ default: m.OpportunityDetailPage })),
 );
@@ -27,6 +30,7 @@ const OrganizationDetailPage = lazy(() =>
 );
 const ContactDetailPage = lazy(() => import('./pages/ContactDetailPage.js').then((m) => ({ default: m.ContactDetailPage })));
 const TenderTrackerPage = lazy(() => import('./pages/TenderTrackerPage.js').then((m) => ({ default: m.TenderTrackerPage })));
+const ProcurementPage = lazy(() => import('./pages/ProcurementPage.js').then((m) => ({ default: m.ProcurementPage })));
 const TeamPage = lazy(() => import('./pages/TeamPage.js').then((m) => ({ default: m.TeamPage })));
 const DashboardPage = lazy(() => import('./pages/DashboardPage.js').then((m) => ({ default: m.DashboardPage })));
 const ReportsPage = lazy(() => import('./pages/ReportsPage.js').then((m) => ({ default: m.ReportsPage })));
@@ -71,6 +75,14 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/sign-in" element={<SignInRoute />} />
+      <Route
+        path="/forgot-password"
+        element={
+          <Lazy>
+            <ForgotPasswordPage />
+          </Lazy>
+        }
+      />
       {/* Reached from an invitation or reset link, signed in or not. */}
       <Route
         path="/set-password"
@@ -103,6 +115,15 @@ function AppRoutes() {
                 </Lazy>
               }
             />
+            {/* Settings → Mail Server (CR2): the administrator's mail server page. */}
+            <Route
+              path="settings/mail-server"
+              element={
+                <Lazy>
+                  <MailServerSettingsPage />
+                </Lazy>
+              }
+            />
           </Route>
 
           <Route element={<RequireSalesAccess />}>
@@ -112,6 +133,7 @@ function AppRoutes() {
           <Route path="contacts/:id" element={<Lazy><ContactDetailPage /></Lazy>} />
           <Route path="activities" element={<Lazy><FollowUpsPage /></Lazy>} />
           <Route path="tenders" element={<Lazy><TenderTrackerPage /></Lazy>} />
+          <Route path="procurement" element={<Lazy><ProcurementPage /></Lazy>} />
           <Route path="reports" element={<Lazy><ReportsPage /></Lazy>} />
           <Route path="team" element={<RequireTeamView />} />
           </Route>
@@ -125,7 +147,8 @@ function AppRoutes() {
 
 function SignInRoute() {
   const { status } = useAuth();
-  if (status === 'authenticated') return <Navigate to="/" replace />;
+  const location = useLocation();
+  if (status === 'authenticated') return <Navigate to={returnPath(location.state)} replace />;
   return <LoginPage />;
 }
 
@@ -134,7 +157,8 @@ function RequireSession() {
   const location = useLocation();
 
   if (status !== 'authenticated') {
-    return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />;
+    // An email link (CR2) comes back here after sign-in, tab and all.
+    return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}` }} />;
   }
   // Rendered by the parent Route element; children come from the nested routes.
   return <Outlet />;

@@ -14,7 +14,7 @@ import { sumMoney } from '../../shared/money.js';
 import { FixedClock, addCalendarDays, dhakaQuarter, dhakaStartOfDay, dhakaToday, resetClock, setClock } from '../clock.js';
 import { opportunities, users } from '../db/schema.js';
 import { opportunityScope, userSeesOpportunitySql } from '../policy/scope.js';
-import type { Actor } from '../policy/actor.js';
+import { loadActor, type Actor } from '../policy/actor.js';
 import {
   createTestApp,
   emails,
@@ -110,7 +110,9 @@ describe('dashboard (M6)', () => {
 
       expect(lead.sections).toBeNull();
       expect(lead.sectionOptions).toEqual([]);
-      expect(lead.ownerOptions.every((option) => option.sectionId === ids.sectionGA)).toBe(true);
+      const otherSection = [ids.leadIS, ids.salesIS1, ids.salesIS2];
+      expect(lead.ownerOptions.length).toBeGreaterThan(0);
+      expect(lead.ownerOptions.some((option) => otherSection.includes(option.id))).toBe(false);
       expect(management.sections?.map((section) => section.name)).toEqual([
         'Government Applications',
         'Infrastructure & Security',
@@ -178,16 +180,7 @@ describe('dashboard (M6)', () => {
       // `opportunityScope` (used for every request) for every account.
       const people = await ctx.database.db.select().from(users);
       for (const person of people) {
-        const actor: Actor = {
-          id: person.id,
-          fullName: person.fullName,
-          email: person.email,
-          role: person.role,
-          sectionId: person.sectionId,
-          sectionName: null,
-          active: person.active,
-          sessionVersion: person.sessionVersion,
-        };
+        const actor = (await loadActor(ctx.database.db, person.id)) as Actor;
         const viaScope = await ctx.database.db
           .select({ id: opportunities.id })
           .from(opportunities)

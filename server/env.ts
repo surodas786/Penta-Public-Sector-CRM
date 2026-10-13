@@ -3,6 +3,8 @@
  * unsafe or half-configured environment (plan 4.4).
  */
 
+import type { EmailTransportKind } from '../shared/email.js';
+
 export type AppEnvironment = 'development' | 'test' | 'production';
 
 export interface ServerConfig {
@@ -21,6 +23,7 @@ export interface ServerConfig {
   secureCookies: boolean;
   documents: DocumentConfig;
   jobs: JobsConfig;
+  email: EmailConfig;
   /** REQUEST_LOG: one summary line per request (`all`), per failed or slow request (`errors`, default), or none. */
   requestLog: 'all' | 'errors' | 'off';
 }
@@ -38,6 +41,25 @@ export interface JobsConfig {
   exportTtlHours: number;
   /** An export reaching this many rows is refused rather than truncated (FR-083: all matching rows). */
   exportMaxRows: number;
+}
+
+/**
+ * How this server sends email (CR2). The mail server itself (host, sender,
+ * credentials) is configured by an administrator in the application; these
+ * settings decide whether and how this deployment may send at all.
+ *
+ *   none     nothing is sent; queued emails are marked suppressed
+ *   capture  development and tests: messages are written to EMAIL_CAPTURE_DIR
+ *            and never leave the machine. Refused in production.
+ *   smtp     the administrator's mail server is used
+ */
+export interface EmailConfig {
+  transport: EmailTransportKind;
+  /** 32-byte key for the SMTP password at rest (EMAIL_SECRET_KEY, 64 hex). Null: no password can be stored. */
+  secretKey: Buffer | null;
+  captureDir: string;
+  /** Upper bound for one SMTP conversation. */
+  sendTimeoutMs: number;
 }
 
 /**
@@ -95,6 +117,28 @@ function readScanner(isProduction: boolean): DocumentScannerKind {
     throw new Error('DOCUMENT_SCANNER=test is a development scanner and must not be used in production.');
   }
   return raw;
+}
+
+function readEmailTransport(isProduction: boolean): EmailTransportKind {
+  const raw = (process.env.EMAIL_TRANSPORT ?? (isProduction ? 'none' : 'capture')).trim();
+  if (raw !== 'none' && raw !== 'capture' && raw !== 'smtp') {
+    throw new Error(`EMAIL_TRANSPORT must be none, capture or smtp, received "${raw}".`);
+  }
+  // Capture writes messages to a local folder for development. In production
+  // that would silently lose real email.
+  if (raw === 'capture' && isProduction) {
+    throw new Error('EMAIL_TRANSPORT=capture is for development and tests and must not be used in production.');
+  }
+  return raw;
+}
+
+function readEmailSecretKey(): Buffer | null {
+  const raw = process.env.EMAIL_SECRET_KEY?.trim();
+  if (!raw) return null;
+  if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
+    throw new Error('EMAIL_SECRET_KEY must be 64 hexadecimal characters (32 random bytes).');
+  }
+  return Buffer.from(raw, 'hex');
 }
 
 function readNodeEnv(): AppEnvironment {
@@ -173,6 +217,12 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
       exportMaxRows: positiveInt('REPORT_EXPORT_MAX_ROWS', 50_000),
     },
     requestLog: readRequestLog(),
+    email: {
+      transport: readEmailTransport(isProduction),
+      secretKey: readEmailSecretKey(),
+      captureDir: (process.env.EMAIL_CAPTURE_DIR ?? './var/mail-outbox').trim(),
+      sendTimeoutMs: positiveInt('EMAIL_SEND_TIMEOUT_SECONDS', 20) * 1000,
+    },
     ...overrides,
   };
 

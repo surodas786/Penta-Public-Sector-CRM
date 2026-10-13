@@ -44,13 +44,18 @@ export const PIPELINE_STAGES = OPPORTUNITY_STAGES.filter(
   (stage) => !TERMINAL_STAGES.includes(stage),
 ) as readonly OpportunityStage[];
 
-/** BR-011: the six preset lost reasons. `other` requires explanatory text. */
+/**
+ * BR-011: the preset lost reasons. `other` requires explanatory text.
+ * `not_shortlisted` (CR6) is offered when a Software Procurement cycle ends
+ * at its EOI; it is an ordinary reason, open to any record.
+ */
 export const LOSS_REASONS = [
   'price',
   'technical_eligibility',
   'competitor_selected',
   'budget_unavailable',
   'no_bid',
+  'not_shortlisted',
   'other',
 ] as const;
 export type LossReason = (typeof LOSS_REASONS)[number];
@@ -61,6 +66,7 @@ export const LOSS_REASON_LABELS: Record<LossReason, string> = {
   competitor_selected: 'Competitor selected',
   budget_unavailable: 'Budget unavailable',
   no_bid: 'No bid',
+  not_shortlisted: 'Not shortlisted',
   other: 'Other',
 };
 
@@ -309,4 +315,202 @@ export const TENDER_INDICATOR_LABELS: Record<TenderIndicator, string> = {
   submitted: 'Submitted',
   not_participating: 'Not participating',
   inactive: 'No alert: notice superseded or cancelled, or opportunity closed',
+};
+
+// ---------------------------------------------------------------------------
+// Stored enum values (database only)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `opportunity_stage` and `notice_state` types as stored. Migration 0010
+ * added Software Procurement stages to the pipeline and a `closed` notice
+ * state; 0011 retired them when CR6 moved to its own procurement cycles.
+ * PostgreSQL cannot drop enum values, so they remain in the types, unused, and
+ * CHECK constraints refuse them. Only the schema declares these lists; every
+ * other module uses OPPORTUNITY_STAGES and NOTICE_STATES.
+ */
+export const STORED_OPPORTUNITY_STAGES = [
+  'identified',
+  'initial_engagement',
+  'requirements_discussion',
+  'awaiting_tender',
+  'tender_published',
+  'bid_preparation',
+  'bid_submitted',
+  'evaluation',
+  'eoi_published',
+  'eoi_submitted',
+  'shortlisted',
+  'rfp_issued',
+  'proposal_preparation',
+  'proposal_submitted',
+  'technical_evaluation',
+  'financial_evaluation',
+  'awarded',
+  'lost',
+] as const;
+
+export const STORED_NOTICE_STATES = [...NOTICE_STATES, 'closed'] as const;
+
+// ---------------------------------------------------------------------------
+// Software Procurement: EOI then RFP (CR6)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a procurement reached the RFP. `direct_rfp` is the documented,
+ * management-only exception for an RFP invitation without an EOI; it never
+ * carries an EOI.
+ */
+export const PROCUREMENT_ROUTES = ['eoi_rfp', 'direct_rfp'] as const;
+export type ProcurementRoute = (typeof PROCUREMENT_ROUTES)[number];
+
+export const PROCUREMENT_ROUTE_LABELS: Record<ProcurementRoute, string> = {
+  eoi_rfp: 'EOI then RFP',
+  direct_rfp: 'Direct RFP (management exception)',
+};
+
+/**
+ * A cycle's milestones. Kept apart from the opportunity pipeline: reaching a
+ * milestone never moves the opportunity; a matching pipeline change is only
+ * offered (PROCUREMENT_PIPELINE_OFFERS).
+ */
+export const PROCUREMENT_MILESTONES = [
+  'eoi_preparation',
+  'eoi_submitted',
+  'shortlisted',
+  'not_shortlisted',
+  'rfp_received',
+  'proposal_preparation',
+  'proposal_submitted',
+  'evaluation',
+  'awarded',
+  'unsuccessful',
+  'cancelled',
+] as const;
+export type ProcurementMilestone = (typeof PROCUREMENT_MILESTONES)[number];
+
+export const PROCUREMENT_MILESTONE_LABELS: Record<ProcurementMilestone, string> = {
+  eoi_preparation: 'EOI preparation',
+  eoi_submitted: 'EOI submitted',
+  shortlisted: 'Shortlisted',
+  not_shortlisted: 'Not shortlisted',
+  rfp_received: 'RFP received',
+  proposal_preparation: 'Proposal preparation',
+  proposal_submitted: 'Proposal submitted',
+  evaluation: 'Evaluation',
+  awarded: 'Awarded',
+  unsuccessful: 'Unsuccessful',
+  cancelled: 'Cancelled',
+};
+
+/** A cycle that has ended. */
+export const CLOSED_MILESTONES: readonly ProcurementMilestone[] = ['not_shortlisted', 'awarded', 'unsuccessful', 'cancelled'];
+
+/** The EOI part of a cycle, before shortlisting is known. */
+export const EOI_MILESTONES: readonly ProcurementMilestone[] = ['eoi_preparation', 'eoi_submitted', 'shortlisted', 'not_shortlisted'];
+
+/** The RFP part: these need the RFP's reference, invitation date and proposal deadline. */
+export const RFP_MILESTONES: readonly ProcurementMilestone[] = [
+  'rfp_received',
+  'proposal_preparation',
+  'proposal_submitted',
+  'evaluation',
+  'awarded',
+  'unsuccessful',
+];
+
+/** These need the proposal (or both its parts) submitted. */
+export const PROPOSAL_SUBMITTED_MILESTONES: readonly ProcurementMilestone[] = ['proposal_submitted', 'evaluation', 'awarded', 'unsuccessful'];
+
+/** The working order of a cycle on each route; endings are reached from it. */
+export const PROCUREMENT_SEQUENCE: Record<ProcurementRoute, readonly ProcurementMilestone[]> = {
+  eoi_rfp: ['eoi_preparation', 'eoi_submitted', 'shortlisted', 'rfp_received', 'proposal_preparation', 'proposal_submitted', 'evaluation'],
+  direct_rfp: ['rfp_received', 'proposal_preparation', 'proposal_submitted', 'evaluation'],
+};
+
+export function isClosedMilestone(milestone: ProcurementMilestone): boolean {
+  return CLOSED_MILESTONES.includes(milestone);
+}
+
+/**
+ * Where a cycle may go next: any later working milestone on its route (the
+ * fields a milestone needs are checked separately), Not shortlisted once the
+ * EOI is submitted, Awarded or Unsuccessful once the proposal is submitted,
+ * and Cancelled from any open milestone. Never backwards; never out of an
+ * ending.
+ */
+export function nextMilestones(route: ProcurementRoute, current: ProcurementMilestone): ProcurementMilestone[] {
+  if (isClosedMilestone(current)) return [];
+  const sequence = PROCUREMENT_SEQUENCE[route];
+  const index = sequence.indexOf(current);
+  const later = sequence.slice(index + 1);
+  const endings: ProcurementMilestone[] = [];
+  if (current === 'eoi_submitted') endings.push('not_shortlisted');
+  if (current === 'proposal_submitted' || current === 'evaluation') endings.push('awarded', 'unsuccessful');
+  return [...later, ...endings, 'cancelled'];
+}
+
+/**
+ * The opportunity pipeline change a milestone may offer (never applied
+ * without the user's explicit choice, and then under the usual stage rules:
+ * Awarded needs its value and date, Lost its reason).
+ */
+export const PROCUREMENT_PIPELINE_OFFERS: Partial<Record<ProcurementMilestone, OpportunityStage>> = {
+  rfp_received: 'tender_published',
+  proposal_preparation: 'bid_preparation',
+  proposal_submitted: 'bid_submitted',
+  evaluation: 'evaluation',
+  awarded: 'awarded',
+  unsuccessful: 'lost',
+  not_shortlisted: 'lost',
+};
+
+export const PROPOSAL_FORMATS = ['single', 'separate'] as const;
+export type ProposalFormat = (typeof PROPOSAL_FORMATS)[number];
+
+export const PROPOSAL_FORMAT_LABELS: Record<ProposalFormat, string> = {
+  single: 'One proposal',
+  separate: 'Separate technical and financial proposals',
+};
+
+export const PARTICIPATION_DECISIONS = ['undecided', 'participating', 'not_participating'] as const;
+export type ParticipationDecision = (typeof PARTICIPATION_DECISIONS)[number];
+
+export const PARTICIPATION_DECISION_LABELS: Record<ParticipationDecision, string> = {
+  undecided: 'Not decided',
+  participating: 'Participating',
+  not_participating: 'Not participating',
+};
+
+export const EOI_OUTCOMES = ['shortlisted', 'not_shortlisted'] as const;
+export type EoiOutcome = (typeof EOI_OUTCOMES)[number];
+
+/** The cycle documents a link can name; each is one of the opportunity's own documents. */
+export const PROCUREMENT_DOCUMENT_ROLES = ['eoi', 'shortlist', 'rfp', 'proposal', 'decision'] as const;
+export type ProcurementDocumentRole = (typeof PROCUREMENT_DOCUMENT_ROLES)[number];
+
+export const PROCUREMENT_DOCUMENT_ROLE_LABELS: Record<ProcurementDocumentRole, string> = {
+  eoi: 'EOI',
+  shortlist: 'Shortlist',
+  rfp: 'RFP',
+  proposal: 'Proposal',
+  decision: 'Decision',
+};
+
+/**
+ * The deadline indicator for a cycle, decided by the server against the real
+ * clock, like FR-052 for tenders: the deadline that matters now is the EOI
+ * deadline until the EOI is submitted, then the proposal deadline until the
+ * proposal is submitted.
+ */
+export const PROCUREMENT_INDICATORS = ['missed', 'due_soon', 'upcoming', 'submitted', 'no_deadline', 'closed'] as const;
+export type ProcurementIndicator = (typeof PROCUREMENT_INDICATORS)[number];
+
+export const PROCUREMENT_INDICATOR_LABELS: Record<ProcurementIndicator, string> = {
+  missed: 'Deadline passed, not submitted',
+  due_soon: 'Due within 72 hours',
+  upcoming: 'Due later',
+  submitted: 'Submitted, awaiting the next step',
+  no_deadline: 'No deadline recorded yet',
+  closed: 'Cycle ended',
 };

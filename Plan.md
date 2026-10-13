@@ -1,6 +1,6 @@
 # Penta Public Sector CRM — Development Plan
 
-Revision: 2.0 | Updated: 04 October 2026
+Revision: 2.1 | Updated: 13 October 2026 (change requests CR1–CR6: §3.1, §3.2 and §6)
 
 ## 1. Purpose and authority
 
@@ -33,20 +33,30 @@ The earlier plan describes a Vite, React, TypeScript and Tailwind application, a
 | Role | Commercial record scope | Account administration |
 | --- | --- | --- |
 | Management | All sections and all opportunities | No account administration by default |
-| Section lead | All opportunities in their own section, including their own | No privileged account administration |
-| Salesperson | Opportunities they currently own | No privileged account administration |
+| Section lead | All opportunities in their own section, including their own (CR4: in every section they currently lead) | No privileged account administration |
+| Salesperson | Opportunities they currently own (CR5: in sections they currently belong to) | No privileged account administration |
 | System administrator | No commercial records, commercial totals, contacts, documents or commercial audit events | Users, sections, reporting relationships and administrative audit |
 
-A section lead's commercial scope is `opportunity.section_id = actor.section_id`. Do not add an owner-active or direct-report condition. Deactivating an owner does not hide historical section records from the lead or management. A missing `manager_id` does not shrink the lead's section scope.
+A section lead's commercial scope is `opportunity.section_id = actor.section_id`. Do not add an owner-active or direct-report condition.
 
-Separately, enforce the organizational model through account administration: a salesperson belongs to one active section and reports to that section's active lead. Each active section has one active lead. Do not infer recursive access through arbitrary reporting chains. A malformed account with no valid section must fail closed; do not widen its scope.
+> **Amended by CR4/CR5 (12 October 2026; ADR 0010).** Scope is now
+> `opportunity.section_id IN actor.sectionIds`, where `sectionIds` is read
+> fresh on every request: for a lead, the active sections whose
+> `lead_user_id` is them; for a salesperson, the active sections they are a
+> current member of (`section_memberships`), and only records they own
+> there. `users.section_id` is legacy and is not read. Former leadership or
+> membership grants nothing; a lead or salesperson with no current section
+> sees nothing. `server/policy/scope.ts` remains the only place this is
+> defined. Deactivating an owner does not hide historical section records from the lead or management. A missing `manager_id` does not shrink the lead's section scope.
+
+Separately, enforce the organizational model through account administration: a salesperson belongs to one active section and reports to that section's active lead (CR5: one or more sections, reporting to each section's lead). Each active section has one active lead (CR4: enforced in the database; one lead may lead several sections). Do not infer recursive access through arbitrary reporting chains. A malformed account with no valid section must fail closed; do not widen its scope.
 
 ### 3.2 Ownership and action permissions
 
-- Eligible owners are active salespeople and section leads in the selected section. Management is not an opportunity owner in this release.
+- Eligible owners are active salespeople and section leads in the selected section (CR4/CR5: a current member, or the section's lead). Management is not an opportunity owner in this release.
 - Salespeople create opportunities for themselves. Leads create for eligible owners in their section. Management creates for eligible owners across sections. Administrators cannot create opportunities.
 - Visibility alone does not grant every mutation. Enforce each action using the requirements matrix.
-- Within-section transfers are available to the appropriate section lead and management. Cross-section transfers are management-only. Salespeople cannot transfer ownership.
+- Within-section transfers are available to the appropriate section lead and management. Cross-section transfers are management-only (D-CR4-2: a lead may also move a record between two sections they both lead). Salespeople cannot transfer ownership.
 - Never accept client-supplied role, user, section or owner fields as evidence of access. Validate proposed associations against the actor and current database state.
 - Historical creator, author and prior owner fields do not grant current access.
 
@@ -214,6 +224,23 @@ Verify optimistic concurrency and idempotency across create, stage/status, tasks
 Complete security review, production demo exclusion, accessibility, responsive checks, supported desktop browsers, network-failure handling and the full requirement/acceptance matrix. Use representative synthetic capacity data: proposed 100 users, 30 concurrent users, 10,000 opportunities and 100,000 activities/follow-ups. Measure the proposed p95 API target below 2 seconds and first usable page below 3 seconds; report measured conditions rather than guarantees.
 
 Prepare separate staging/production configuration, monitoring, migrations/rollback runbooks, encrypted consistent database/file backups and a demonstrated full restore. Record Penta's confirmation of proposed daily backups, 30-day retention, 24-hour recovery point and 4-hour recovery time. Resolve identity, MFA, hosting, storage/scanning, retention and support ownership before launch. Present pilot evidence for approval before production deployment or live-data migration.
+
+### Change requests CR1–CR6 (after M8, 12–13 October 2026)
+
+Branch `cr-change-requests`; plan, acceptance criteria and decisions in
+`docs/change-requests.md`; ADRs 0010–0012; migrations 0008–0012, each with a
+reviewed production script in `docs/operations/sql/`.
+
+- **CR3:** everyone changes their own password.
+- **CR4/CR5:** a lead may lead several sections; a salesperson may belong to
+  several (the §3.1 amendment above).
+- **CR1:** invitation and reset links by email.
+- **CR2:** email delivery, templates, notification emails and their timing.
+- **CR6:** separate Software Procurement cycles.
+
+Step 7 verified them as one change set (`docs/progress.md`,
+`docs/release/cr-release-handover.md`). The M8 release rules apply unchanged:
+no production deployment or real data without written authorization.
 
 ## 7. Milestone 1 — implement now
 

@@ -52,7 +52,7 @@ export interface TenderParent {
   ownerName: string;
 }
 
-function OrganizationSelect({
+export function OrganizationSelect({
   value,
   selectedName,
   onChange,

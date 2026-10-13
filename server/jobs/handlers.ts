@@ -4,13 +4,23 @@
  *   notifications.scan     hourly (FR-090: tender deadlines at least hourly;
  *                          follow-ups at the start of the Dhaka day, which the
  *                          first scan after 00:00 Asia/Dhaka is). Retires
- *                          obsolete alerts, then adds due ones.
- *   notifications.refresh  queued by a transfer, a reschedule or a tender
- *                          change, so replacement alerts appear without
- *                          waiting for the next scan.
+ *                          obsolete alerts, then adds due ones, then queues
+ *                          the reminder and summary emails whose time has
+ *                          come (CR2, step 6). Also queued by an account or
+ *                          section change that can take access away.
+ *   notifications.refresh  queued by a transfer, a reschedule, a tender or a
+ *                          procurement change, so replacement alerts (and an
+ *                          assignment email) appear without waiting for the
+ *                          next scan.
  *   report_export          produces one queued CSV export.
  *   housekeeping           daily: expired exports, expired idempotency
  *                          records, finished jobs older than 30 days.
+ *   email.send             sends one queued email (CR2), re-checking that
+ *                          delivery, the template and the recipient are
+ *                          still on; marked failed after the last attempt.
+ *   account.reset_request  a "Forgot your password?" request (CR3): finds
+ *                          the account by the address digest and queues its
+ *                          reset email, at most once per window.
  *
  * Every handler is idempotent, so a retry after a partial failure is safe.
  */
@@ -19,15 +29,22 @@ import { and, inArray, lt, sql } from 'drizzle-orm';
 import { dhakaDateOf, now } from '../clock.js';
 import type { Database } from '../db/client.js';
 import { backgroundJobs } from '../db/schema.js';
+import { NO_EMAIL, type EmailRuntime } from '../email/runtime.js';
 import type { JobsConfig } from '../env.js';
+import { deliverEmail, failEmailAfterRetries } from '../services/email.js';
 import { failExportAfterRetries, generateExport, purgeExpiredExports } from '../services/exports.js';
 import { pruneExpiredIdempotencyRecords } from '../services/idempotency.js';
-import { generateDeadlineAlerts, generateOwnershipAlerts, runNotificationScan } from '../services/notifications.js';
+import { processPasswordResetRequest } from '../services/passwordRecovery.js';
+import { generateDeadlineAlerts, generateOwnershipAlerts, queueDueAlertEmails, runNotificationScan } from '../services/notifications.js';
 import { enqueueJob, type JobHandlers } from './queue.js';
 
 const FINISHED_JOB_RETENTION_DAYS = 30;
 
-export function createJobHandlers(db: Database, config: Pick<JobsConfig, 'exportTtlHours' | 'exportMaxRows'>): JobHandlers {
+export function createJobHandlers(
+  db: Database,
+  config: Pick<JobsConfig, 'exportTtlHours' | 'exportMaxRows'>,
+  email: EmailRuntime = NO_EMAIL,
+): JobHandlers {
   return {
     'notifications.scan': {
       async run() {
@@ -41,6 +58,7 @@ export function createJobHandlers(db: Database, config: Pick<JobsConfig, 'export
         await generateDeadlineAlerts(db, { opportunityId });
         const ownership = job.payload.ownership as { newOwnerId: string; version: number; actorId: string } | undefined;
         if (ownership) await generateOwnershipAlerts(db, { opportunityId, ...ownership });
+        await queueDueAlertEmails(db, { opportunityId });
       },
     },
     report_export: {
@@ -49,6 +67,19 @@ export function createJobHandlers(db: Database, config: Pick<JobsConfig, 'export
       },
       async onFinalFailure(job) {
         await failExportAfterRetries(db, String(job.payload.exportId));
+      },
+    },
+    'email.send': {
+      async run(job, requestId) {
+        await deliverEmail(db, email, String(job.payload.deliveryId), requestId);
+      },
+      async onFinalFailure(job) {
+        await failEmailAfterRetries(db, String(job.payload.deliveryId));
+      },
+    },
+    'account.reset_request': {
+      async run(job, requestId) {
+        await processPasswordResetRequest(db, String(job.payload.addressDigest ?? ''), requestId);
       },
     },
     housekeeping: {

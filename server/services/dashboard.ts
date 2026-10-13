@@ -20,9 +20,9 @@ import { PIPELINE_STAGES } from '../../shared/enums.js';
 import type { dashboardQuerySchema } from '../../shared/validation.js';
 import { dhakaDateOf, dhakaQuarter, now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { activities, followUps, opportunities, sections, tenders, users } from '../db/schema.js';
+import { activities, followUps, opportunities, procurementCycles, sections, tenders, users } from '../db/schema.js';
 import { forbidden } from '../http/errors.js';
-import type { Actor } from '../policy/actor.js';
+import { currentSectionNamesSql, type Actor } from '../policy/actor.js';
 import {
   canFilterByOwner,
   canFilterBySection,
@@ -39,10 +39,15 @@ import {
   opportunityOpen,
   overdueFollowUp,
   participatingCurrentNotice,
+  procurementDueWithin,
+  procurementOpenDeadline,
+  procurementOverdue,
   SEVEN_DAYS_HOURS,
   sumMoney,
   tenderDueWithin,
+  workingProcurementCycle,
 } from './metrics.js';
+import { procurementIndicator } from './procurement.js';
 import { tenderIndicator } from './tenders.js';
 
 type DashboardQuery = z.output<typeof dashboardQuerySchema>;
@@ -78,7 +83,12 @@ export function narrowingFilters(filters: { sectionId?: string | undefined; owne
 
 export function scopeLabel(actor: Actor, sectionName: string | null = null): string {
   if (actor.role === 'management') return sectionName ?? 'Organization-wide';
-  if (actor.role === 'lead') return `${actor.sectionName ?? 'Your section'} — every opportunity in your section`;
+  if (actor.role === 'lead') {
+    const names = actor.sections.map((section) => section.name).join(', ');
+    return actor.sections.length > 1
+      ? `${names} — every opportunity in the sections you lead`
+      : `${names || 'Your section'} — every opportunity in your section`;
+  }
   return 'Opportunities you own';
 }
 
@@ -152,6 +162,35 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
     .from(tenders)
     .innerJoin(opportunities, eq(opportunities.id, tenders.opportunityId))
     .where(inScope(tenderDueWithin(at, SEVEN_DAYS_HOURS)));
+
+  // --- Software Procurement deadlines (CR6), apart from goods tenders ------
+  const [procurementCounts] = await db
+    .select({
+      working: sql<number>`count(*) FILTER (WHERE ${workingProcurementCycle()})::int`,
+      overdue: sql<number>`count(*) FILTER (WHERE ${procurementOverdue(at)})::int`,
+      dueNext7Days: sql<number>`count(*) FILTER (WHERE ${procurementDueWithin(at, SEVEN_DAYS_HOURS)})::int`,
+    })
+    .from(procurementCycles)
+    .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+    .where(inScope());
+  const procurementRows = await db
+    .select({
+      cycle: procurementCycles,
+      opportunityName: opportunities.name,
+      opportunityStage: opportunities.stage,
+      opportunityStatus: opportunities.status,
+    })
+    .from(procurementCycles)
+    .innerJoin(opportunities, eq(opportunities.id, procurementCycles.opportunityId))
+    .where(
+      inScope(
+        workingProcurementCycle(),
+        sql`${procurementOpenDeadline} IS NOT NULL`,
+        sql`${procurementOpenDeadline} >= ${at.toISOString()}::timestamptz`,
+      ),
+    )
+    .orderBy(sql`${procurementOpenDeadline} ASC`, asc(procurementCycles.id))
+    .limit(5);
 
   // --- Team workload (leads and management) -------------------------------
   const workload = canFilterByOwner(actor) ? await loadWorkload(db, actor, query, today, at) : null;
@@ -256,14 +295,9 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
   // --- Filter choices -----------------------------------------------------
   const ownerOptions = canFilterByOwner(actor)
     ? await db
-        .select({ id: users.id, fullName: users.fullName, sectionId: users.sectionId, active: users.active })
+        .select({ id: users.id, fullName: users.fullName, active: users.active })
         .from(users)
-        .where(
-          and(
-            ownerFilterOptionScope(actor),
-            query.sectionId ? eq(users.sectionId, query.sectionId) : undefined,
-          ),
-        )
+        .where(ownerFilterOptionScope(actor, query.sectionId))
         .orderBy(asc(users.fullName))
     : [];
   const sectionOptions = canFilterBySection(actor)
@@ -322,13 +356,26 @@ export async function getDashboard(db: Database, actor: Actor, query: DashboardQ
       bidStatus: row.bidStatus,
       indicator: tenderIndicator(row, at),
     })),
+    procurement: {
+      working: procurementCounts?.working ?? 0,
+      overdue: procurementCounts?.overdue ?? 0,
+      dueNext7Days: procurementCounts?.dueNext7Days ?? 0,
+      upcoming: procurementRows.map((row) => ({
+        id: row.cycle.id,
+        reference: row.cycle.reference,
+        title: row.cycle.title,
+        opportunityId: row.cycle.opportunityId,
+        opportunityName: row.opportunityName,
+        milestone: row.cycle.milestone,
+        deadline: ((row.cycle.milestone === 'eoi_preparation' ? row.cycle.eoiDeadline : row.cycle.proposalDeadline) as Date).toISOString(),
+        indicator: procurementIndicator(row, at),
+      })),
+    },
     recentActivity: activityRows.map((row) => ({
       ...row,
       occurredAt: row.occurredAt.toISOString(),
     })),
-    ownerOptions: ownerOptions
-      .filter((option): option is typeof option & { sectionId: string } => option.sectionId !== null)
-      .map((option) => ({ ...option })),
+    ownerOptions,
     sectionOptions,
   };
 }
@@ -346,7 +393,9 @@ async function loadWorkload(
   today: string,
   at: Date,
 ): Promise<DashboardWorkloadRowDto[]> {
-  const scope = opportunityScope(actor);
+  // A section filter narrows the records counted, not the people: someone
+  // in two sections shows only that section's work (CR4, CR5).
+  const scope = and(opportunityScope(actor), ...narrowingFilters({ sectionId: query.sectionId })) as SQL;
 
   // Each figure is aggregated once per owner over the scoped rows, then
   // joined to the people. (Measured at the NFR-010 envelope, per-person
@@ -395,8 +444,7 @@ async function loadWorkload(
       userId: users.id,
       fullName: users.fullName,
       role: users.role,
-      sectionId: users.sectionId,
-      sectionName: sections.name,
+      sectionNames: currentSectionNamesSql(),
       active: users.active,
       activeOpportunities: sql<number>`coalesce(${byOwner.activeOpportunities}, 0)::int`,
       estimatedPipeline: sql<string>`coalesce(${byOwner.estimatedPipeline}, '0.00')`,
@@ -406,18 +454,16 @@ async function loadWorkload(
       openRecords: sql<boolean>`coalesce(${byOwner.openRecords}, false)`,
     })
     .from(users)
-    .leftJoin(sections, eq(sections.id, users.sectionId))
     .leftJoin(byOwner, eq(byOwner.ownerId, users.id))
     .leftJoin(tasksByOwner, eq(tasksByOwner.ownerId, users.id))
     .leftJoin(tendersByOwner, eq(tendersByOwner.ownerId, users.id))
     .where(
       and(
-        ownerFilterOptionScope(actor),
-        query.sectionId ? eq(users.sectionId, query.sectionId) : undefined,
+        ownerFilterOptionScope(actor, query.sectionId),
         query.ownerId ? eq(users.id, query.ownerId) : undefined,
       ),
     )
-    .orderBy(asc(sections.name), asc(users.fullName));
+    .orderBy(asc(users.fullName));
 
   return rows
     .filter((row) => row.active || row.openRecords || row.openTasks > 0)

@@ -251,6 +251,8 @@ describe('operational guards', () => {
         DATABASE_URL: 'postgres://u:p@db:5432/penta_crm_prod',
         // A development .env enables the test scanner, which production refuses.
         DOCUMENT_SCANNER: 'none',
+        // Likewise the development mail capture (CR2).
+        EMAIL_TRANSPORT: 'none',
       });
       expect(loadServerConfig().secureCookies).toBe(true);
     });

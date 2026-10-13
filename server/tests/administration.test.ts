@@ -3,12 +3,12 @@
  * and management's team view (FR-071, BR-051, BR-052, SEC-005, SEC-012,
  * SEC-030, SEC-031). AT-09.
  */
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { FixedClock, resetClock, setClock } from '../clock.js';
-import { auditEvents, opportunities, sections, users } from '../db/schema.js';
+import { auditEvents, opportunities, sectionMemberships, sections, users } from '../db/schema.js';
 import {
   TEST_ORIGIN,
   createTestApp,
@@ -46,6 +46,15 @@ describe('administration', () => {
   async function account(id: string) {
     const [row] = await ctx.database.db.select().from(users).where(eq(users.id, id));
     return row!;
+  }
+
+  /** The sections a person is currently a member of, sorted. */
+  async function membershipsOf(id: string) {
+    const rows = await ctx.database.db
+      .select({ sectionId: sectionMemberships.sectionId })
+      .from(sectionMemberships)
+      .where(and(eq(sectionMemberships.userId, id), isNull(sectionMemberships.endedAt)));
+    return rows.map((row) => row.sectionId).sort();
   }
 
   const patch = (client: SignedInClient, path: string, body: unknown) =>
@@ -97,7 +106,16 @@ describe('administration', () => {
         expect(serialised).not.toContain(forbiddenKey);
       }
       const rafiq = response.body.items.find((item: { id: string }) => item.id === ids.salesGA1);
-      expect(rafiq).toMatchObject({ role: 'sales', sectionName: 'Government Applications', managerName: 'Nadia Islam', invitationPending: false });
+      // A salesperson's reporting line is the lead of each of their sections
+      // (CR5), so no manager is stored for them.
+      expect(rafiq).toMatchObject({
+        role: 'sales',
+        sections: [{ id: ids.sectionGA, name: 'Government Applications', active: true }],
+        managerName: null,
+        invitationPending: false,
+      });
+      const nadia = response.body.items.find((item: { id: string }) => item.id === ids.leadGA);
+      expect(nadia).toMatchObject({ role: 'lead', sections: [{ id: ids.sectionGA }], managerName: 'Arif Rahman' });
     });
 
     it('carries no commercial data and does not appear in commercial history', async () => {
@@ -122,13 +140,14 @@ describe('administration', () => {
         fullName: 'Lamia Chowdhury',
         email: 'Lamia.Chowdhury@Example.com',
         role: 'sales',
-        sectionId: ids.sectionGA,
+        sectionIds: [ids.sectionGA],
       });
       expect(created.status).toBe(201);
       expect(created.body.user).toMatchObject({
         email: 'lamia.chowdhury@example.com',
         role: 'sales',
-        managerId: ids.leadGA,
+        sections: [{ id: ids.sectionGA }],
+        managerId: null,
         invitationPending: true,
       });
       expect(created.body.link.purpose).toBe('invitation');
@@ -248,47 +267,61 @@ describe('administration', () => {
       expect(nadiaView.body.ownerName).toBe('Rafiq Hasan');
     });
 
-    it('blocks moving an owner to another section, or out of a selling role', async () => {
+    it('blocks taking an owner out of a section they own records in, or out of a selling role', async () => {
       const admin = await signIn(ctx.app, emails.admin);
       const { version } = await account(ids.salesGA1);
-      const moved = await patch(admin, `/api/admin/users/${ids.salesGA1}`, { version, sectionId: ids.sectionIS });
+      const moved = await patch(admin, `/api/admin/users/${ids.salesGA1}`, { version, sectionIds: [ids.sectionIS] });
       expect(moved.status).toBe(409);
+      expect(moved.body.message).toMatch(/still owns opportunities in a section/);
       const promoted = await patch(admin, `/api/admin/users/${ids.salesGA1}`, { version, role: 'management' });
       expect(promoted.status).toBe(409);
-      const after = await account(ids.salesGA1);
-      expect(after.sectionId).toBe(ids.sectionGA);
-      expect(after.role).toBe('sales');
+      expect(await membershipsOf(ids.salesGA1)).toEqual([ids.sectionGA]);
+      expect((await account(ids.salesGA1)).role).toBe('sales');
     });
 
-    it('moves a salesperson with no opportunities, re-pointing their lead and ending their sessions', async () => {
+    it('moves a salesperson with no opportunities to another section and ends their sessions', async () => {
       const admin = await signIn(ctx.app, emails.admin);
-      const created = await createUser(admin, { fullName: 'Movable Person', email: 'movable@example.com', role: 'sales', sectionId: ids.sectionGA });
+      const created = await createUser(admin, { fullName: 'Movable Person', email: 'movable@example.com', role: 'sales', sectionIds: [ids.sectionGA] });
       await setPassword(created.body.link.url);
       const person = await signIn(ctx.app, 'movable@example.com', NEW_PASSWORD);
       await person.agent.get('/api/auth/me').expect(200);
 
       const { version } = await account(created.body.user.id);
-      const response = await patch(admin, `/api/admin/users/${created.body.user.id}`, { version, sectionId: ids.sectionIS });
+      const response = await patch(admin, `/api/admin/users/${created.body.user.id}`, { version, sectionIds: [ids.sectionIS] });
       expect(response.status).toBe(200);
-      expect(response.body).toMatchObject({ sectionId: ids.sectionIS, managerId: ids.leadIS });
+      expect(response.body.sections.map((section: { id: string }) => section.id)).toEqual([ids.sectionIS]);
+      // Leaving a section is a material change (SEC-005).
       await person.agent.get('/api/auth/me').expect(401);
+
+      // History is kept: the GA membership is ended, not deleted.
+      const rows = await ctx.database.db.select().from(sectionMemberships).where(eq(sectionMemberships.userId, created.body.user.id));
+      expect(rows.find((row) => row.sectionId === ids.sectionGA)?.endedAt).toBeTruthy();
     });
 
-    it('keeps a salesperson’s reporting line to their own section’s lead', async () => {
+    it('derives reporting lines from sections, and appoints leads only through sections', async () => {
       const admin = await signIn(ctx.app, emails.admin);
-      const wrongLead = await createUser(admin, {
+      const withManager = await createUser(admin, {
         fullName: 'Wrong Lead',
         email: 'wrong.lead@example.com',
         role: 'sales',
-        sectionId: ids.sectionGA,
+        sectionIds: [ids.sectionGA],
         managerId: ids.leadIS,
       });
-      expect(wrongLead.status).toBe(422);
-      expect(wrongLead.body.fieldErrors.managerId).toBeTruthy();
+      expect(withManager.status).toBe(422);
+      expect(withManager.body.fieldErrors.managerId).toBeTruthy();
 
-      const secondLead = await createUser(admin, { fullName: 'Second Lead', email: 'second.lead@example.com', role: 'lead', sectionId: ids.sectionGA });
-      expect(secondLead.status).toBe(409);
-      expect(secondLead.body.message).toMatch(/Replace lead/);
+      const leadWithSection = await createUser(admin, {
+        fullName: 'Second Lead',
+        email: 'second.lead@example.com',
+        role: 'lead',
+        sectionIds: [ids.sectionGA],
+      });
+      expect(leadWithSection.status).toBe(422);
+      expect(leadWithSection.body.fieldErrors.sectionIds).toMatch(/Replace lead/);
+
+      const noSection = await createUser(admin, { fullName: 'No Section', email: 'no.section@example.com', role: 'sales' });
+      expect(noSection.status).toBe(422);
+      expect(noSection.body.fieldErrors.sectionIds).toBeTruthy();
     });
 
     it('replaces a section lead atomically: role, direct reports and sessions', async () => {
@@ -305,10 +338,12 @@ describe('administration', () => {
       expect(response.status).toBe(200);
       expect(response.body.leadId).toBe(ids.salesGA2);
 
+      // Tasnia is promoted, leaving her membership; Nadia led no other
+      // section, so she stays in it as a salesperson (D-CR4-4).
       expect((await account(ids.salesGA2)).role).toBe('lead');
+      expect(await membershipsOf(ids.salesGA2)).toEqual([]);
       expect((await account(ids.leadGA)).role).toBe('sales');
-      const gaSales = await ctx.database.db.select().from(users).where(sql`${users.sectionId} = ${ids.sectionGA} AND ${users.role} = 'sales'`);
-      for (const person of gaSales) expect(person.managerId).toBe(ids.salesGA2);
+      expect(await membershipsOf(ids.leadGA)).toEqual([ids.sectionGA]);
 
       // Both changed role: both sessions end.
       await nadiaSession.agent.get('/api/auth/me').expect(401);
@@ -345,29 +380,40 @@ describe('administration', () => {
       expect(blocked.status).toBe(409);
       expect(blocked.body.message).toMatch(/open opportunities/);
 
-      const created = await send(admin, '/api/admin/sections', { name: 'Digital Health' }).expect(201);
+      const created = await send(admin, '/api/admin/sections', { name: 'Digital Health', leadId: ids.leadIS }).expect(201);
       const off = await send(admin, `/api/admin/sections/${created.body.id}/deactivate`, { version: created.body.version });
       expect(off.status).toBe(200);
       expect(off.body.active).toBe(false);
+      // The former lead resumes on reactivation (CR4: never without a lead).
       const on = await send(admin, `/api/admin/sections/${created.body.id}/reactivate`, { version: off.body.version });
       expect(on.body.active).toBe(true);
+      expect(on.body.leadId).toBe(ids.leadIS);
     });
 
-    it('lets a new section get its first lead and then salespeople', async () => {
+    it('creates a new section with its lead, then its salespeople (CR4)', async () => {
       const admin = await signIn(ctx.app, emails.admin);
-      const section = await send(admin, '/api/admin/sections', { name: 'Smart Cities' }).expect(201);
-      const early = await createUser(admin, { fullName: 'Too Early', email: 'too.early@example.com', role: 'sales', sectionId: section.body.id });
-      expect(early.status).toBe(409);
+      const leaderless = await send(admin, '/api/admin/sections', { name: 'Smart Cities' });
+      expect(leaderless.status).toBe(422);
+      const salespersonAsLead = await send(admin, '/api/admin/sections', { name: 'Smart Cities', leadId: ids.salesGA1 });
+      expect(salespersonAsLead.status).toBe(422);
+      expect(salespersonAsLead.body.fieldErrors.leadId).toBeTruthy();
 
       const lead = await createUser(admin, {
         fullName: 'First Lead',
         email: 'first.lead@example.com',
         role: 'lead',
-        sectionId: section.body.id,
         managerId: ids.management,
       }).expect(201);
-      const sales = await createUser(admin, { fullName: 'First Seller', email: 'first.seller@example.com', role: 'sales', sectionId: section.body.id }).expect(201);
-      expect(sales.body.user.managerId).toBe(lead.body.user.id);
+      expect(lead.body.user.sections).toEqual([]);
+      const section = await send(admin, '/api/admin/sections', { name: 'Smart Cities', leadId: lead.body.user.id }).expect(201);
+      expect(section.body.leadId).toBe(lead.body.user.id);
+      const sales = await createUser(admin, {
+        fullName: 'First Seller',
+        email: 'first.seller@example.com',
+        role: 'sales',
+        sectionIds: [section.body.id],
+      }).expect(201);
+      expect(sales.body.user.sections).toEqual([{ id: section.body.id, name: 'Smart Cities', active: true }]);
     });
 
     it('rejects a duplicate email', async () => {

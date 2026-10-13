@@ -1,0 +1,4 @@
+# Migration hashes are recorded in the database and in the production
+# scripts; keep the bytes identical on every platform.
+server/db/migrations/*.sql text eol=lf
+docs/operations/sql/*.sql text eol=lf

@@ -90,7 +90,7 @@ describe('operations (M8)', () => {
 
       const result = await bootstrap();
       const [created] = await ctx.database.db.select().from(users).where(eq(users.id, result.userId));
-      expect(created).toMatchObject({ role: 'admin', active: true, email: 'first.admin@example.com', passwordHash: null, sectionId: null });
+      expect(created).toMatchObject({ role: 'admin', active: true, email: 'first.admin@example.com', passwordHash: null, managerId: null });
       const events = await ctx.database.db
         .select({ action: auditEvents.action, actorId: auditEvents.actorId, domain: auditEvents.domain })
         .from(auditEvents)

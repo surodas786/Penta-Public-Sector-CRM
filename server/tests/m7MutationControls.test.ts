@@ -27,7 +27,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { FILE_NAME_HEADER } from '../../shared/api.js';
 import { FixedClock, resetClock, setClock } from '../clock.js';
-import { auditEvents } from '../db/schema.js';
+import { auditEvents, emailDeliveries, emailSettings } from '../db/schema.js';
 import { createJobHandlers } from '../jobs/handlers.js';
 import { runDueJobs } from '../jobs/queue.js';
 import { runNotificationScan } from '../services/notifications.js';
@@ -36,6 +36,7 @@ import {
   ABSENT_UUID,
   CSRF_HEADER,
   TEST_ORIGIN,
+  TEST_PASSWORD,
   createOpportunityPayload,
   createTestApp,
   emails,
@@ -239,14 +240,14 @@ describe('Milestone 7: audit and mutation controls', () => {
       fullName,
       email: `${fullName.toLowerCase().replace(/\s+/g, '.')}@example.com`,
       role: 'sales',
-      sectionId: ids.sectionIS,
+      sectionIds: [ids.sectionIS],
     });
     expect(created.status).toBe(201);
     return created.body.user as { id: string; version: number };
   }
 
   async function createSection(admin: SignedInClient, name: string) {
-    const created = await send(admin, '/api/admin/sections', { name });
+    const created = await send(admin, '/api/admin/sections', { name, leadId: ids.leadIS });
     expect(created.status).toBe(201);
     return created.body as { id: string; version: number };
   }
@@ -285,6 +286,36 @@ describe('Milestone 7: audit and mutation controls', () => {
     salesIS1: ids.salesIS1,
     admin: ids.admin,
   };
+
+  // CR6: a Software Procurement cycle on Rafiq's record, and its steps.
+  const procurementCycle = {
+    procuringOrganizationId: ids.orgSylvanHills,
+    title: 'Matrix procurement',
+    reference: 'MX/EOI/2026/01',
+    eoiPublicationDate: '2026-10-01',
+    eoiDeadline: '2026-11-01T12:00:00+06:00',
+  };
+  const rfpFacts = { rfpReference: 'MX/RFP/2026/01', rfpInvitationDate: TODAY, proposalDeadline: '2026-11-20T12:00:00+06:00' };
+
+  async function newCycle(c: SignedInClient): Promise<{ id: string; version: number }> {
+    const created = await send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, procurementCycle);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    return created.body;
+  }
+
+  /** A cycle shortlisted after its EOI, ready for the RFP. */
+  async function shortlistedCycle(c: SignedInClient): Promise<{ id: string; version: number }> {
+    let cycle = await newCycle(c);
+    for (const step of [
+      { milestone: 'eoi_submitted', eoiSubmittedAt: EARLIER },
+      { milestone: 'shortlisted', eoiOutcomeDate: TODAY },
+    ]) {
+      const response = await send(c, `/api/procurement/${cycle.id}/milestone`, { version: cycle.version, ...step });
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+      cycle = response.body.cycle;
+    }
+    return cycle;
+  }
 
   const auditCases: AuditCase[] = [
     {
@@ -708,10 +739,11 @@ describe('Milestone 7: audit and mutation controls', () => {
       actor: 'admin',
       opportunityId: null,
       run: (c) =>
-        send(c, '/api/admin/users', { fullName: 'Nusrat Jahan', email: 'nusrat.jahan@example.com', role: 'sales', sectionId: ids.sectionGA }),
+        send(c, '/api/admin/users', { fullName: 'Nusrat Jahan', email: 'nusrat.jahan@example.com', role: 'sales', sectionIds: [ids.sectionGA] }),
       status: 201,
       events: [
-        { action: 'account.created', domain: 'administrative', changes: ['role', 'sectionId', 'managerId'] },
+        { action: 'account.created', domain: 'administrative', changes: ['role', 'managerId'] },
+        { action: 'account.section_joined', domain: 'administrative', changes: ['sectionId'] },
         { action: 'account.invitation_issued', domain: 'administrative', changes: ['expiresAt'] },
       ],
     },
@@ -733,7 +765,24 @@ describe('Milestone 7: audit and mutation controls', () => {
         return patch(c, `/api/admin/users/${person.id}`, { version: person.version, role: 'management' });
       },
       status: 200,
-      events: [{ action: 'account.role_changed', domain: 'administrative', changes: ['role', 'sectionId', 'managerId'] }],
+      // Leaving the selling role ends the membership first (CR5).
+      events: [
+        { action: 'account.section_left', domain: 'administrative', changes: ['sectionId'] },
+        { action: 'account.role_changed', domain: 'administrative', changes: ['role'] },
+      ],
+    },
+    {
+      name: 'joining a second section (CR5)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) =>
+        patch(c, `/api/admin/users/${ids.salesGA2}`, {
+          version: await versionOf('users', ids.salesGA2),
+          sectionIds: [ids.sectionGA, ids.sectionIS],
+          reason: 'Also covers infrastructure accounts.',
+        }),
+      status: 200,
+      events: [{ action: 'account.section_joined', domain: 'administrative', changes: ['sectionId'], reason: 'Also covers infrastructure accounts.' }],
     },
     {
       name: 'deactivation with a reason',
@@ -767,12 +816,21 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'account.reset_issued', domain: 'administrative', changes: ['expiresAt'] }],
     },
     {
+      name: 'changing one’s own password (CR3)',
+      actor: 'salesGA1',
+      opportunityId: null,
+      run: (c) =>
+        send(c, '/api/auth/password', { currentPassword: TEST_PASSWORD, newPassword: 'A-brand-new-passphrase-2026' }, null),
+      status: 200,
+      events: [{ action: 'account.password_changed', domain: 'administrative' }],
+    },
+    {
       name: 'section creation',
       actor: 'admin',
       opportunityId: null,
-      run: (c) => send(c, '/api/admin/sections', { name: 'Health Systems' }),
+      run: (c) => send(c, '/api/admin/sections', { name: 'Health Systems', leadId: ids.leadIS }),
       status: 201,
-      events: [{ action: 'section.created', domain: 'administrative', changes: ['name'] }],
+      events: [{ action: 'section.created', domain: 'administrative', changes: ['name', 'leadUserId'] }],
     },
     {
       name: 'section rename',
@@ -784,7 +842,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       events: [{ action: 'section.renamed', domain: 'administrative', changes: ['name'] }],
     },
     {
-      name: 'section lead replacement: both role changes, each re-pointed reporting line, the section',
+      name: 'section lead replacement: the promotion, the former lead staying on as a member, the section',
       actor: 'admin',
       opportunityId: null,
       run: async (c) =>
@@ -794,14 +852,14 @@ describe('Milestone 7: audit and mutation controls', () => {
           reason: 'Nadia moves to the bid office.',
         }),
       status: 200,
+      // Reporting lines are derived from the section's lead (CR5), so no
+      // salesperson's account changes; Nadia led only this section, so she
+      // stays in it as a salesperson (D-CR4-4).
       events: [
+        { action: 'account.section_left', domain: 'administrative', changes: ['sectionId'], reason: true },
         { action: 'account.role_changed', domain: 'administrative', changes: ['role', 'managerId'], reason: true },
-        { action: 'account.role_changed', domain: 'administrative', changes: ['role'], reason: true },
-        // Every other salesperson in the section now reports to Tasnia (FR-062:
-        // an account change). Rafiq, Shuvo (inactive) and Mehjabin.
-        { action: 'account.manager_changed', domain: 'administrative', changes: ['managerId'], reason: true },
-        { action: 'account.manager_changed', domain: 'administrative', changes: ['managerId'], reason: true },
-        { action: 'account.manager_changed', domain: 'administrative', changes: ['managerId'], reason: true },
+        { action: 'account.role_changed', domain: 'administrative', changes: ['role', 'managerId'], reason: true },
+        { action: 'account.section_joined', domain: 'administrative', changes: ['sectionId'], reason: true },
         { action: 'section.lead_replaced', domain: 'administrative', changes: ['leadUserId'], reason: true },
       ],
     },
@@ -815,6 +873,199 @@ describe('Milestone 7: audit and mutation controls', () => {
       },
       status: 200,
       events: [{ action: 'section.deactivated', domain: 'administrative', changes: ['active'], reason: 'Pilot ended.' }],
+    },
+    {
+      name: 'account creation with an emailed invitation (CR1): the link is issued later, by the send job',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: true, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        return send(c, '/api/admin/users', { fullName: 'Emailed Person', email: 'emailed.person@example.com', role: 'management' });
+      },
+      status: 201,
+      events: [
+        { action: 'account.created', domain: 'administrative', changes: ['role'] },
+        { action: 'account.invitation_queued', domain: 'administrative', changes: ['delivery'] },
+      ],
+    },
+    {
+      name: 'reset link by email (CR1)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: true, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        return send(c, `/api/admin/users/${ids.salesGA2}/link`, {});
+      },
+      status: 201,
+      events: [{ action: 'account.reset_queued', domain: 'administrative', changes: ['delivery'] }],
+    },
+    {
+      name: 'mail server settings (CR2), the password never recorded',
+      actor: 'admin',
+      opportunityId: null,
+      run: (c) =>
+        c.agent
+          .put('/api/admin/email/settings')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, c.csrfToken)
+          .send({
+            version: 0,
+            enabled: true,
+            host: 'smtp.example.test',
+            port: 587,
+            security: 'starttls',
+            username: 'crm@example.test',
+            password: 'smtp-secret-for-the-matrix',
+            fromName: 'Penta CRM',
+            fromAddress: 'crm@example.test',
+            replyTo: null,
+          }),
+      status: 200,
+      events: [{ action: 'email.settings_updated', domain: 'administrative', changes: ['enabled', 'host', 'smtpCredential'] }],
+    },
+    {
+      name: 'email wording (CR2)',
+      actor: 'admin',
+      opportunityId: null,
+      run: (c) =>
+        c.agent
+          .put('/api/admin/email/templates/ownership_changed')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, c.csrfToken)
+          .send({ version: 0, subject: 'New owner', bodyText: 'Open it: {{link}}', enabled: true }),
+      status: 200,
+      events: [{ action: 'email.template_updated', domain: 'administrative', changes: ['subject', 'bodyText'] }],
+    },
+    {
+      name: 'notification timing (CR2, step 6)',
+      actor: 'admin',
+      opportunityId: null,
+      run: (c) =>
+        c.agent
+          .put('/api/admin/email/notification-timing')
+          .set('Origin', TEST_ORIGIN)
+          .set(CSRF_HEADER, c.csrfToken)
+          .send({
+            version: 0,
+            reminderHour: 8,
+            tenderReminderHours: 72,
+            eoiReminderHours: 48,
+            rfpReminderHours: 72,
+            summaryFrequency: 'daily',
+            summaryWeekday: 0,
+            managementSummaryRecipientIds: [ids.management],
+          }),
+      status: 200,
+      events: [
+        {
+          action: 'email.notification_timing_updated',
+          domain: 'administrative',
+          changes: ['reminderHour', 'eoiReminderHours', 'summaryFrequency', 'managementSummaryRecipientIds'],
+        },
+      ],
+    },
+    {
+      name: 'test email (CR2)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: false, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        return send(c, '/api/admin/email/test', { to: 'it.desk@example.test' }, null);
+      },
+      status: 200,
+      events: [{ action: 'email.test_sent', domain: 'administrative', changes: ['recipientAddress', 'status'] }],
+    },
+    {
+      name: 'retry of a failed email (CR2)',
+      actor: 'admin',
+      opportunityId: null,
+      run: async (c) => {
+        await ctx.database.db
+          .insert(emailSettings)
+          .values({ id: 1, enabled: true, host: 'smtp.example.test', port: 587, fromAddress: 'crm@example.test' });
+        const [failed] = await ctx.database.db
+          .insert(emailDeliveries)
+          .values({ templateKey: 'password_changed', recipientUserId: ids.salesGA1, status: 'failed', attempts: 5 })
+          .returning({ id: emailDeliveries.id });
+        return send(c, `/api/admin/email/deliveries/${failed!.id}/retry`, {}, null);
+      },
+      status: 200,
+      events: [{ action: 'email.delivery_retried', domain: 'administrative', changes: ['status', 'retry'] }],
+    },
+    {
+      name: 'procurement cycle (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: (c) => send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, procurementCycle),
+      status: 201,
+      events: [{ action: 'procurement.created', changes: ['title', 'reference', 'milestone'] }],
+    },
+    {
+      name: 'procurement edit (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await newCycle(c);
+        return patch(c, `/api/procurement/${cycle.id}`, { version: cycle.version, title: 'Matrix procurement, renamed' });
+      },
+      status: 200,
+      events: [{ action: 'procurement.updated', changes: ['title'] }],
+    },
+    {
+      name: 'procurement milestone with the offered stage (CR6): both audited, together',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await shortlistedCycle(c);
+        return send(c, `/api/procurement/${cycle.id}/milestone`, {
+          version: cycle.version,
+          milestone: 'rfp_received',
+          ...rfpFacts,
+          pipeline: { stage: 'tender_published', explanation: 'The RFP followed the shortlisting.' },
+        });
+      },
+      status: 200,
+      events: [
+        { action: 'procurement.milestone_changed', changes: ['milestone'], reason: true },
+        { action: 'opportunity.stage_changed', changes: ['stage'], reason: true },
+      ],
+    },
+    {
+      name: 'procurement reissue after cancellation (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await newCycle(c);
+        await send(c, `/api/procurement/${cycle.id}/milestone`, {
+          version: cycle.version,
+          milestone: 'cancelled',
+          outcomeDate: TODAY,
+          outcomeNote: 'Withdrawn by the city.',
+        }).expect(200);
+        return send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, { ...procurementCycle, reference: 'MX/EOI/2026/02' });
+      },
+      status: 201,
+      events: [
+        { action: 'procurement.superseded', changes: ['isCurrent'], reason: true },
+        { action: 'procurement.created', changes: ['reference'] },
+      ],
+    },
+    {
+      name: 'procurement contact link (CR6)',
+      actor: 'salesGA1',
+      opportunityId: ids.oppRafiq,
+      run: async (c) => {
+        const cycle = await newCycle(c);
+        return send(c, `/api/procurement/${cycle.id}/contacts`, { contactId: ids.contactGolam });
+      },
+      status: 200,
+      events: [{ action: 'procurement.contact_linked', changes: ['contact'] }],
     },
     {
       name: 'CSV export request',
@@ -883,8 +1134,15 @@ describe('Milestone 7: audit and mutation controls', () => {
         ['account.invitation_accepted', 'auth.test.ts / administration.test.ts set-password flows'],
         ['account.password_reset', 'auth.test.ts / administration.test.ts set-password flows'],
         ['section.reactivated', 'administration.test.ts'],
+        ['account.reset_requested', 'accountRecovery.test.ts: the system event of the reset-request job'],
         ['report.exported', 'reports.test.ts (job), and the export case in §6 below'],
         ['report.export_downloaded', 'reports.test.ts, and §6 below'],
+        ['procurement.contact_unlinked', 'procurement.test.ts (contacts and documents)'],
+        ['procurement.document_linked', 'procurement.test.ts (contacts and documents)'],
+        ['procurement.document_unlinked', 'procurement.test.ts (contacts and documents); the route mirrors contact unlinking'],
+        // A background job kind that shares the prefix; it writes no audit event.
+        ['email.send', 'not an audit action: the job kind that sends queued email (email.test.ts)'],
+        ['account.reset_request', 'not an audit action: the job kind behind "Forgot your password?" (accountRecovery.test.ts)'],
       ]);
       const covered = new Set(auditCases.flatMap((auditCase) => [...auditCase.events.map((e) => e.action), ...(auditCase.systemEvents ?? [])]));
       const { readdirSync, readFileSync } = await import('node:fs');
@@ -893,7 +1151,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       const written = new Set<string>();
       for (const file of readdirSync(servicesDir)) {
         const source = readFileSync(path.join(servicesDir, file), 'utf8');
-        for (const match of source.matchAll(/'((?:opportunity|follow_up|contact|organization|activity|tender|document|account|section|report)\.[a-z_]+)'/g)) {
+        for (const match of source.matchAll(/'((?:opportunity|follow_up|contact|organization|activity|tender|document|account|section|report|email|procurement)\.[a-z_]+)'/g)) {
           written.add(match[1]!);
         }
       }
@@ -988,6 +1246,36 @@ describe('Milestone 7: audit and mutation controls', () => {
   }
 
   const idempotentCases: IdempotentCase[] = [
+    {
+      name: 'procurement cycle creation (CR6)',
+      actor: 'salesGA1',
+      prepare: async () => ({
+        path: `/api/opportunities/${ids.oppRafiq}/procurement`,
+        body: procurementCycle,
+        altered: { ...procurementCycle, title: 'A different procurement' },
+      }),
+      created: 201,
+      entity: (r) => r.body.id,
+      revokes: ids.oppRafiq,
+      locks: ids.oppRafiq,
+    },
+    {
+      name: 'procurement milestone (CR6)',
+      actor: 'salesGA1',
+      prepare: async (as) => {
+        const cycle = await newCycle(await as('salesGA1'));
+        const body = { version: cycle.version, milestone: 'eoi_submitted', eoiSubmittedAt: EARLIER };
+        return {
+          path: `/api/procurement/${cycle.id}/milestone`,
+          body,
+          altered: { ...body, eoiSubmittedAt: '2026-10-05T08:00:00+06:00' },
+        };
+      },
+      created: 200,
+      entity: (r) => r.body.cycle.id,
+      revokes: ids.oppRafiq,
+      locks: ids.oppRafiq,
+    },
     {
       name: 'opportunity creation',
       actor: 'salesGA1',
@@ -1235,8 +1523,8 @@ describe('Milestone 7: audit and mutation controls', () => {
       name: 'account creation',
       actor: 'admin',
       prepare: async () => {
-        const body = { fullName: 'Retried Person', email: 'retried.person@example.com', role: 'sales', sectionId: ids.sectionGA };
-        return { path: '/api/admin/users', body, altered: { ...body, sectionId: ids.sectionIS } };
+        const body = { fullName: 'Retried Person', email: 'retried.person@example.com', role: 'sales', sectionIds: [ids.sectionGA] };
+        return { path: '/api/admin/users', body, altered: { ...body, sectionIds: [ids.sectionIS] } };
       },
       created: 201,
       entity: (r) => r.body.user.id,
@@ -1244,7 +1532,7 @@ describe('Milestone 7: audit and mutation controls', () => {
     {
       name: 'section creation',
       actor: 'admin',
-      prepare: async () => ({ path: '/api/admin/sections', body: { name: 'Retried Section' }, altered: { name: 'Other Section' } }),
+      prepare: async () => ({ path: '/api/admin/sections', body: { name: 'Retried Section', leadId: ids.leadIS }, altered: { name: 'Other Section', leadId: ids.leadIS } }),
       created: 201,
       entity: (r) => r.body.id,
     },
@@ -1397,6 +1685,24 @@ describe('Milestone 7: audit and mutation controls', () => {
   };
 
   const staleCases: StaleCase[] = [
+    {
+      name: 'procurement edit (CR6)',
+      actor: 'salesGA1',
+      table: 'procurement_cycles',
+      target: async (as) => (await newCycle(await as('salesGA1'))).id,
+      request: (id, version) => ({ method: 'patch', path: `/api/procurement/${id}`, body: { version, title: 'Overwritten?' } }),
+    },
+    {
+      name: 'procurement milestone (CR6)',
+      actor: 'salesGA1',
+      table: 'procurement_cycles',
+      target: async (as) => (await newCycle(await as('salesGA1'))).id,
+      request: (id, version) => ({
+        method: 'post',
+        path: `/api/procurement/${id}/milestone`,
+        body: { version, milestone: 'cancelled', outcomeDate: TODAY, outcomeNote: 'Stale?' },
+      }),
+    },
     {
       name: 'basic opportunity edit',
       actor: 'salesGA1',
@@ -1693,6 +1999,24 @@ describe('Milestone 7: audit and mutation controls', () => {
 
   const failureCases: FailureCase[] = [
     {
+      name: 'procurement milestone with the offered stage, failing at the stage change (CR6)',
+      actor: 'salesGA1',
+      failOn: 'opportunity.stage_changed',
+      prepare: async (as) => {
+        const cycle = await shortlistedCycle(await as('salesGA1'));
+        return {
+          path: `/api/procurement/${cycle.id}/milestone`,
+          body: {
+            version: cycle.version,
+            milestone: 'rfp_received',
+            ...rfpFacts,
+            pipeline: { stage: 'tender_published', explanation: 'The RFP followed the shortlisting.' },
+          },
+        };
+      },
+      succeeds: 200,
+    },
+    {
       name: 'opportunity creation',
       actor: 'salesGA1',
       failOn: 'opportunity.created',
@@ -1819,7 +2143,7 @@ describe('Milestone 7: audit and mutation controls', () => {
       failOn: 'account.invitation_issued',
       prepare: async () => ({
         path: '/api/admin/users',
-        body: { fullName: 'Atomic Person', email: 'atomic.person@example.com', role: 'sales', sectionId: ids.sectionGA },
+        body: { fullName: 'Atomic Person', email: 'atomic.person@example.com', role: 'sales', sectionIds: [ids.sectionGA] },
       }),
       succeeds: 201,
     },
@@ -1984,6 +2308,24 @@ describe('Milestone 7: audit and mutation controls', () => {
       build: (rafiq: SignedInClient) => Promise<() => PromiseLike<Response>>;
     }[] = [
       {
+        name: 'procurement cycle creation (CR6)',
+        opportunityId: ids.oppRafiq,
+        build: async (c) => async () => send(c, `/api/opportunities/${ids.oppRafiq}/procurement`, procurementCycle),
+      },
+      {
+        name: 'procurement milestone (CR6)',
+        opportunityId: ids.oppRafiq,
+        build: async (c) => {
+          const cycle = await newCycle(c);
+          return () =>
+            send(c, `/api/procurement/${cycle.id}/milestone`, {
+              version: cycle.version,
+              milestone: 'eoi_submitted',
+              eoiSubmittedAt: EARLIER,
+            });
+        },
+      },
+      {
         name: 'basic edit',
         opportunityId: ids.oppRafiq,
         build: async (c) => {
@@ -2091,11 +2433,11 @@ describe('Milestone 7: audit and mutation controls', () => {
 
   describe('ADR 0004: an administrator who loses the role while a change waits', () => {
     it.each([
-      ['creating a section', (admin: SignedInClient) => send(admin, '/api/admin/sections', { name: 'Late Section' })],
+      ['creating a section', (admin: SignedInClient) => send(admin, '/api/admin/sections', { name: 'Late Section', leadId: ids.leadIS })],
       [
         'creating an account',
         (admin: SignedInClient) =>
-          send(admin, '/api/admin/users', { fullName: 'Late Person', email: 'late.person@example.com', role: 'sales', sectionId: ids.sectionGA }),
+          send(admin, '/api/admin/users', { fullName: 'Late Person', email: 'late.person@example.com', role: 'sales', sectionIds: [ids.sectionGA] }),
       ],
       ['issuing a sign-in link', (admin: SignedInClient) => send(admin, `/api/admin/users/${ids.salesGA2}/link`, {})],
     ] as const)('is refused when %s, and nothing is written', async (_label, run) => {

@@ -14,8 +14,11 @@ import helmet from 'helmet';
 
 import type { DatabaseHandle } from './db/client.js';
 import type { ServerConfig } from './env.js';
-import { resolveActor } from './auth/sessionGuard.js';
+import { SESSION_COOKIE_NAME, resolveActor } from './auth/sessionGuard.js';
 import { configurePassport } from './auth/passport.js';
+import { createEmailRuntime } from './email/runtime.js';
+import type { MailTransport } from './email/transport.js';
+import { createSessionStore } from './auth/sessionStore.js';
 import { createCsrfProtection, createOriginGuard } from './http/csrf.js';
 import { ApiError, errorHandler, notFoundHandler } from './http/errors.js';
 import { requestContext, requestLog } from './http/requestContext.js';
@@ -34,6 +37,7 @@ import {
   createReportsRouter,
   createSearchRouter,
 } from './routes/reporting.js';
+import { createOpportunityProcurementRouter, createProcurementRouter } from './routes/procurement.js';
 import { createOpportunityTendersRouter, createTendersRouter } from './routes/tenders.js';
 import {
   createDocumentRevisionsRouter,
@@ -45,7 +49,7 @@ import { createScanner, type DocumentScanner } from './documents/scanner.js';
 import { LocalDocumentStorage, type DocumentStorage } from './documents/storage.js';
 import type { DocumentServices } from './services/documents.js';
 
-export const SESSION_COOKIE_NAME = 'penta.sid';
+export { SESSION_COOKIE_NAME };
 
 export interface LoginRateLimitOptions {
   windowMs: number;
@@ -60,6 +64,8 @@ export interface CreateAppOptions {
   /** Tests substitute a scanner to exercise failure; defaults follow the configuration. */
   documentScanner?: DocumentScanner;
   documentStorage?: DocumentStorage;
+  /** Tests substitute a mail transport; defaults follow EMAIL_TRANSPORT. Null sends nothing. */
+  mailTransport?: MailTransport | null;
 }
 
 export function createDocumentServices(
@@ -76,7 +82,8 @@ export function createDocumentServices(
   };
 }
 
-export function createApp({ database, config, loginRateLimit, documentScanner, documentStorage }: CreateAppOptions): Express {
+export function createApp({ database, config, loginRateLimit, documentScanner, documentStorage, mailTransport }: CreateAppOptions): Express {
+  const email = createEmailRuntime(config, mailTransport);
   const app = express();
 
   // Behind a reverse proxy in staging/production; needed for secure cookies
@@ -105,13 +112,7 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
       // No session for anonymous visitors unless something is actually stored.
       saveUninitialized: false,
       rolling: true,
-      store: new PgSessionStore({
-        pool: database.pool,
-        tableName: 'session',
-        // The runtime role has no DDL rights; migration 0001 owns this table.
-        createTableIfMissing: false,
-        pruneSessionInterval: 60,
-      }),
+      store: createSessionStore(PgSessionStore, { pool: database.pool, pruneSessionInterval: 60 }),
       cookie: {
         httpOnly: true,
         sameSite: 'strict',
@@ -172,6 +173,46 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
     },
   });
 
+  // Its own counter again (CR3), kept per account rather than per address:
+  // it limits guessing the current password from a hijacked session without
+  // spending the attempts of colleagues behind the same office address. It
+  // runs after requireAuth, so the actor is always present.
+  const passwordChangeRateLimiter: RequestHandler = rateLimit({
+    windowMs: loginRateLimit?.windowMs ?? 15 * 60_000,
+    limit: loginRateLimit?.limit ?? 10,
+    keyGenerator: (req) => `account:${req.actor?.id ?? 'none'}`,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new ApiError(429, 'rate_limited', 'Too many attempts. Wait a few minutes before trying again.'));
+    },
+  });
+
+  // "Forgot your password?" (CR3): few requests per address, so the form
+  // cannot be used to flood someone's mailbox or to probe addresses quickly.
+  const forgotPasswordRateLimiter: RequestHandler = rateLimit({
+    windowMs: loginRateLimit?.windowMs ?? 15 * 60_000,
+    limit: loginRateLimit?.limit ?? 5,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new ApiError(429, 'rate_limited', 'Too many requests. Wait a few minutes before trying again.'));
+    },
+  });
+
+  // Resending an invitation or reset link (CR1), per account: a resend voids
+  // the previous link, so repeated clicks should not churn links or mail.
+  const accountLinkRateLimiter: RequestHandler = rateLimit({
+    windowMs: loginRateLimit?.windowMs ?? 15 * 60_000,
+    limit: loginRateLimit?.limit ?? 5,
+    keyGenerator: (req) => `account-link:${String(req.params.id ?? '')}`,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req, _res, next) => {
+      next(new ApiError(429, 'rate_limited', 'Too many links for this account. Wait a few minutes before sending another.'));
+    },
+  });
+
   app.get('/api/health', (_req, res) => {
     // Liveness. No secrets, no configuration, no counts (NFR-003).
     res.json({ status: 'ok' });
@@ -199,10 +240,14 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
       passport: passportInstance,
       loginRateLimiter,
       recoveryRateLimiter,
+      passwordChangeRateLimiter,
+      forgotPasswordRateLimiter,
+      email,
       csrfGuard,
       generateCsrfToken,
       idleMinutes: config.sessionIdleMinutes,
       absoluteMinutes: config.sessionAbsoluteMinutes,
+      secureCookies: config.secureCookies,
     }),
   );
 
@@ -215,6 +260,8 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   app.use('/api/opportunities', createOpportunityTendersRouter({ db: database.db, csrfGuard }));
   app.use('/api/opportunities', createOpportunityDocumentsRouter({ services: documentServices, csrfGuard }));
   app.use('/api/tenders', createTendersRouter({ db: database.db, csrfGuard }));
+  app.use('/api/opportunities', createOpportunityProcurementRouter({ db: database.db, csrfGuard }));
+  app.use('/api/procurement', createProcurementRouter({ db: database.db, csrfGuard }));
   app.use('/api/document-uploads', createDocumentUploadsRouter({ services: documentServices, csrfGuard }));
   app.use('/api/documents', createDocumentsRouter({ services: documentServices, csrfGuard, scanner: config.documents.scanner }));
   app.use('/api/document-revisions', createDocumentRevisionsRouter({ services: documentServices }));
@@ -230,7 +277,7 @@ export function createApp({ database, config, loginRateLimit, documentScanner, d
   app.use('/api/exports', createExportsRouter({ db: database.db, csrfGuard }));
   app.use('/api/search', createSearchRouter({ db: database.db }));
   app.use('/api/notifications', createNotificationsRouter({ db: database.db, csrfGuard }));
-  app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin }));
+  app.use('/api/admin', createAdminRouter({ db: database.db, csrfGuard, appOrigin: config.appOrigin, email, accountLinkRateLimiter }));
 
   // NOTE: no demo, seed or reset endpoint is registered in any environment.
   // Demo data lives in the separate synthetic frontend build (plan 4.4).

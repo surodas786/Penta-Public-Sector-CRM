@@ -1,6 +1,8 @@
 # Security review — Milestone 8
 
-**Date:** 06 October 2026 · **Branch:** `m8-release-preparation` · **Reviewer:** the
+**Date:** 06 October 2026, with an addendum for change requests CR1–CR6 on
+12 October 2026 (§7) · **Branch:** `m8-release-preparation`, then
+`cr-change-requests` · **Reviewer:** the
 development assistant (Claude Code). **This is a developer self-review, not an
 independent security assessment.** §6 lists what an independent human reviewer
 must examine before production.
@@ -125,3 +127,41 @@ service before documents are enabled anywhere beyond development.
    job errors carry no personal or commercial data in the deployed form.
 8. Database hardening on the production host (network exposure, TLS to the
    database, superuser access, backup access controls).
+
+## 7. Change requests CR1–CR6 (addendum, 12 October 2026)
+
+Branch `cr-change-requests`. Same method and the same limit: this is a
+developer self-review.
+
+### What the change requests added
+
+| Area | Status | Evidence |
+| --- | --- | --- |
+| Own password change (CR3) | Current password required; per-account rate limit; CSRF and origin checked; other sessions revoked; this session re-issued under a new id **without extending its absolute expiry**; outstanding links spent; no password in the audit | `ownPassword.test.ts`; ADR 0002 addendum |
+| **Sign-out could be undone (existing defect, fixed)** | A request still in flight saved its session after logout, and the store's upsert re-created the row. Only intentional session creation may now insert a row | `server/auth/sessionStore.ts`; regression test in `auth.test.ts` (fails without the fix) |
+| Stale-cookie recovery headers (Chrome fix) | The cookie-expiry headers now carry `Secure` and `SameSite=Strict`, like the cookies they clear | `check:production-server` (20/20) |
+| Multi-section access (CR4, CR5) | Scope is read fresh per request. Former leadership or membership grants nothing. A salesperson's scope also requires current membership (fails closed). "An active section has an active lead" is enforced in the database (CHECK plus deferred triggers). Membership history cannot be deleted by the runtime role | `sections.test.ts` (runtime-role checks); the existing scope suites pass unchanged |
+| Opportunity create (CR5, existing gap, fixed) | The owner row is now share-locked and eligibility re-read inside the transaction, so a concurrent role or membership change cannot leave a record with an ineligible owner | `server/services/opportunities.ts` |
+| SMTP password at rest (CR2) | AES-256-GCM with purpose-bound additional data, keyed by `EMAIL_SECRET_KEY` (outside the database). Never returned by the API or written to logs or audit (audit records "replaced"/"removed"). Unreadable after a key change, which the page reports | `email.test.ts` |
+| Email header injection (CR2) | Subjects and sender names refuse line breaks (validation plus a database CHECK on subjects). Messages are plain text. Placeholders are allowlisted and their values are computed by the server | `email.test.ts` |
+| Account links by email (CR1) | The token is issued only when the email is sent, so it never rests in readable form in a table, the job queue or the audit; only its SHA-256 hash is stored. A resend voids earlier links. No link is issued for a deactivated account or an accepted invitation | `invitations.test.ts` |
+| Alert emails (CR2) | Sent only to the responsible person. Validity, read state and access are re-checked when sending. No commercial detail in the message (D-EM-2); the link is re-checked when opened | `notificationEmails.test.ts` |
+| Forgot password and link checks (CR1, CR3) | The same answer for every address. The job carries only an address digest, so timing does not depend on the outcome and no typed address is kept. Only active, activated accounts are emailed, once per 15 minutes. Limited per address, and resends per account. Opening a link never spends it. Links are purpose-bound, enforced under the token lock (two simultaneous uses: one success). A page-level `no-referrer` adds to the fragment-only token | `accountRecovery.test.ts`; `e2e/accountAccess.spec.ts` |
+| Connection check and retry (CR2) | The connection check reaches only the saved server, like the test email, and sends nothing. A retry is limited to failed emails, at most three times, is audited, and is re-checked before sending, so it cannot revive an email that should no longer go. Neither shows a message body | `email.test.ts` |
+| Mail transport | `EMAIL_TRANSPORT=capture` is refused in production. The default there is `none` (send nothing). No test, CI or browser run can reach a mail server | `email.test.ts`, `check:production-server` |
+| Administrator separation | Email settings, templates and the delivery log are administrator-only. Previews use synthetic values. The delivery log never stores message bodies. Administrators still get 403/404 on every commercial endpoint | `email.test.ts`, existing `scope.test.ts` |
+| Software Procurement cycles (CR6, rebuilt) | Cycles are children of the opportunity: scope, lock order and transfers apply unchanged. Forged cycle, contact and document ids are the standard 404, and links accept only the opportunity's own contacts and documents. The direct-RFP exception is management-only (`canApproveDirectRfp`), and an invented EOI is refused by a CHECK. The runtime role cannot delete cycles. Milestones are retry-safe and audited, and an accepted pipeline change uses the ordinary stage rules in the same transaction | `procurement.test.ts`, M7 matrices |
+| Dependencies | `nodemailer` 10.0.10 (exact version, at least two weeks old, ships its own types). `npm audit --omit=dev` is unchanged: the same two moderate React Router advisories | §2; `docs/progress.md` |
+
+### Added to §6, for the independent reviewer
+
+9. **The mail path.**
+   - The SMTP configuration in the deployed form: TLS mode, certificate
+     validation and credentials.
+   - Custody and rotation of `EMAIL_SECRET_KEY`.
+   - SPF/DKIM/DMARC for the sender domain.
+   - Whether the link-based invitation flow meets Penta's policy, given that
+     an email can be forwarded.
+10. **The session store change.**
+    - `server/auth/sessionStore.ts`, insert only when marked.
+    - Its interaction with any future session store or load balancer.

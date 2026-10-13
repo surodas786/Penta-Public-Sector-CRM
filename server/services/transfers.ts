@@ -19,13 +19,14 @@ import type { OpportunityDetailDto } from '../../shared/api.js';
 import type { transferOpportunitySchema } from '../../shared/validation.js';
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { followUps, opportunities, users } from '../db/schema.js';
+import { followUps, opportunities, sections, users } from '../db/schema.js';
 import { forbidden, validationFailed, versionConflict } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import {
   canTransferOpportunity,
   eligibleOwnerScope,
   keepsFollowUpAfterTransfer,
+  leadsSectionSql,
   opportunityScope,
 } from '../policy/scope.js';
 import { recordAuditEvent } from './audit.js';
@@ -56,27 +57,42 @@ export async function transferOpportunity(options: {
     }
     if (current.version !== command.version) throw versionConflict();
 
-    // The new owner must be an active salesperson or lead the actor may
-    // assign: within the lead's own section, or any section for management.
+    // The new owner and section must be a pair the actor may assign: an
+    // active salesperson member of the section or its lead, in a section the
+    // lead leads (any section for management). The owner row is locked first
+    // and eligibility read in a fresh statement, so a concurrent membership
+    // removal (which locks the same row) is either seen or waits for this.
     // One message for every reason, so the field cannot probe for accounts.
-    const [newOwner] = await tx
-      .select({ id: users.id, sectionId: users.sectionId })
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, command.newOwnerId)).for('update');
+    const candidates = await tx
+      .select({ sectionId: sections.id })
       .from(users)
-      .where(and(eligibleOwnerScope(actor), eq(users.id, command.newOwnerId)))
-      .for('update')
-      .limit(1);
-    if (!newOwner?.sectionId) {
+      .innerJoin(sections, eligibleOwnerScope(actor, sections.id))
+      .where(eq(users.id, command.newOwnerId));
+    const candidateIds = candidates.map((row) => row.sectionId);
+    if (candidateIds.length === 0) {
       throw validationFailed({ newOwnerId: 'Choose an active owner you are permitted to assign.' });
     }
-    if (newOwner.id === current.ownerId) {
-      throw validationFailed({ newOwnerId: 'This person already owns the opportunity.' });
-    }
 
-    const transfer = {
-      previousOwnerId: current.ownerId,
-      newOwnerId: newOwner.id,
-      newSectionId: newOwner.sectionId,
-    };
+    let newSectionId: string;
+    if (command.newSectionId) {
+      if (!candidateIds.includes(command.newSectionId)) {
+        throw validationFailed({ newSectionId: 'Choose a section the new owner works in and you may assign.' });
+      }
+      newSectionId = command.newSectionId;
+    } else if (candidateIds.includes(current.sectionId)) {
+      newSectionId = current.sectionId;
+    } else if (candidateIds.length === 1) {
+      newSectionId = candidateIds[0]!;
+    } else {
+      throw validationFailed({ newSectionId: 'The new owner works in more than one section. Choose the section.' });
+    }
+    if (command.newOwnerId === current.ownerId && newSectionId === current.sectionId) {
+      throw validationFailed({ newOwnerId: 'This person already owns the opportunity in this section.' });
+    }
+    const newOwner = { id: command.newOwnerId, sectionId: newSectionId };
+
+    const transfer = { previousOwnerId: current.ownerId, newOwnerId: newOwner.id };
     const timestamp = now();
 
     const updated = await tx
@@ -113,7 +129,7 @@ export async function transferOpportunity(options: {
         title: followUps.title,
         assigneeId: followUps.assignedUserId,
         assigneeRole: users.role,
-        assigneeSectionId: users.sectionId,
+        assigneeLeadsNewSection: sql<boolean>`${leadsSectionSql(users.id, sql`${newSectionId}::uuid`)}`,
         assigneeActive: users.active,
       })
       .from(followUps)
@@ -126,8 +142,8 @@ export async function transferOpportunity(options: {
         {
           id: task.assigneeId,
           role: task.assigneeRole,
-          sectionId: task.assigneeSectionId,
           active: task.assigneeActive,
+          leadsNewSection: task.assigneeLeadsNewSection,
         },
         transfer,
       );

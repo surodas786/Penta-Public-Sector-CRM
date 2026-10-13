@@ -4,6 +4,7 @@
  * These are DTOs, not database rows: they deliberately omit password hashes,
  * session data and any private account field (plan 7.3).
  */
+import type { EmailDeliveryStatus, EmailSecurityMode, EmailTemplateKey, EmailTransportKind, SummaryFrequency } from './email.js';
 import type {
   ActivityType,
   BidStatus,
@@ -20,6 +21,13 @@ import type {
   SolutionCategory,
   TenderIndicator,
   UserRole,
+  EoiOutcome,
+  ParticipationDecision,
+  ProcurementDocumentRole,
+  ProcurementIndicator,
+  ProcurementMilestone,
+  ProcurementRoute,
+  ProposalFormat,
 } from './enums.js';
 import type {
   AdminSearchResultType,
@@ -78,7 +86,11 @@ export interface CurrentUserDto {
   fullName: string;
   email: string;
   role: UserRole;
-  section: SectionDto | null;
+  /**
+   * The sections the account works in now: those a lead leads, or those a
+   * salesperson belongs to (CR4, CR5). Empty for management and administrators.
+   */
+  sections: SectionDto[];
   /** Server-computed UI affordances. Not a security boundary. */
   capabilities: {
     salesRecords: boolean;
@@ -280,13 +292,26 @@ export interface AdminUserDto {
   fullName: string;
   email: string;
   role: UserRole;
-  sectionId: string | null;
-  sectionName: string | null;
+  /**
+   * For a salesperson, the sections they currently belong to; for a lead, the
+   * sections they currently lead (CR4, CR5). Empty otherwise.
+   */
+  sections: { id: string; name: string; active: boolean }[];
+  /** A lead's management manager. Salespeople report to the lead of each section. */
   managerId: string | null;
   managerName: string | null;
   active: boolean;
   /** True until an invited account sets its password. */
   invitationPending: boolean;
+  /** An unused, unexpired invitation or reset link exists (never the link itself). */
+  linkActive: boolean;
+  /** The latest invitation or reset email for this account, if any (CR1). */
+  accountEmail: {
+    purpose: 'invitation' | 'password_reset';
+    status: EmailDeliveryStatus;
+    statusDetail: string | null;
+    at: string;
+  } | null;
   version: number;
 }
 
@@ -296,6 +321,7 @@ export interface AdminSectionDto {
   active: boolean;
   leadId: string | null;
   leadName: string | null;
+  /** Active salespeople who are current members. The lead is not counted. */
   activeMembers: number;
   version: number;
 }
@@ -305,15 +331,44 @@ export interface AdminSectionDto {
  * stored in readable form. Delivered to the person out of band: release one
  * sends no email (requirements §1.3).
  */
-export interface AccountLinkDto {
-  purpose: 'invitation' | 'password_reset';
-  url: string;
-  expiresAt: string;
+/**
+ * What an opened invitation or reset link can do (CR1). Opening a link never
+ * spends it. `used` also covers a link replaced by a newer one.
+ */
+export interface AccountLinkStatusDto {
+  state: 'valid' | 'expired' | 'used' | 'invalid';
+  purpose: 'invitation' | 'password_reset' | null;
 }
+
+/** Whether the sign-in page offers "Forgot your password?" (CR3). */
+export interface RecoveryOptionsDto {
+  selfServiceReset: boolean;
+}
+
+export type AccountLinkDto =
+  | {
+      purpose: 'invitation' | 'password_reset';
+      /** Shown once, for the administrator to deliver by hand. */
+      delivery: 'manual';
+      url: string;
+      expiresAt: string;
+    }
+  | {
+      purpose: 'invitation' | 'password_reset';
+      /**
+       * Queued as an email (CR1). The link is created only when the email is
+       * sent, so neither the administrator nor the database ever sees it.
+       */
+      delivery: 'email';
+      url: null;
+      expiresAt: null;
+    };
 
 export interface CreateUserResultDto {
   user: AdminUserDto;
-  /** Null when the request was a replay: the link is never shown twice. */
+  /** How the invitation goes out: emailed while email delivery is on, otherwise a link shown once. */
+  delivery: 'email' | 'manual';
+  /** The manual link. Null when emailed, or when the request was a replay: a link is never shown twice. */
   link: AccountLinkDto | null;
 }
 
@@ -334,13 +389,15 @@ export interface TeamDto {
     id: string;
     name: string;
     lead: { id: string; fullName: string } | null;
-    members: { id: string; fullName: string; active: boolean; reportsToLead: boolean }[];
+    /** Current members; each reports to this section's lead (CR5). */
+    members: { id: string; fullName: string; active: boolean }[];
   }[];
   workload: {
     userId: string;
     fullName: string;
     role: UserRole;
-    sectionName: string;
+    /** Sections they work in now; a person may work in several (CR4, CR5). */
+    sectionNames: string[];
     /** Active pipeline population: status Active, stage neither Awarded nor Lost. */
     activeOpportunities: number;
     /** Decimal string; estimated value of the same population. */
@@ -594,8 +651,8 @@ export interface DashboardWorkloadRowDto {
   userId: string;
   fullName: string;
   role: UserRole;
-  sectionId: string | null;
-  sectionName: string | null;
+  /** The sections they work in now (CR4, CR5); empty for a former member. */
+  sectionNames: string[];
   active: boolean;
   /** Active pipeline records owned (§10.1 "Team workload"). */
   activeOpportunities: number;
@@ -628,6 +685,27 @@ export interface DashboardTenderDto {
   submissionDeadline: string;
   bidStatus: BidStatus;
   indicator: TenderIndicator;
+}
+
+/**
+ * CR6: Software Procurement deadlines, kept apart from goods tenders. Counts
+ * use the metric definitions in metrics.ts; `working` is zero where no cycle
+ * is in progress, and the panel is then not shown.
+ */
+export interface DashboardProcurementDto {
+  working: number;
+  overdue: number;
+  dueNext7Days: number;
+  upcoming: {
+    id: string;
+    reference: string;
+    title: string;
+    opportunityId: string;
+    opportunityName: string;
+    milestone: ProcurementMilestone;
+    deadline: string;
+    indicator: ProcurementIndicator;
+  }[];
 }
 
 export interface DashboardActivityDto {
@@ -686,9 +764,10 @@ export interface DashboardDto {
   sections: DashboardSectionDto[] | null;
   nextActions: { target: { id: string; fullName: string }; items: DashboardNextActionDto[]; total: number };
   upcomingTenders: DashboardTenderDto[];
+  procurement: DashboardProcurementDto;
   recentActivity: DashboardActivityDto[];
-  /** Owner choices for the filter: leads see their section, management everyone; salespeople none. */
-  ownerOptions: { id: string; fullName: string; sectionId: string; active: boolean }[];
+  /** Owner choices for the filter: leads see their sections' people, management everyone; salespeople none. */
+  ownerOptions: { id: string; fullName: string; active: boolean }[];
   sectionOptions: { id: string; name: string }[];
 }
 
@@ -790,4 +869,193 @@ export interface NotificationDto {
 
 export interface NotificationListDto extends Paginated<NotificationDto> {
   unreadCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Email administration (CR2)
+// ---------------------------------------------------------------------------
+
+/** The mail server settings. The password itself is never returned. */
+export interface EmailSettingsDto {
+  enabled: boolean;
+  host: string | null;
+  port: number | null;
+  security: EmailSecurityMode;
+  username: string | null;
+  /** A password is stored. */
+  passwordSet: boolean;
+  /** False when a stored password can no longer be decrypted (EMAIL_SECRET_KEY changed). */
+  passwordReadable: boolean;
+  fromName: string | null;
+  fromAddress: string | null;
+  replyTo: string | null;
+  /** How this deployment sends, from EMAIL_TRANSPORT. */
+  transport: EmailTransportKind;
+  /** EMAIL_SECRET_KEY is configured, so a password can be stored. */
+  canStorePassword: boolean;
+  /** 0 until settings are first saved. */
+  version: number;
+  updatedAt: string | null;
+  updatedByName: string | null;
+}
+
+export interface EmailTemplateDto {
+  key: EmailTemplateKey;
+  label: string;
+  sentWhen: string;
+  /** Who receives it. */
+  recipients: string;
+  /** A security message: always on while delivery is on. */
+  mandatory: boolean;
+  placeholders: string[];
+  required: string[];
+  subject: string;
+  bodyText: string;
+  enabled: boolean;
+  /** False while the default wording is in use. */
+  customized: boolean;
+  defaultSubject: string;
+  defaultBody: string;
+  /** 0 while the default wording is in use. */
+  version: number;
+  updatedAt: string | null;
+}
+
+/** A template rendered with synthetic sample values: never real records. */
+export interface EmailPreviewDto {
+  subject: string;
+  text: string;
+}
+
+/** One entry of the delivery log. Never the message body. */
+export interface EmailDeliveryDto {
+  id: string;
+  templateKey: string;
+  label: string;
+  recipientName: string | null;
+  recipientAddress: string | null;
+  /**
+   * `sent` means the mail server accepted the message, which does not confirm
+   * it reached an inbox; `captured` marks one the development capture
+   * transport wrote to a folder instead.
+   */
+  status: EmailDeliveryStatus;
+  statusDetail: string | null;
+  captured: boolean;
+  attempts: number;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+export interface EmailTestResultDto {
+  delivery: EmailDeliveryDto;
+}
+
+/**
+ * A connection check (CR2): the mail server answered and accepted the sign-in,
+ * or why not. Nothing is sent.
+ */
+export interface EmailConnectionCheckDto {
+  status: 'ok' | 'failed' | 'not_sending';
+  detail: string;
+}
+
+/** One saved version of an email's wording, newest first, from the administrative audit. */
+export interface EmailTemplateVersionDto {
+  occurredAt: string;
+  actorName: string | null;
+  subject: string;
+  bodyText: string;
+  enabled: boolean;
+  /** Which fields this save changed. */
+  changed: ('subject' | 'bodyText' | 'enabled')[];
+}
+
+/** When notification emails go out, and who gets the management summary (CR2, step 6). */
+export interface NotificationTimingDto {
+  /** The Bangladesh-time hour from which follow-up reminders and summaries are sent. */
+  reminderHour: number;
+  tenderReminderHours: number;
+  eoiReminderHours: number;
+  rfpReminderHours: number;
+  summaryFrequency: SummaryFrequency;
+  /** 0 = Sunday. */
+  summaryWeekday: number;
+  managementSummaryRecipientIds: string[];
+  /** Active management accounts, plus any chosen one that no longer qualifies. */
+  managementCandidates: { id: string; fullName: string; email: string; eligible: boolean }[];
+  /** 0 while the defaults are in use. */
+  version: number;
+  updatedAt: string | null;
+  updatedByName: string | null;
+}
+
+/** At most this many administrator retries of one failed email (CR2). */
+export const EMAIL_MANUAL_RETRY_LIMIT = 3;
+
+// ---------------------------------------------------------------------------
+// Software Procurement cycles (CR6)
+// ---------------------------------------------------------------------------
+
+/**
+ * One procurement cycle of an opportunity. Its responsible owner and section
+ * are the opportunity's, read live, so a transfer moves them with no write.
+ */
+export interface ProcurementCycleDto {
+  id: string;
+  opportunity: { id: string; reference: string; name: string; stage: OpportunityStage; status: OpportunityStatus };
+  procuringOrganization: { id: string; name: string };
+  title: string;
+  reference: string;
+  route: ProcurementRoute;
+  milestone: ProcurementMilestone;
+  isCurrent: boolean;
+  submissionMethod: string | null;
+  participation: ParticipationDecision;
+  participationReason: string | null;
+  eoiPublicationDate: string | null;
+  eoiDeadline: string | null;
+  eoiSubmittedAt: string | null;
+  eoiLateNote: string | null;
+  eoiOutcome: EoiOutcome | null;
+  eoiOutcomeDate: string | null;
+  rfpReference: string | null;
+  rfpInvitationDate: string | null;
+  clarificationDeadline: string | null;
+  proposalDeadline: string | null;
+  proposalFormat: ProposalFormat;
+  proposalSubmittedAt: string | null;
+  technicalSubmittedAt: string | null;
+  financialSubmittedAt: string | null;
+  proposalLateNote: string | null;
+  directRfpReason: string | null;
+  directRfpApprovedByName: string | null;
+  outcomeDate: string | null;
+  outcomeNote: string | null;
+  notes: string | null;
+  responsibleOwner: { id: string; fullName: string };
+  section: { id: string; name: string };
+  /** The deadline the cycle is working towards now (EOI or proposal), if any. */
+  openDeadline: string | null;
+  indicator: ProcurementIndicator;
+  /** Where the cycle may go next, for this user; empty when it cannot change. */
+  nextMilestones: ProcurementMilestone[];
+  canEdit: boolean;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
+export interface ProcurementCycleDetailDto extends ProcurementCycleDto {
+  contacts: { id: string; fullName: string; designation: string | null }[];
+  documents: { id: string; role: ProcurementDocumentRole; fileName: string; category: DocumentCategory; archived: boolean }[];
+  /** Milestones and other changes, oldest first, from the audit trail. */
+  history: { occurredAt: string; actorName: string | null; action: string; milestone: ProcurementMilestone | null; summary: string }[];
+}
+
+/** The result of a milestone change: the cycle, and whether the opportunity's stage moved with it. */
+export interface ProcurementMilestoneResultDto {
+  cycle: ProcurementCycleDetailDto;
+  stageChanged: boolean;
 }

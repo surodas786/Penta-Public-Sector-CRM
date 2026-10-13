@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createDatabase } from '../db/client.js';
 import { loadServerConfig } from '../env.js';
+import { createEmailRuntime } from '../email/runtime.js';
 import { createJobHandlers, enqueueScheduledJobs, jobHealth, jobStatus } from './handlers.js';
 import { runDueJobs } from './queue.js';
 
@@ -35,7 +36,7 @@ async function main(): Promise<void> {
       return;
     }
     await enqueueScheduledJobs(database.db);
-    const summary = await runDueJobs(database.db, createJobHandlers(database.db, config.jobs), {
+    const summary = await runDueJobs(database.db, createJobHandlers(database.db, config.jobs, createEmailRuntime(config)), {
       workerId: `cli-${randomUUID()}`,
       log: (line) => console.warn(line),
     });

@@ -14,6 +14,7 @@ import { fetchDashboard } from '../../api/endpoints.js';
 import { FilterSelect } from '../../components/ui/FormFields';
 import { PageContainer, Panel, PanelLink } from '../../components/ui/Layout';
 import { useAuth } from '../AuthContext.js';
+import { sectionNames } from '../sections.js';
 import { ErrorPanel, LoadingPanel } from '../components/Feedback.js';
 import {
   KpiRow,
@@ -23,6 +24,7 @@ import {
   StageFunnel,
   TeamWorkload,
   TenderDeadlineList,
+  ProcurementDeadlineList,
   type KpiTarget,
 } from '../components/dashboard/DashboardWidgets.js';
 import { useApiResource } from '../useApiResource.js';
@@ -91,7 +93,7 @@ export function DashboardPage() {
     user.role === 'management'
       ? 'Organization-wide pipeline across all sections'
       : user.role === 'lead'
-        ? `${user.section?.name ?? 'Your'} section — ${user.fullName}'s team view`
+        ? `${sectionNames(user) || 'Your'} ${user.sections.length > 1 ? 'sections' : 'section'} — ${user.fullName}'s team view`
         : 'Your opportunities, follow-ups and tenders';
 
   const nextPanel = (dashboard: DashboardDto) => {
@@ -138,11 +140,11 @@ export function DashboardPage() {
                 </option>
               ))}
             </FilterSelect>
-          ) : user.section ? (
+          ) : user.sections.length > 0 ? (
             <div className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold text-slate-500">Section</span>
+              <span className="text-[11px] font-semibold text-slate-500">{user.sections.length > 1 ? 'Sections' : 'Section'}</span>
               <span className="flex h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-600">
-                {user.section.name}
+                {sectionNames(user)}
               </span>
             </div>
           ) : null}
@@ -260,6 +262,19 @@ export function DashboardPage() {
               >
                 <TenderDeadlineList tenders={data.upcomingTenders} onOpen={(tender) => navigate(`/opportunities/${tender.opportunityId}?tab=tender`)} />
               </Panel>
+              {/* CR6: shown only where Software Procurement cycles are in progress. */}
+              {data.procurement.working > 0 && (
+                <Panel
+                  title="Software Procurement Deadlines"
+                  subtitle="Open EOI and proposal deadlines, soonest first"
+                  action={<PanelLink onClick={() => navigate('/procurement?deadline=7d')}>Software Procurement →</PanelLink>}
+                >
+                  <ProcurementDeadlineList
+                    procurement={data.procurement}
+                    onOpen={(opportunityId) => navigate(`/opportunities/${opportunityId}?tab=procurement`)}
+                  />
+                </Panel>
+              )}
             </div>
           </div>
 

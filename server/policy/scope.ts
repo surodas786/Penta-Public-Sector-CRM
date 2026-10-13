@@ -5,9 +5,9 @@
  * filtering, counting, sorting and pagination all happen inside the database
  * over permitted rows only (SEC-002). Routes never rebuild these rules.
  */
-import { and, eq, or, sql, type AnyColumn, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, or, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 
-import { contacts, opportunities, opportunityContacts, users } from '../db/schema.js';
+import { contacts, opportunities, opportunityContacts, sectionMemberships, sections, users } from '../db/schema.js';
 import type { UserRole } from '../../shared/enums.js';
 import { type Actor, hasCoherentScope } from './actor.js';
 
@@ -21,12 +21,18 @@ const MATCH_EVERYTHING: SQL = sql`true`;
  * Commercial record scope.
  *
  *   management  all sections
- *   lead        opportunity.section_id = actor.section_id, with no additional
- *               owner-active or direct-report condition (plan 3.1). A
- *               deactivated owner or a missing manager_id must not hide a
- *               section record from its lead.
- *   sales       opportunities they currently own
+ *   lead        opportunities in every section they currently lead (CR4),
+ *               with no owner-active or direct-report condition (plan 3.1):
+ *               a deactivated owner must not hide a section record from its
+ *               lead
+ *   sales       opportunities they currently own, in sections they are
+ *               currently a member of (CR5). The membership condition fails
+ *               closed: a record left behind in a section they no longer
+ *               belong to is not theirs to see
  *   admin       nothing at all
+ *
+ * `actor.sectionIds` is read fresh on every request, so former leadership or
+ * membership never grants anything.
  */
 export function opportunityScope(actor: Actor): SQL {
   if (!hasCoherentScope(actor)) return MATCH_NOTHING;
@@ -35,16 +41,49 @@ export function opportunityScope(actor: Actor): SQL {
     case 'management':
       return MATCH_EVERYTHING;
     case 'lead':
-      return actor.sectionId
-        ? eq(opportunities.sectionId, actor.sectionId)
-        : /* istanbul ignore next — guarded by hasCoherentScope */ MATCH_NOTHING;
+      return inArray(opportunities.sectionId, actor.sectionIds);
     case 'sales':
-      return eq(opportunities.ownerId, actor.id);
+      return and(eq(opportunities.ownerId, actor.id), inArray(opportunities.sectionId, actor.sectionIds)) as SQL;
     case 'admin':
       return MATCH_NOTHING;
     default:
       return MATCH_NOTHING;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Who works in which section (CR4, CR5), for people other than the requester
+// ---------------------------------------------------------------------------
+
+type SqlValue = SQL | AnyColumn;
+
+/** `userId` is the lead of `sectionId`, and the section is active. */
+export function leadsSectionSql(userId: SqlValue, sectionId: SqlValue): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM ${sections} ls
+     WHERE ls.id = ${sectionId} AND ls.lead_user_id = ${userId} AND ls.active
+  )`;
+}
+
+/** `userId` is a current member of `sectionId`, and the section is active. */
+export function memberOfSectionSql(userId: SqlValue, sectionId: SqlValue): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM ${sectionMemberships} sm
+      JOIN ${sections} ms ON ms.id = sm.section_id
+     WHERE sm.user_id = ${userId} AND sm.section_id = ${sectionId}
+       AND sm.ended_at IS NULL AND ms.active
+  )`;
+}
+
+/**
+ * The account in `user` can own records in `sectionId` now: a salesperson
+ * who is a current member, or the section's lead (BR-001 as amended by CR4/CR5).
+ */
+export function worksInSectionSql(user: { id: AnyColumn; role: AnyColumn }, sectionId: SqlValue): SQL {
+  return sql`(
+    (${user.role} = 'sales' AND ${memberOfSectionSql(user.id, sectionId)})
+    OR (${user.role} = 'lead' AND ${leadsSectionSql(user.id, sectionId)})
+  )`;
 }
 
 /** Convenience: scope combined with any additional filters. */
@@ -120,8 +159,9 @@ export function followUpAssigneeScope(
   if (!canManageFollowUps(actor)) return MATCH_NOTHING;
 
   const active = eq(users.active, true);
-  const owner = and(eq(users.id, opportunity.ownerId), sql`${users.role} IN ('sales', 'lead')`, eq(users.sectionId, opportunity.sectionId));
-  const sectionLead = and(eq(users.role, 'lead'), eq(users.sectionId, opportunity.sectionId));
+  const sectionId = sql`${opportunity.sectionId}::uuid`;
+  const owner = and(eq(users.id, opportunity.ownerId), worksInSectionSql(users, sectionId));
+  const sectionLead = and(eq(users.role, 'lead'), leadsSectionSql(users.id, sectionId));
   const management = eq(users.role, 'management');
 
   switch (actor.role) {
@@ -140,10 +180,10 @@ export function followUpAssigneeScope(
 }
 
 /**
- * FR-070: leads transfer within their own section, management across
- * sections, salespeople never. Which owners are acceptable is
- * `eligibleOwnerScope(actor)`, which already confines a lead to their own
- * section — the only section whose records a lead can see.
+ * FR-070: leads transfer within the sections they lead, management across
+ * sections, salespeople never. Which owner-and-section pairs are acceptable is
+ * `eligibleOwnerScope`, which confines a lead to the sections they lead; a
+ * lead of two sections may therefore move a record between them (D-CR4-2).
  */
 export function canTransferOpportunity(actor: Actor): boolean {
   return canAccessSalesRecords(actor) && (actor.role === 'lead' || actor.role === 'management');
@@ -162,14 +202,14 @@ export function canViewTeam(actor: Actor): boolean {
  * the new owner. The previous owner's tasks always move.
  */
 export function keepsFollowUpAfterTransfer(
-  assignee: { id: string; role: UserRole; sectionId: string | null; active: boolean },
-  transfer: { previousOwnerId: string; newOwnerId: string; newSectionId: string },
+  assignee: { id: string; role: UserRole; active: boolean; leadsNewSection: boolean },
+  transfer: { previousOwnerId: string; newOwnerId: string },
 ): boolean {
   if (assignee.id === transfer.previousOwnerId) return false;
   if (!assignee.active) return false;
   if (assignee.id === transfer.newOwnerId) return true;
   if (assignee.role === 'management') return true;
-  return assignee.role === 'lead' && assignee.sectionId === transfer.newSectionId;
+  return assignee.role === 'lead' && assignee.leadsNewSection;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +270,22 @@ export function canManageTenders(actor: Actor): boolean {
 }
 
 /**
+ * CR6: a Software Procurement cycle belongs to its opportunity, so whoever may
+ * work on the opportunity's tenders may work on its cycles, within scope.
+ */
+export function canManageProcurement(actor: Actor): boolean {
+  return canAccessSalesRecords(actor);
+}
+
+/**
+ * CR6: only management may record the documented exception of an RFP
+ * invitation without an EOI (the "direct RFP" route).
+ */
+export function canApproveDirectRfp(actor: Actor): boolean {
+  return actor.role === 'management';
+}
+
+/**
  * FR-060, FR-061: a user may upload a document or a revision only while
  * authorized to edit the parent opportunity. The opportunity is still located
  * through `opportunityScope` on every upload, finalize, read and download.
@@ -272,15 +328,38 @@ export function canFilterByOwner(actor: Actor): boolean {
 }
 
 /**
- * The people an owner filter may offer (FR-082). Leads see their own section,
- * management every section; inactive owners stay listed because their
- * historical records remain in scope (plan 3.1).
+ * The people an owner filter may offer (FR-082), optionally narrowed to one
+ * section. Management sees every owner; a lead sees the people who work in,
+ * or own records in, the sections they lead. Inactive owners and people who
+ * have left a section stay listed while they own records there, because those
+ * records remain in the lead's scope (plan 3.1); listing a name grants nothing.
  */
-export function ownerFilterOptionScope(actor: Actor): SQL {
+export function ownerFilterOptionScope(actor: Actor, sectionId?: string): SQL {
   if (!canFilterByOwner(actor)) return MATCH_NOTHING;
-  const owners = sql`${users.role} IN ('sales', 'lead') AND ${users.sectionId} IS NOT NULL`;
-  if (actor.role === 'management') return owners;
-  return actor.sectionId ? (and(owners, eq(users.sectionId, actor.sectionId)) as SQL) : MATCH_NOTHING;
+  const owners = sql`${users.role} IN ('sales', 'lead')`;
+  let sectionIds: string[] | null;
+  if (actor.role === 'management') {
+    sectionIds = sectionId ? [sectionId] : null;
+  } else {
+    if (sectionId && !actor.sectionIds.includes(sectionId)) return MATCH_NOTHING;
+    sectionIds = sectionId ? [sectionId] : actor.sectionIds;
+  }
+  if (!sectionIds) return owners;
+  if (sectionIds.length === 0) return MATCH_NOTHING;
+  const inSections = sql.join(
+    sectionIds.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  );
+  return and(
+    owners,
+    sql`(
+      EXISTS (SELECT 1 FROM ${opportunities} oo WHERE oo.owner_id = ${users.id} AND oo.section_id IN (${inSections}))
+      OR EXISTS (SELECT 1 FROM ${sectionMemberships} om
+                  WHERE om.user_id = ${users.id} AND om.ended_at IS NULL AND om.section_id IN (${inSections}))
+      OR EXISTS (SELECT 1 FROM ${sections} os
+                  WHERE os.lead_user_id = ${users.id} AND os.active AND os.id IN (${inSections}))
+    )`,
+  ) as SQL;
 }
 
 /** FR-091: administrative search covers accounts and sections only. */
@@ -296,16 +375,12 @@ export function canSearchAdministration(actor: Actor): boolean {
  * recipient lost access (BR-070, SEC-005). A test checks the two agree for
  * every account.
  */
-export function userSeesOpportunitySql(user: {
-  id: AnyColumn;
-  role: AnyColumn;
-  sectionId: AnyColumn;
-  active: AnyColumn;
-}): SQL {
+export function userSeesOpportunitySql(user: { id: AnyColumn; role: AnyColumn; active: AnyColumn }): SQL {
   return sql`(${user.active} AND (
     ${user.role} = 'management'
-    OR (${user.role} = 'lead' AND ${user.sectionId} IS NOT NULL AND ${user.sectionId} = ${opportunities.sectionId})
-    OR (${user.role} = 'sales' AND ${user.sectionId} IS NOT NULL AND ${opportunities.ownerId} = ${user.id})
+    OR (${user.role} = 'lead' AND ${leadsSectionSql(user.id, opportunities.sectionId)})
+    OR (${user.role} = 'sales' AND ${opportunities.ownerId} = ${user.id}
+        AND ${memberOfSectionSql(user.id, opportunities.sectionId)})
   ))`;
 }
 
@@ -316,44 +391,51 @@ export function userSeesOpportunitySql(user: {
  * can see the record, so an alert never grants or outlives access.
  */
 export function alertRecipientSql(
-  user: { id: AnyColumn; role: AnyColumn; sectionId: AnyColumn; active: AnyColumn },
+  user: { id: AnyColumn; role: AnyColumn; active: AnyColumn },
   responsibleUserId: SQL | AnyColumn,
 ): SQL {
+  // A lead who can see the record leads its section, so "the section's lead"
+  // needs no further condition here.
   return sql`(${userSeesOpportunitySql(user)} AND (
     ${user.id} = ${responsibleUserId}
     OR ${user.role} = 'management'
-    OR (${user.role} = 'lead' AND ${user.sectionId} = ${opportunities.sectionId})
+    OR ${user.role} = 'lead'
   ))`;
 }
 
 /**
- * SQL predicate selecting the users an actor may name as an opportunity owner.
+ * SQL predicate over `users` selecting who the actor may name as the owner of
+ * a record in `section`: a section id, or a sections column when listing
+ * owner-and-section pairs.
  *
- * BR-001: eligible owners are active salespeople and section leads with a
- * section. Management is never an owner in this release.
+ * BR-001 as amended by CR4/CR5: an eligible owner is active and works in the
+ * section, either as a current member salesperson or as the section's lead.
+ * The section must be one the actor works in, unless the actor is management.
+ * Management is never an owner in this release.
  *
- *   sales       only themselves
- *   lead        active eligible owners in their own section
- *   management  active eligible owners in any section
+ *   sales       only themselves, in their own sections
+ *   lead        eligible owners in the sections they lead
+ *   management  eligible owners in any active section
  */
-export function eligibleOwnerScope(actor: Actor): SQL {
+export function eligibleOwnerScope(actor: Actor, section: string | AnyColumn): SQL {
   if (!canAccessSalesRecords(actor)) return MATCH_NOTHING;
 
-  const baseEligibility = and(
-    eq(users.active, true),
-    sql`${users.role} IN ('sales', 'lead')`,
-    sql`${users.sectionId} IS NOT NULL`,
-  ) as SQL;
+  const sectionSql = typeof section === 'string' ? sql`${section}::uuid` : sql`${section}`;
+  const base = and(eq(users.active, true), worksInSectionSql(users, sectionSql)) as SQL;
+  const inActorSections =
+    typeof section === 'string'
+      ? actor.sectionIds.includes(section)
+        ? MATCH_EVERYTHING
+        : MATCH_NOTHING
+      : inArray(section, actor.sectionIds);
 
   switch (actor.role) {
     case 'management':
-      return baseEligibility;
+      return base;
     case 'lead':
-      return actor.sectionId
-        ? (and(baseEligibility, eq(users.sectionId, actor.sectionId)) as SQL)
-        : MATCH_NOTHING;
+      return and(base, inActorSections) as SQL;
     case 'sales':
-      return and(baseEligibility, eq(users.id, actor.id)) as SQL;
+      return and(base, eq(users.id, actor.id), inActorSections) as SQL;
     default:
       return MATCH_NOTHING;
   }

@@ -7,6 +7,7 @@
  */
 import type {
   AccountLinkDto,
+  AccountLinkStatusDto,
   ActivityDto,
   ContactDetailDto,
   ContactListItemDto,
@@ -34,6 +35,10 @@ import type {
   OrganizationSummaryDto,
   OwnerOptionDto,
   Paginated,
+  ProcurementCycleDetailDto,
+  ProcurementCycleDto,
+  ProcurementMilestoneResultDto,
+  RecoveryOptionsDto,
   TeamDto,
   DashboardDto,
   NotificationDto,
@@ -42,6 +47,14 @@ import type {
   ReportDto,
   ReportExportDto,
   SearchResponseDto,
+  EmailConnectionCheckDto,
+  EmailDeliveryDto,
+  EmailPreviewDto,
+  EmailSettingsDto,
+  EmailTemplateDto,
+  EmailTemplateVersionDto,
+  EmailTestResultDto,
+  NotificationTimingDto,
 } from '../../shared/api.js';
 import type { ExportKind, ReportKey } from '../../shared/reporting.js';
 import { BACKGROUND_REQUEST_HEADER, FILE_NAME_HEADER } from '../../shared/api.js';
@@ -70,6 +83,18 @@ export async function signIn(email: string, password: string): Promise<void> {
 export async function signOut(): Promise<void> {
   await apiRequest<void>('/api/auth/logout', { method: 'POST' });
   setCsrfToken(null);
+}
+
+/**
+ * Changes the signed-in account's own password (CR3). The server re-issues
+ * this session under a new id, so the CSRF token it returns replaces ours.
+ */
+export async function changeOwnPassword(currentPassword: string, newPassword: string): Promise<void> {
+  const { csrfToken } = await apiRequest<{ csrfToken: string }>('/api/auth/password', {
+    method: 'POST',
+    body: { currentPassword, newPassword },
+  });
+  setCsrfToken(csrfToken);
 }
 
 export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUserDto> {
@@ -293,8 +318,9 @@ export function setAdminUserActive(id: string, active: boolean, body: Record<str
   return apiRequest(`/api/admin/users/${id}/${active ? 'reactivate' : 'deactivate'}`, { method: 'POST', body });
 }
 
-export function issueAccountLink(id: string): Promise<AccountLinkDto> {
-  return apiRequest(`/api/admin/users/${id}/link`, { method: 'POST', body: {} });
+/** CR1: emailed while email delivery is on, unless `manual` asks for a link to copy. */
+export function issueAccountLink(id: string, delivery?: 'email' | 'manual'): Promise<AccountLinkDto> {
+  return apiRequest(`/api/admin/users/${id}/link`, { method: 'POST', body: delivery ? { delivery } : {} });
 }
 
 export function fetchAdminSections(signal?: AbortSignal): Promise<{ items: AdminSectionDto[] }> {
@@ -324,6 +350,59 @@ export function fetchAdminAudit(
   return apiRequest(`/api/admin/audit${toQuery(params)}`, { signal });
 }
 
+// --- Email administration (CR2) -----------------------------------------------
+
+/** CR2, step 6: reminder timing, the summary schedule and its management recipients. */
+export function fetchNotificationTiming(signal?: AbortSignal): Promise<NotificationTimingDto> {
+  return apiRequest('/api/admin/email/notification-timing', { signal });
+}
+
+export function updateNotificationTiming(body: Record<string, unknown>): Promise<NotificationTimingDto> {
+  return apiRequest('/api/admin/email/notification-timing', { method: 'PUT', body });
+}
+
+export function fetchEmailSettings(signal?: AbortSignal): Promise<EmailSettingsDto> {
+  return apiRequest('/api/admin/email/settings', { signal });
+}
+
+export function updateEmailSettings(body: Record<string, unknown>): Promise<EmailSettingsDto> {
+  return apiRequest('/api/admin/email/settings', { method: 'PUT', body });
+}
+
+export function sendTestEmail(to: string): Promise<EmailTestResultDto> {
+  return apiRequest('/api/admin/email/test', { method: 'POST', body: { to } });
+}
+
+/** Connects and signs in to the saved mail server; sends nothing. */
+export function checkEmailConnection(): Promise<EmailConnectionCheckDto> {
+  return apiRequest('/api/admin/email/verify', { method: 'POST', body: {} });
+}
+
+export function fetchEmailTemplateHistory(key: string, signal?: AbortSignal): Promise<{ items: EmailTemplateVersionDto[] }> {
+  return apiRequest(`/api/admin/email/templates/${key}/history`, { signal });
+}
+
+/** Queues a failed email again; the server re-checks it before sending. */
+export function retryEmailDelivery(id: string): Promise<EmailTestResultDto> {
+  return apiRequest(`/api/admin/email/deliveries/${id}/retry`, { method: 'POST', body: {} });
+}
+
+export function fetchEmailTemplates(signal?: AbortSignal): Promise<{ items: EmailTemplateDto[] }> {
+  return apiRequest('/api/admin/email/templates', { signal });
+}
+
+export function updateEmailTemplate(key: string, body: Record<string, unknown>): Promise<EmailTemplateDto> {
+  return apiRequest(`/api/admin/email/templates/${key}`, { method: 'PUT', body });
+}
+
+export function previewEmailTemplate(key: string, body: { subject: string; bodyText: string }): Promise<EmailPreviewDto> {
+  return apiRequest(`/api/admin/email/templates/${key}/preview`, { method: 'POST', body });
+}
+
+export function fetchEmailDeliveries(params: { page?: number; pageSize?: number }, signal?: AbortSignal): Promise<Paginated<EmailDeliveryDto>> {
+  return apiRequest(`/api/admin/email/deliveries${toQuery(params)}`, { signal });
+}
+
 // --- Invitations and password reset (M3) ---------------------------------------
 
 /** Public: redeems a single-use link. The caller signs in normally afterwards. */
@@ -334,6 +413,23 @@ export async function setPasswordWithLink(token: string, password: string): Prom
     body: { token, password },
     suppressUnauthenticatedNotice: true,
   });
+}
+
+/** What an opened link can do; never spends it (CR1). */
+export async function checkAccountLink(token: string): Promise<AccountLinkStatusDto> {
+  await fetchCsrfToken();
+  return apiRequest<AccountLinkStatusDto>('/api/auth/link-status', { method: 'POST', body: { token }, suppressUnauthenticatedNotice: true });
+}
+
+/** Whether "Forgot your password?" is offered (CR3). */
+export function fetchRecoveryOptions(signal?: AbortSignal): Promise<RecoveryOptionsDto> {
+  return apiRequest<RecoveryOptionsDto>('/api/auth/recovery', { signal, suppressUnauthenticatedNotice: true });
+}
+
+/** Asks for a reset link. The answer is the same whether or not the address has an account. */
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+  await fetchCsrfToken();
+  return apiRequest<{ message: string }>('/api/auth/forgot-password', { method: 'POST', body: { email }, suppressUnauthenticatedNotice: true });
 }
 
 // --- Organization directory (M4) ---------------------------------------------
@@ -590,4 +686,55 @@ export function markNotificationRead(id: string): Promise<{ notification: Notifi
 
 export function markAllNotificationsRead(): Promise<{ unreadCount: number }> {
   return apiRequest('/api/notifications/read-all', { method: 'POST', body: {} });
+}
+
+// --- Software Procurement (CR6) -------------------------------------------------
+
+export function fetchProcurementCycles(params: Record<string, string | number | undefined>, signal?: AbortSignal): Promise<Paginated<ProcurementCycleDto>> {
+  return apiRequest(`/api/procurement${toQuery(params)}`, { signal });
+}
+
+export function fetchOpportunityProcurement(opportunityId: string, signal?: AbortSignal): Promise<{ items: ProcurementCycleDto[] }> {
+  return apiRequest(`/api/opportunities/${opportunityId}/procurement`, { signal });
+}
+
+export function fetchProcurementCycle(id: string, signal?: AbortSignal): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}`, { signal });
+}
+
+export function createProcurementCycle(
+  opportunityId: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/opportunities/${opportunityId}/procurement`, { method: 'POST', body, idempotencyKey });
+}
+
+export function updateProcurementCycle(id: string, body: Record<string, unknown>): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}`, { method: 'PATCH', body });
+}
+
+/** Moves a cycle to a milestone; the opportunity's stage moves only if `pipeline` is given. */
+export function advanceProcurementCycle(
+  id: string,
+  body: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<ProcurementMilestoneResultDto> {
+  return apiRequest(`/api/procurement/${id}/milestone`, { method: 'POST', body, idempotencyKey });
+}
+
+export function linkProcurementContact(id: string, contactId: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/contacts`, { method: 'POST', body: { contactId } });
+}
+
+export function unlinkProcurementContact(id: string, contactId: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/contacts/${contactId}`, { method: 'DELETE' });
+}
+
+export function linkProcurementDocument(id: string, documentId: string, role: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/documents`, { method: 'POST', body: { documentId, role } });
+}
+
+export function unlinkProcurementDocument(id: string, documentId: string): Promise<ProcurementCycleDetailDto> {
+  return apiRequest(`/api/procurement/${id}/documents/${documentId}`, { method: 'DELETE' });
 }

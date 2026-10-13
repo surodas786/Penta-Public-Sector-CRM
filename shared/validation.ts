@@ -18,9 +18,15 @@ import {
   PRIORITIES,
   SOLUTION_CATEGORIES,
   USER_ROLES,
+  PARTICIPATION_DECISIONS,
+  PROCUREMENT_DOCUMENT_ROLES,
+  PROCUREMENT_MILESTONES,
+  PROCUREMENT_ROUTES,
+  PROPOSAL_FORMATS,
   isTerminalStage,
   type OpportunityStage,
 } from './enums.js';
+import { DEADLINE_REMINDER_MAX_HOURS, EMAIL_SECURITY_MODES, SUMMARY_FREQUENCIES } from './email.js';
 import { isValidMoneyString } from './money.js';
 import { DASHBOARD_RANGES, EXPORT_KINDS, REPORT_KEYS, SEARCH_MIN_LENGTH, SEARCH_RESULT_TYPES } from './reporting.js';
 
@@ -115,6 +121,29 @@ export const setPasswordSchema = z
 
 export type SetPasswordInput = z.infer<typeof setPasswordSchema>;
 
+/** Checking a link when it is opened (CR1). The token travels in the body, never the URL. */
+export const linkStatusSchema = z
+  .object({
+    token: z.string().trim().min(20, 'This link is incomplete. Open the full link you were sent.').max(200),
+  })
+  .strict();
+
+/** Asking for a reset link from the sign-in page (CR3). */
+export const forgotPasswordSchema = z.object({ email: emailField }).strict();
+
+/** A signed-in account changing its own password (CR3). */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Enter your current password.').max(512),
+    newPassword: z
+      .string()
+      .min(PASSWORD_MIN_LENGTH, `Use at least ${PASSWORD_MIN_LENGTH} characters.`)
+      .max(256, 'Use at most 256 characters.'),
+  })
+  .strict();
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
 // ---------------------------------------------------------------------------
 // Ownership transfer (FR-070, BR-050)
 // ---------------------------------------------------------------------------
@@ -123,6 +152,12 @@ export const transferOpportunitySchema = z
   .object({
     version: z.number().int().positive('Reload the record and try again.'),
     newOwnerId: uuidField,
+    /**
+     * Required only when the new owner works in more than one section the
+     * actor may assign to and the record's current section is not one of
+     * them (CR5). Validated against the database, never trusted.
+     */
+    newSectionId: uuidField.optional(),
     reason: z
       .string()
       .trim()
@@ -142,16 +177,23 @@ const optionalId = z.union([uuidField, z.null()]).optional();
 const adminReason = z.string().trim().max(2000, 'Use at most 2000 characters.').optional();
 
 /**
- * Section and reporting line are validated against the database by the
- * server; for a salesperson the reporting line is derived from the section's
- * active lead and any supplied value is only checked against it.
+ * A salesperson's sections (CR5). Validated against the database by the
+ * server: each must exist and be active. Their reporting line is the lead of
+ * each section, never a supplied value. Leads take their sections from the
+ * sections they are appointed to lead, so they are given none here.
  */
+const sectionIdsField = z
+  .array(uuidField)
+  .max(50, 'Choose at most 50 sections.')
+  .refine((ids) => new Set(ids).size === ids.length, 'Each section can be chosen once.');
+
 export const createUserSchema = z
   .object({
     fullName: personName,
     email: emailField,
     role: z.enum(USER_ROLES),
-    sectionId: optionalId,
+    sectionIds: sectionIdsField.optional(),
+    /** A lead's management manager; nothing else accepts one. */
     managerId: optionalId,
   })
   .strict();
@@ -164,8 +206,10 @@ export const updateUserSchema = z
     fullName: personName.optional(),
     email: emailField.optional(),
     role: z.enum(USER_ROLES).optional(),
-    sectionId: optionalId,
+    sectionIds: sectionIdsField.optional(),
     managerId: optionalId,
+    /** Recorded with membership changes and role changes. */
+    reason: adminReason,
   })
   .strict();
 
@@ -184,6 +228,11 @@ export const sectionNameSchema = z
   })
   .strict();
 
+/** CR4: an active section always has a lead, so one is named at creation. */
+export const createSectionSchema = sectionNameSchema
+  .extend({ leadId: uuidField })
+  .strict();
+
 export const renameSectionSchema = sectionNameSchema
   .extend({ version: z.number().int().positive('Reload the section and try again.') })
   .strict();
@@ -200,6 +249,8 @@ export const sectionStateSchema = z
   .object({
     version: z.number().int().positive('Reload the section and try again.'),
     reason: adminReason,
+    /** Reactivation only: the lead, if the section's former lead cannot resume (CR4). */
+    leadId: uuidField.optional(),
   })
   .strict();
 
@@ -1026,4 +1077,196 @@ export const createExportSchema = z
     kind: z.enum(EXPORT_KINDS),
     filters: z.record(z.string(), z.string().max(200)).optional().default({}),
   })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// Email administration (CR2)
+// ---------------------------------------------------------------------------
+
+/** No line breaks: these values end up in mail headers. */
+const singleLine = (max: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .max(max, `Use at most ${max} characters.`)
+    .refine((value) => !/[\r\n]/.test(value), `${label} must be on one line.`);
+
+export const updateEmailSettingsSchema = z
+  .object({
+    /** 0 while no settings have ever been saved. */
+    version: z.number().int().min(0),
+    enabled: z.boolean(),
+    host: z
+      .string()
+      .trim()
+      .max(255, 'Use at most 255 characters.')
+      .regex(/^[A-Za-z0-9.-]+$/, 'Enter a host name such as smtp.example.com.')
+      .nullable(),
+    port: z.number().int().min(1, 'Enter a port between 1 and 65535.').max(65535, 'Enter a port between 1 and 65535.').nullable(),
+    security: z.enum(EMAIL_SECURITY_MODES),
+    username: singleLine(255, 'The user name').nullable(),
+    /** Absent: keep the stored password. Null: remove it. Never returned by the API. */
+    password: z.string().max(1000, 'Use at most 1000 characters.').nullable().optional(),
+    fromName: singleLine(100, 'The sender name').nullable(),
+    fromAddress: emailField.nullable(),
+    replyTo: emailField.nullable(),
+  })
+  .strict();
+
+export const emailTemplateContentSchema = z
+  .object({
+    subject: singleLine(200, 'The subject').pipe(z.string().min(1, 'Enter a subject.')),
+    bodyText: z.string().min(1, 'Enter the message.').max(10_000, 'Use at most 10000 characters.'),
+  })
+  .strict();
+
+export const updateEmailTemplateSchema = emailTemplateContentSchema
+  .extend({
+    /** 0 while the template still uses the default wording. */
+    version: z.number().int().min(0),
+    enabled: z.boolean(),
+  })
+  .strict();
+
+export const sendTestEmailSchema = z.object({ to: emailField }).strict();
+
+/** Notification timing (CR2, step 6). The recipient ids are re-checked by the server. */
+export const updateNotificationTimingSchema = z
+  .object({
+    /** 0 while the defaults are in use. */
+    version: z.number().int().min(0),
+    reminderHour: z.number().int().min(0, 'Choose an hour from 00 to 23.').max(23, 'Choose an hour from 00 to 23.'),
+    tenderReminderHours: z.number().int().min(1, 'Use at least 1 hour.').max(DEADLINE_REMINDER_MAX_HOURS, `Use at most ${DEADLINE_REMINDER_MAX_HOURS} hours: the in-app alert appears 72 hours before the deadline.`),
+    eoiReminderHours: z.number().int().min(1, 'Use at least 1 hour.').max(DEADLINE_REMINDER_MAX_HOURS, `Use at most ${DEADLINE_REMINDER_MAX_HOURS} hours: the in-app alert appears 72 hours before the deadline.`),
+    rfpReminderHours: z.number().int().min(1, 'Use at least 1 hour.').max(DEADLINE_REMINDER_MAX_HOURS, `Use at most ${DEADLINE_REMINDER_MAX_HOURS} hours: the in-app alert appears 72 hours before the deadline.`),
+    summaryFrequency: z.enum(SUMMARY_FREQUENCIES),
+    summaryWeekday: z.number().int().min(0).max(6),
+    managementSummaryRecipientIds: z.array(uuidField).max(50, 'Choose at most 50 people.'),
+  })
+  .strict();
+
+/**
+ * How an invitation or reset link goes out (CR1). Omitted: by email while
+ * email delivery is on, otherwise shown once to copy (D-CR1-1).
+ */
+export const issueAccountLinkSchema = z.object({ delivery: z.enum(['email', 'manual']).optional() }).strict();
+
+// ---------------------------------------------------------------------------
+// Software Procurement cycles (CR6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fields of a cycle that can be known in advance. Everything about a later
+ * milestone is optional while the cycle is earlier (an RFP may not exist yet
+ * during the EOI); the service requires what a milestone needs when the
+ * cycle reaches it.
+ */
+const procurementFields = {
+  procuringOrganizationId: uuidField,
+  title: z.string().trim().min(3, 'Use at least 3 characters.').max(200, 'Use at most 200 characters.'),
+  reference: z.string().trim().min(1, 'Enter the procurement reference.').max(200, 'Use at most 200 characters.'),
+  submissionMethod: optionalText(100),
+  participation: z.enum(PARTICIPATION_DECISIONS).optional(),
+  participationReason: optionalText(2000),
+  eoiPublicationDate: optionalDate(),
+  eoiDeadline: optionalInstant,
+  rfpReference: optionalText(200),
+  rfpInvitationDate: optionalDate(),
+  clarificationDeadline: optionalInstant,
+  proposalDeadline: optionalInstant,
+  proposalFormat: z.enum(PROPOSAL_FORMATS).optional(),
+  notes: optionalText(10_000),
+};
+
+/**
+ * A new cycle. `route: 'direct_rfp'` is the management-only exception for an
+ * RFP invitation without an EOI; it needs the documented reason and starts at
+ * RFP received, so it needs the RFP's reference, invitation date and proposal
+ * deadline.
+ */
+export const createProcurementCycleSchema = z
+  .object({
+    ...procurementFields,
+    route: z.enum(PROCUREMENT_ROUTES).default('eoi_rfp'),
+    directRfpReason: optionalText(2000),
+  })
+  .strict();
+
+export type CreateProcurementCycleInput = z.input<typeof createProcurementCycleSchema>;
+
+/** Editing a cycle's facts. Its route and milestone change only through their own actions. */
+export const updateProcurementCycleSchema = z
+  .object({
+    version: z.number().int().positive('Reload the cycle and try again.'),
+    procuringOrganizationId: procurementFields.procuringOrganizationId.optional(),
+    title: procurementFields.title.optional(),
+    reference: procurementFields.reference.optional(),
+    submissionMethod: procurementFields.submissionMethod,
+    participation: procurementFields.participation,
+    participationReason: procurementFields.participationReason,
+    eoiPublicationDate: procurementFields.eoiPublicationDate,
+    eoiDeadline: procurementFields.eoiDeadline,
+    rfpReference: procurementFields.rfpReference,
+    rfpInvitationDate: procurementFields.rfpInvitationDate,
+    clarificationDeadline: procurementFields.clarificationDeadline,
+    proposalDeadline: procurementFields.proposalDeadline,
+    proposalFormat: procurementFields.proposalFormat,
+    notes: procurementFields.notes,
+  })
+  .strict();
+
+export type UpdateProcurementCycleInput = z.input<typeof updateProcurementCycleSchema>;
+
+/**
+ * Moving a cycle to a milestone, with the facts that milestone records. The
+ * opportunity's pipeline changes only when `pipeline` is given: the user's
+ * explicit acceptance of the offered stage, held to the normal stage rules.
+ */
+export const advanceProcurementCycleSchema = z
+  .object({
+    version: z.number().int().positive('Reload the cycle and try again.'),
+    milestone: z.enum(PROCUREMENT_MILESTONES),
+    eoiSubmittedAt: optionalInstant,
+    eoiLateNote: optionalText(2000),
+    eoiOutcomeDate: optionalDate(),
+    rfpReference: optionalText(200),
+    rfpInvitationDate: optionalDate(),
+    clarificationDeadline: optionalInstant,
+    proposalDeadline: optionalInstant,
+    proposalSubmittedAt: optionalInstant,
+    technicalSubmittedAt: optionalInstant,
+    financialSubmittedAt: optionalInstant,
+    proposalLateNote: optionalText(2000),
+    outcomeDate: optionalDate(),
+    outcomeNote: optionalText(2000),
+    pipeline: changeStageSchema.omit({ version: true }).optional(),
+  })
+  .strict();
+
+export type AdvanceProcurementCycleInput = z.input<typeof advanceProcurementCycleSchema>;
+
+export const PROCUREMENT_CYCLE_FILTERS = ['current', 'all'] as const;
+export const PROCUREMENT_DEADLINE_WINDOWS = ['overdue', '72h', '7d'] as const;
+
+/** The Software Procurement area's list, filtered inside the scope predicate. */
+export const listProcurementCyclesQuerySchema = z
+  .object({
+    ...listPage,
+    q: z.string().trim().max(200).optional(),
+    milestone: z.enum(PROCUREMENT_MILESTONES).optional(),
+    route: z.enum(PROCUREMENT_ROUTES).optional(),
+    ownerId: uuidField.optional(),
+    sectionId: uuidField.optional(),
+    /** `current`: each opportunity's current cycle (the default). `all`: history too. */
+    cycles: z.enum(PROCUREMENT_CYCLE_FILTERS).optional().default('current'),
+    /** Open deadlines (EOI or proposal) already passed, or due within 72 hours or seven days. */
+    deadline: z.enum(PROCUREMENT_DEADLINE_WINDOWS).optional(),
+    dir: z.enum(['asc', 'desc']).optional(),
+  })
+  .strict();
+
+export const linkProcurementContactSchema = z.object({ contactId: uuidField }).strict();
+
+export const linkProcurementDocumentSchema = z
+  .object({ documentId: uuidField, role: z.enum(PROCUREMENT_DOCUMENT_ROLES) })
   .strict();

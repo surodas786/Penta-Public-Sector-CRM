@@ -163,7 +163,7 @@ describe('child record scope and response shape', () => {
         'fullName',
         'id',
         'role',
-        'section',
+        'sections',
       ]);
     });
 

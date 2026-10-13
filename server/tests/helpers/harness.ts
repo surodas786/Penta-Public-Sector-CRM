@@ -20,7 +20,7 @@ import type { DocumentScanner } from '../../documents/scanner.js';
 import { createDatabase, type DatabaseHandle } from '../../db/client.js';
 import { legacyUuid } from '../../db/seedData.js';
 import { seedDatabase } from '../../db/seed.js';
-import { loadServerConfig, resolveTestDatabaseUrl, type ServerConfig } from '../../env.js';
+import { loadServerConfig, resolveTestDatabaseUrl, type EmailConfig, type ServerConfig } from '../../env.js';
 import { CSRF_HEADER, IDEMPOTENCY_HEADER } from '../../../shared/api.js';
 
 export const TEST_ORIGIN = 'http://localhost:5173';
@@ -115,6 +115,8 @@ export interface TestContext {
   app: Express;
   database: DatabaseHandle;
   config: ServerConfig;
+  /** The capture folder: every email this app "sends" is written here, never sent. */
+  mailbox: string;
   close: () => Promise<void>;
 }
 
@@ -135,7 +137,12 @@ export interface TestAppOptions {
   documentScanner?: DocumentScanner;
   documentScannerKind?: 'none' | 'test';
   maxUploadBytes?: number;
+  /** Email for this app: capture into a private folder unless a test says otherwise. */
+  email?: Partial<EmailConfig>;
 }
+
+/** A fixed, test-only EMAIL_SECRET_KEY. */
+export const TEST_EMAIL_SECRET_KEY = Buffer.alloc(32, 7);
 
 /**
  * Resolved once, at import time, while DATABASE_URL still holds the development
@@ -162,6 +169,13 @@ export function createTestApp(options: TestAppOptions = {}): TestContext {
       maxUploadBytes: options.maxUploadBytes ?? 25 * 1024 * 1024,
       uploadTtlMinutes: 60,
     },
+    email: {
+      transport: 'capture',
+      secretKey: TEST_EMAIL_SECRET_KEY,
+      captureDir: mkdtempSync(path.join(os.tmpdir(), 'penta-mailbox-')),
+      sendTimeoutMs: 5_000,
+      ...options.email,
+    },
     ...(options.sessionIdleMinutes !== undefined
       ? { sessionIdleMinutes: options.sessionIdleMinutes }
       : {}),
@@ -182,6 +196,7 @@ export function createTestApp(options: TestAppOptions = {}): TestContext {
     app,
     database,
     config,
+    mailbox: config.email.captureDir,
     close: async () => {
       await database.close();
     },

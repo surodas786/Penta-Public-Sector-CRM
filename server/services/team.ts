@@ -7,15 +7,15 @@
  * definition as the board (status Active, stage neither Awarded nor Lost),
  * and overdue against today's Dhaka date.
  */
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 
 import type { TeamDto } from '../../shared/api.js';
 import { canonicalMoney } from '../../shared/money.js';
 import { dhakaToday } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { followUps, opportunities, sections, users } from '../db/schema.js';
+import { followUps, opportunities, sectionMemberships, sections, users } from '../db/schema.js';
 import { forbidden } from '../http/errors.js';
-import type { Actor } from '../policy/actor.js';
+import { currentSectionNamesSql, type Actor } from '../policy/actor.js';
 import { canViewTeam } from '../policy/scope.js';
 
 export async function getTeam(db: Database, actor: Actor): Promise<TeamDto> {
@@ -27,12 +27,15 @@ export async function getTeam(db: Database, actor: Actor): Promise<TeamDto> {
       id: users.id,
       fullName: users.fullName,
       role: users.role,
-      sectionId: users.sectionId,
-      managerId: users.managerId,
       active: users.active,
     })
     .from(users)
     .orderBy(asc(users.fullName));
+
+  const memberships = await db
+    .select({ userId: sectionMemberships.userId, sectionId: sectionMemberships.sectionId })
+    .from(sectionMemberships)
+    .where(isNull(sectionMemberships.endedAt));
 
   const sectionRows = await db
     .select({ id: sections.id, name: sections.name, leadUserId: sections.leadUserId })
@@ -45,23 +48,25 @@ export async function getTeam(db: Database, actor: Actor): Promise<TeamDto> {
       userId: users.id,
       fullName: users.fullName,
       role: users.role,
-      sectionName: sections.name,
+      // A person may work in several sections (CR4, CR5).
+      sectionNames: currentSectionNamesSql(),
+      // "users"."id" in full: in a single-table select Drizzle would render
+      // a bare "id", which these subqueries would bind to their own table.
       activeOpportunities: sql<number>`(
         SELECT count(*)::int FROM ${opportunities} o
-        WHERE o.owner_id = ${users.id} AND o.status = 'active' AND o.stage NOT IN ('awarded', 'lost'))`,
+        WHERE o.owner_id = "users"."id" AND o.status = 'active' AND o.stage NOT IN ('awarded', 'lost'))`,
       estimatedPipeline: sql<string>`(
         SELECT coalesce(sum(o.estimated_value), 0)::numeric(16,2)::text FROM ${opportunities} o
-        WHERE o.owner_id = ${users.id} AND o.status = 'active' AND o.stage NOT IN ('awarded', 'lost'))`,
+        WHERE o.owner_id = "users"."id" AND o.status = 'active' AND o.stage NOT IN ('awarded', 'lost'))`,
       openTasks: sql<number>`(
-        SELECT count(*)::int FROM ${followUps} f WHERE f.assigned_user_id = ${users.id} AND f.state = 'open')`,
+        SELECT count(*)::int FROM ${followUps} f WHERE f.assigned_user_id = "users"."id" AND f.state = 'open')`,
       overdueTasks: sql<number>`(
         SELECT count(*)::int FROM ${followUps} f
-        WHERE f.assigned_user_id = ${users.id} AND f.state = 'open' AND f.due_date < ${today}::date)`,
+        WHERE f.assigned_user_id = "users"."id" AND f.state = 'open' AND f.due_date < ${today}::date)`,
     })
     .from(users)
-    .innerJoin(sections, eq(sections.id, users.sectionId))
     .where(and(eq(users.active, true), sql`${users.role} IN ('sales', 'lead')`))
-    .orderBy(asc(sections.name), asc(users.fullName));
+    .orderBy(asc(users.fullName));
 
   return {
     management: people
@@ -73,20 +78,19 @@ export async function getTeam(db: Database, actor: Actor): Promise<TeamDto> {
         id: section.id,
         name: section.name,
         lead: lead ? { id: lead.id, fullName: lead.fullName } : null,
+        // Current members; each reports to this section's lead (CR5).
         members: people
-          .filter((person) => person.sectionId === section.id && person.role === 'sales')
-          .map((person) => ({
-            id: person.id,
-            fullName: person.fullName,
-            active: person.active,
-            reportsToLead: lead !== null && person.managerId === lead.id,
-          })),
+          .filter(
+            (person) =>
+              person.role === 'sales' &&
+              memberships.some((row) => row.userId === person.id && row.sectionId === section.id),
+          )
+          .map((person) => ({ id: person.id, fullName: person.fullName, active: person.active })),
       };
     }),
-    workload: workloadRows.map((row) => ({
-      ...row,
-      estimatedPipeline: canonicalMoney(row.estimatedPipeline),
-    })),
+    workload: workloadRows
+      .filter((row) => row.sectionNames.length > 0)
+      .map((row) => ({ ...row, estimatedPipeline: canonicalMoney(row.estimatedPipeline) })),
     today,
   };
 }

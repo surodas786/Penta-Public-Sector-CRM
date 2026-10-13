@@ -16,6 +16,7 @@ import { EmptyState } from '../../components/ui/Feedback';
 import { FilterSelect, inputCls } from '../../components/ui/FormFields';
 import { PageContainer, PageHeader, Pagination, SortHeader, tdCls, thCls } from '../../components/ui/Layout';
 import { useAuth } from '../AuthContext.js';
+
 import { ExportButton } from '../components/ExportButton.js';
 import { ErrorPanel, LoadingPanel, LoadingRows } from '../components/Feedback.js';
 import { formatCalendarDate, formatInstantCompact } from '../ui/dates.js';
@@ -23,9 +24,9 @@ import { useApiResource } from '../useApiResource.js';
 
 const PAGE_SIZE = 25;
 
-function scopeText(role: string | undefined, sectionName: string | undefined): string {
+function scopeText(role: string | undefined, sections: string[]): string {
   if (role === 'management') return 'All sections';
-  if (role === 'lead') return `${sectionName ?? 'Your section'} section`;
+  if (role === 'lead') return sections.length > 0 ? `${sections.join(', ')} ${sections.length > 1 ? 'sections' : 'section'}` : 'Your section';
   return 'Your own opportunities';
 }
 
@@ -109,7 +110,7 @@ export function ReportsPage() {
   }, [owners.data]);
 
   const definition = reportDefinition(report);
-  const scope = scopeText(user?.role, user?.section?.name);
+  const scope = scopeText(user?.role, user?.sections.map((section) => section.name) ?? []);
 
   return (
     <PageContainer>

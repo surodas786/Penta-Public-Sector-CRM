@@ -82,13 +82,26 @@ export function OpportunityCreateDialog({ open, onClose, onCreated }: Props) {
   }, [open]);
 
   // Memoised so the preselection effect below does not re-run every render.
+  // One option per owner and section (CR4, CR5): a person working in two
+  // sections appears twice. The owner list shows each person once; the
+  // section list then offers that person's sections.
   const ownerOptions = useMemo<OwnerOptionDto[]>(() => owners.data?.items ?? [], [owners.data]);
+  const uniqueOwners = useMemo(() => {
+    const byId = new Map<string, { id: string; fullName: string; sectionNames: string[] }>();
+    for (const option of ownerOptions) {
+      const entry = byId.get(option.id) ?? { id: option.id, fullName: option.fullName, sectionNames: [] };
+      entry.sectionNames.push(option.sectionName);
+      byId.set(option.id, entry);
+    }
+    return [...byId.values()];
+  }, [ownerOptions]);
+  const ownerSections = ownerOptions.filter((option) => option.id === draft.ownerId);
 
   useEffect(() => {
     if (!open || ownerOptions.length === 0) return;
     setDraft((current) => {
       if (current.ownerId) return current;
-      // A salesperson has exactly one option: themselves.
+      // A salesperson's options are all themselves, one per section.
       const preferred = ownerOptions.find((owner) => owner.id === user?.id) ?? ownerOptions[0]!;
       return { ...current, ownerId: preferred.id, sectionId: preferred.sectionId };
     });
@@ -159,7 +172,7 @@ export function OpportunityCreateDialog({ open, onClose, onCreated }: Props) {
     }
   };
 
-  const canChooseOwner = ownerOptions.length > 1;
+  const canChooseOwner = uniqueOwners.length > 1;
 
   return (
     <Modal
@@ -312,28 +325,41 @@ export function OpportunityCreateDialog({ open, onClose, onCreated }: Props) {
                 setDraft((current) => ({
                   ...current,
                   ownerId: event.target.value,
-                  // The section always follows the owner (BR-001).
+                  // The section must be one the owner works in (BR-001, CR5);
+                  // the first is preselected and can be changed below.
                   sectionId: owner?.sectionId ?? '',
                 }));
               }}
             >
               <option value="">{owners.loading ? 'Loading…' : 'Select owner…'}</option>
-              {ownerOptions.map((owner) => (
+              {uniqueOwners.map((owner) => (
                 <option key={owner.id} value={owner.id}>
-                  {owner.fullName} — {owner.sectionName}
+                  {owner.fullName} — {owner.sectionNames.join(', ')}
                 </option>
               ))}
             </select>
           </Field>
 
-          <Field label="Section" htmlFor="c-section" error={fieldErrors.sectionId} hint="Set by the owner’s section">
-            <input
-              id="c-section"
-              className={inputCls(fieldErrors.sectionId)}
-              value={ownerOptions.find((owner) => owner.id === draft.ownerId)?.sectionName ?? ''}
-              disabled
-            />
-          </Field>
+          {ownerSections.length > 1 ? (
+            <Field label="Section" htmlFor="c-section" required error={fieldErrors.sectionId} hint="The owner works in more than one section.">
+              <select
+                id="c-section"
+                className={inputCls(fieldErrors.sectionId)}
+                value={draft.sectionId}
+                onChange={(event) => set('sectionId', event.target.value)}
+              >
+                {ownerSections.map((option) => (
+                  <option key={option.sectionId} value={option.sectionId}>
+                    {option.sectionName}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <Field label="Section" htmlFor="c-section" error={fieldErrors.sectionId} hint="Set by the owner’s section">
+              <input id="c-section" className={inputCls(fieldErrors.sectionId)} value={ownerSections[0]?.sectionName ?? ''} disabled />
+            </Field>
+          )}
 
           <Field
             label="Current stage"

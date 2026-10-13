@@ -32,6 +32,11 @@ declare module 'express-session' {
      * session id for the double-submit token to bind to.
      */
     bootstrapped?: boolean;
+    /**
+     * Set only where a session is created on purpose; lets the store insert
+     * its row once (see auth/sessionStore.ts). Never present once saved.
+     */
+    insertOnSave?: boolean;
   }
 }
 

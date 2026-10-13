@@ -8,12 +8,13 @@ import { Router, type NextFunction, type Request, type RequestHandler, type Resp
 
 import {
   accountStateSchema,
+  createSectionSchema,
   createUserSchema,
+  issueAccountLinkSchema,
   listUsersQuerySchema,
   paginationQuerySchema,
   renameSectionSchema,
   replaceLeadSchema,
-  sectionNameSchema,
   sectionStateSchema,
   updateUserSchema,
   uuidField,
@@ -41,6 +42,8 @@ import {
   updateUser,
 } from '../services/admin.js';
 import { runIdempotent } from '../services/idempotency.js';
+import type { EmailRuntime } from '../email/runtime.js';
+import { createAdminEmailRouter } from './adminEmail.js';
 
 function handle(fn: (...args: Parameters<RequestHandler>) => Promise<void>): RequestHandler {
   return (req, res, next) => {
@@ -70,10 +73,16 @@ export function createAdminRouter(options: {
   db: Database;
   csrfGuard: RequestHandler;
   appOrigin: string;
+  email: EmailRuntime;
+  /** Limits resending a link to one account (CR1). */
+  accountLinkRateLimiter?: RequestHandler;
 }): Router {
   const { db, csrfGuard, appOrigin } = options;
   const router = Router();
+  // CR1: links are emailed while email delivery is on, if this deployment may send at all.
+  const links = { appOrigin, emailAvailable: options.email.transport !== null };
   router.use(requireAuth, requireAdministrator);
+  router.use('/email', createAdminEmailRouter({ db, csrfGuard, email: options.email }));
 
   const actorOf = (req: Request) => {
     if (!req.actor) throw unauthenticated();
@@ -103,7 +112,7 @@ export function createAdminRouter(options: {
         key,
         payload: req.body,
         execute: (completeClaim) =>
-          createUser({ db, actor, command, requestId: req.requestId, appOrigin, completeClaim }),
+          createUser({ db, actor, command, requestId: req.requestId, links, completeClaim }),
         // The invitation link is never shown twice; a replay returns the account only.
         replay: (entityId) => getCreatedUser(db, actor, entityId),
       });
@@ -140,10 +149,12 @@ export function createAdminRouter(options: {
 
   router.post(
     '/users/:id/link',
+    ...(options.accountLinkRateLimiter ? [options.accountLinkRateLimiter] : []),
     csrfGuard,
     handle(async (req, res) => {
+      const { delivery } = parseOrThrow(issueAccountLinkSchema, req.body ?? {});
       res.status(201).json(
-        await issueUserLink({ db, actor: actorOf(req), userId: readId(req.params.id), requestId: req.requestId, appOrigin }),
+        await issueUserLink({ db, actor: actorOf(req), userId: readId(req.params.id), delivery, requestId: req.requestId, links }),
       );
     }),
   );
@@ -161,7 +172,7 @@ export function createAdminRouter(options: {
     csrfGuard,
     handle(async (req, res) => {
       const actor = actorOf(req);
-      const { name } = parseOrThrow(sectionNameSchema, req.body);
+      const { name, leadId } = parseOrThrow(createSectionSchema, req.body);
       const key = requireIdempotencyKey(req);
       const { result, replayed } = await runIdempotent({
         db,
@@ -169,7 +180,7 @@ export function createAdminRouter(options: {
         operation: 'admin.section.create',
         key,
         payload: req.body,
-        execute: (completeClaim) => createSection({ db, actor, name, requestId: req.requestId, completeClaim }),
+        execute: (completeClaim) => createSection({ db, actor, name, leadId, requestId: req.requestId, completeClaim }),
         replay: (entityId) => getSection(db, actor, entityId),
       });
       res.status(replayed ? 200 : 201).json(result);

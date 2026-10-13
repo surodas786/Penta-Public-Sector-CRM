@@ -8,14 +8,15 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Database } from '../db/client.js';
+import type { EmailRuntime } from '../email/runtime.js';
 import type { JobsConfig } from '../env.js';
 import { describeForLog } from '../http/errors.js';
 import { createJobHandlers, enqueueScheduledJobs } from './handlers.js';
 import { onJobsEnqueued, runDueJobs } from './queue.js';
 
-export function startJobWorker(db: Database, config: JobsConfig): () => void {
+export function startJobWorker(db: Database, config: JobsConfig, email: EmailRuntime): () => void {
   const workerId = `api-${randomUUID()}`;
-  const handlers = createJobHandlers(db, config);
+  const handlers = createJobHandlers(db, config, email);
   let running = false;
   let again = false;
 

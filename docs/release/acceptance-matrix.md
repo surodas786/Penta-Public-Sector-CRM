@@ -1,6 +1,11 @@
 # Requirement and acceptance matrix
 
-**As of:** 06 October 2026, branch `m8-release-preparation`, end of Milestone 8.
+**As of:** 13 October 2026 (step 7 verification), branch `cr-change-requests`:
+Milestone 8 plus change requests CR1–CR6 (`docs/change-requests.md`,
+release handover in `cr-release-handover.md`). Rows changed by a change
+request say so. The change requests' own acceptance criteria are in their
+own section below. The release-one figures are as of 06 October 2026, except
+where a row was updated.
 **Source:** `docs/Penta_CRM_Requirements.md` (every FR, BR, SEC, NFR, AT and D
 identifier). **Evidence:** test files under `server/tests/` (backend
 integration, real app and database), `e2e/` (browser), scripts and reports
@@ -15,14 +20,21 @@ before it can be. Nothing is marked complete because a file or table exists.
 
 Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR, BR, SEC, NFR, AT and D identifier in the requirements, checked by script). Two of the partial items — SEC-010 and SEC-031 (MFA) — contain release blockers.
 
+Change requests: **48 rows. 44 complete, 4 partial.** That is 37 acceptance
+criteria, two email rows (content and real sending), five step 6 rows
+(notification email events) and three step 7 rows (integrated acceptance,
+upgrade rehearsal, interface). The partial rows wait on Penta's mail server
+(D-EM-1) or on confirming a proposed email default (D-EM-2, D-EM-4); see
+"Change requests CR1–CR6".
+
 ## Roles and access (§2)
 
 | ID | Requirement (short) | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
 | FR-001 | One role each; admin ≠ sales visibility; controlled initial privileged accounts | Complete | `scope.test.ts`, `auth.test.ts`; M8 `ops:create-first-administrator` + `m8Operations.test.ts` | — |
-| FR-002 | One lead per section; salespeople report to it; management not an owner | Complete | `administration.test.ts`, migration `0001` unique index | — |
-| BR-001 | Eligible owners; section = owner's section; history grants nothing | Complete | `create.test.ts`, `transfers.test.ts`, `activities.test.ts` | — |
-| BR-002 | Lead scope = section; no recursive access | Complete | `scope.test.ts` (inactive owner, missing manager) | — |
+| FR-002 | One lead per section; salespeople report to it; management not an owner. **Amended by CR4/CR5**: a lead may lead several sections, a salesperson may belong to several, and every active section has exactly one active lead | Complete | `administration.test.ts`, `sections.test.ts`; migration `0008` (CHECK and deferred triggers) | — |
+| BR-001 | Eligible owners; history grants nothing. **Amended by CR5**: the record's section is one the owner works in now | Complete | `create.test.ts`, `transfers.test.ts`, `activities.test.ts`, `sections.test.ts` | — |
+| BR-002 | No recursive access. **Amended by CR4**: lead scope = the sections they lead now | Complete | `scope.test.ts`, `sections.test.ts` (backfill scope equivalence) | — |
 | SEC-001 | Server-side authz; client ids never grant | Complete | `create.test.ts` (forged owner/section), `edit.test.ts`, every service via `server/policy/scope.ts` | — |
 | SEC-002 | Scope before filter/search/sort/count/page/aggregate/export | Complete | `scope.test.ts`, `search.test.ts`, `reports.test.ts`, `dashboard.test.ts` (policy agreement) | — |
 | SEC-003 | Missing = inaccessible (identical 404); 401/403 rules | Complete | `childScope.test.ts`, `m7MutationControls.test.ts` (queued writes after transfer → same 404) | — |
@@ -101,8 +113,8 @@ Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR
 | FR-070 | Transfers by lead (section) and management (across); reason; salespeople cannot | Complete | `transfers.test.ts`, `e2e/m3.spec.ts` | — |
 | BR-050 | One transaction; task review; history kept; old access removed | Complete | `transfers.test.ts`, `m7MutationControls.test.ts` (races, channels) | — |
 | FR-071 | Admin account/section maintenance; management read-only team view | Complete | `administration.test.ts`, `e2e/m3.spec.ts` | — |
-| BR-051 | Deactivation/section change blocked by owned work | Complete | `administration.test.ts` | — |
-| BR-052 | Lead replacement atomic; last admin protected; no self-promotion | Complete | `administration.test.ts`, `m7MutationControls.test.ts` (ADR 0004 races) | — |
+| BR-051 | Deactivation, or leaving a section, blocked by owned work (**CR5**: per section) | Complete | `administration.test.ts`, `sections.test.ts` | — |
+| BR-052 | Lead replacement atomic; last admin protected; no self-promotion (**CR4**: an existing lead may take on a section) | Complete | `administration.test.ts`, `sections.test.ts`, `m7MutationControls.test.ts` (ADR 0004 races) | — |
 
 ## Dashboards, reports, notifications, search (§10–11)
 
@@ -113,7 +125,7 @@ Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR
 | FR-082 | Six reports; filters by role | Complete | `reports.test.ts` | — |
 | BR-060 | Named date bases; undated shown | Complete | `reports.test.ts`, `dashboard.test.ts` | — |
 | FR-083 | CSV: same rules, all rows, UTF-8, formulas neutralized, audited | Complete | `reports.test.ts` | — |
-| FR-090 | Alerts: due today, overdue, 72 h tenders, ownership; schedules; recipients | Partial | `notifications.test.ts`; scan timed at the envelope (2.8–5.9 s) | Penta to confirm: management receives every alert; business day starts 00:00 Dhaka |
+| FR-090 | Alerts: due today, overdue, 72 h tenders, ownership; schedules; recipients. **Extended by CR2 and CR6**: EOI and RFP proposal deadline alerts; each alert is also emailed to the person responsible, at the administrator's reminder time | Partial | `notifications.test.ts`, `notificationEmails.test.ts`, `notificationEmailEvents.test.ts`, `crAcceptance.test.ts`; scan timed at the envelope (2.8–5.9 s, release one) | Penta to confirm: management receives every alert; business day starts 00:00 Dhaka; email recipients (D-EM-4) |
 | BR-070 | Dedupe; read ≠ complete; transfers/reschedules retire alerts | Complete | `notifications.test.ts`, `m7MutationControls.test.ts` §6 | — |
 | FR-091 | Scoped search; safe summaries; paging; admin search | Complete | `search.test.ts`, `e2e/m6.spec.ts` | — |
 
@@ -121,7 +133,7 @@ Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR
 
 | ID | Requirement | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
-| BR-080 | Constraints and indexes | Complete | migrations `0000`–`0007`, `operations.test.ts`; capacity seed validated against them | — |
+| BR-080 | Constraints and indexes | Complete | migrations `0000`–`0011`, `operations.test.ts`; capacity seed validated against them | — |
 | BR-081 | Archive keeps references; no cascades; transaction boundaries | Complete | `m7MutationControls.test.ts` (FK refusals, induced failures) | — |
 | SEC-020 | Status codes and error shape | Complete | `childScope.test.ts`, `operations.test.ts` | — |
 | BR-090 | Versions; stale = 409; serialized related writes | Complete | `m7MutationControls.test.ts` §3, §5 | — |
@@ -131,7 +143,7 @@ Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR
 
 | ID | Requirement | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
-| SEC-030 | No public registration; IdP or maintained library; recovery tokens; no demo password in production | Partial | `auth.test.ts`, `administration.test.ts`, `check:production-server`, `security-review.md` | Penta identity provider not decided |
+| SEC-030 | No public registration; IdP or maintained library; recovery tokens; no demo password in production. **CR1**: links emailed, issued only at send time; **CR3**: own password change | Partial | `auth.test.ts`, `administration.test.ts`, `invitations.test.ts`, `ownPassword.test.ts`, `check:production-server`, `security-review.md` | Penta identity provider not decided |
 | SEC-031 | Secure cookies, HTTPS, CSRF, rate limits, expiry, revocation, MFA for privileged roles | Partial | `auth.test.ts`, `check:production-server` | **MFA not implemented** (decision: IdP vs local TOTP); HTTPS is a deployment item |
 | SEC-032 | Validation, parameterized SQL, CORS, secrets, no sensitive data in logs or storage | Complete | `create.test.ts`, `m8Operations.test.ts` (request log), `security-review.md` §3 | Independent review recommended |
 | NFR-001 | Separate dev/staging/prod; no seed/reset in production | Partial | `operations.test.ts`, demo-exclusion check, `check:production-server`, `docs/operations/environments.md` | Staging and production do not exist |
@@ -175,6 +187,77 @@ Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR
 | D-006 | Complete | `dashboard.test.ts` |
 | D-007 | Partial | Revisions, Cancelled tasks, reopening, concurrency: complete and tested. **Upload scanning, SSO/MFA and backup targets: unresolved production decisions** |
 
+## Change requests CR1–CR6
+
+Acceptance criteria are as written in `docs/change-requests.md` §1. Evidence
+is the backend integration suite (real app and database) and the browser
+checks named below.
+
+| ID | Criterion (short) | Status | Evidence | Gap |
+| --- | --- | --- | --- | --- |
+| CR1-AC1 | Creating a user queues one invitation email, in the same transaction; a replay sends none | Complete | `invitations.test.ts`; audit matrix (`account.invitation_queued`) | — |
+| CR1-AC2 | Single-use 256-bit link; the raw token is in no table, queue, log or audit | Complete | `invitations.test.ts` (token hash matches; token absent from deliveries, jobs and audit) | — |
+| CR1-AC3 | Expires after 72 h, counted from sending; expired, used, superseded or deactivated links refused alike | Complete | `invitations.test.ts` (injected clock), `administration.test.ts` | — |
+| CR1-AC4 | Setting the password activates sign-in | Complete | `invitations.test.ts`, `e2e/cr1.spec.ts` | — |
+| CR1-AC5 | Resend supersedes; the user table shows invitation state | Complete | `invitations.test.ts`, `e2e/cr1.spec.ts` | — |
+| CR1-AC6 | Disabled or failed delivery is visible; manual "copy link" fallback | Complete | `invitations.test.ts` (failure, then fallback) | — |
+| CR1-AC7 | Reset links use the same email path | Complete | `invitations.test.ts` (reset ends sessions) | — |
+| CR1 link states | Opening a link never spends it; expired, used (or replaced) and invalid links are explained on opening; "Activate your account" for an invitation | Complete | `accountRecovery.test.ts`; `e2e/accountAccess.spec.ts` (three browsers) | — |
+| CR1 purpose and concurrency | An invitation only activates a pending account, a reset only resets an activated one; a disabled account can do neither; two simultaneous uses give one success | Complete | `accountRecovery.test.ts` | — |
+| CR1 rate limits | Link checks share the redemption limit; resends limited per account | Complete | `accountRecovery.test.ts` | — |
+| CR2-AC1 | SMTP settings managed by the administrator; password encrypted at rest, never returned, logged or audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
+| CR2 settings screen | Settings → Mail Server: a dedicated administrator page for the mail server, saved in the database, password write-only, connection check and test message | Complete | `e2e/mailServerSettings.spec.ts`; server behaviour in `email.test.ts` | — |
+| CR2-AC2 | Test email, with its result reported and audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | Real mail server not yet configured (D-EM-1) |
+| CR2-AC3 | Template wording edited; placeholders allowlisted; synthetic preview | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
+| CR2-AC4 | Each new alert queues an email once | Partial | `notificationEmails.test.ts`, `notificationEmailEvents.test.ts` (once per alert, at its reminder time) | Recipients follow the proposed D-EM-4 (responsible person only, extended in step 6), not yet confirmed |
+| CR2-AC5 | Access and validity re-checked at send time | Complete | `notificationEmails.test.ts` (read, rescheduled, transferred → suppressed) | — |
+| CR2-AC6 | Retries with backoff; permanent failure recorded and visible in job health | Complete | `email.test.ts`, `invitations.test.ts` | — |
+| CR2-AC7 | Settings and wording versioned and audited; administrators gain no commercial access; no message bodies stored | Complete | `email.test.ts`, audit matrix | — |
+| CR2-AC8 | No development, test or CI run reaches a real mail server; production refuses capture | Complete | test harness capture folders; `email.test.ts`; `check:production-server` | — |
+| CR2 connection check | Connects and signs in without sending; failures reported without credentials | Complete | `email.test.ts` (closed port; capture and none contact nothing); `e2e/cr2.spec.ts` | Against a real server once D-EM-1 is settled |
+| CR2 template history | Every saved version in full, newest first; earlier wording can be reused; restore to default | Complete | `email.test.ts`; `e2e/cr2.spec.ts` (`cr2-template-history.png`) | — |
+| CR2 delivery states | Queued, accepted by the mail server (never called "delivered"), failed with a sanitised reason, not sent | Complete | `email.test.ts`; `e2e/cr2.spec.ts` | — |
+| CR2 controlled retry | A failed email queued again by an administrator, at most three times, re-checked before sending, audited | Complete | `email.test.ts`, audit matrix | Not driven in the browser: a failure cannot be produced in capture mode |
+| CR2 job restart | A job left by a stopped worker is taken over after its lease and sends once; a duplicate job sends nothing | Complete | `email.test.ts` | At least once by design: a crash after sending but before recording can repeat one message (ADR 0011) |
+| CR2 content | Alert emails carry no commercial detail (D-EM-2) | Partial | `notificationEmails.test.ts` (no names, references, organizations or amounts) | Proposed default, not yet confirmed |
+| CR2 real sending | Email reaches real inboxes | Partial | — | **D-EM-1**: Penta's mail server, then `EMAIL_TRANSPORT=smtp` and a test email |
+| CR3-AC1 | Every role can change their own password from the top bar | Complete | `ownPassword.test.ts`, `e2e/cr3.spec.ts` | — |
+| CR3-AC2 | Current password required; policy; CSRF; per-account rate limit | Complete | `ownPassword.test.ts` | — |
+| CR3-AC3 | Other sessions end; this one continues without extending its limit | Complete | `ownPassword.test.ts` | — |
+| CR3-AC4 | Audited without password material; "password changed" email while email is on | Complete | `ownPassword.test.ts`, `email.test.ts` | — |
+| CR3-AC5 | Administrators still cannot set another user's password | Complete | `ownPassword.test.ts` | — |
+| CR3 forgot password | Offered only while email is sent; the same answer for every address; only active, activated accounts emailed, at most once per 15 minutes; the reset ends every session and never reactivates a disabled account; limited per address | Complete | `accountRecovery.test.ts`; `e2e/accountAccess.spec.ts` (three browsers) | Supersedes D-CR1-2 |
+| CR3 placement | Change password beside the profile chip in the top bar | Complete | `e2e/cr3.spec.ts` | There is no profile menu in the approved layout; a menu would be a redesign |
+| CR4-AC1 | One lead can lead several active sections | Complete | `sections.test.ts`, `e2e/cr45.spec.ts` | — |
+| CR4-AC2 | Every active section has exactly one active lead, in the database too | Complete | `sections.test.ts` (CHECK and deferred triggers, runtime role) | — |
+| CR4-AC3 | A lead sees the sections they lead now; a lost section is gone on the next request | Complete | `sections.test.ts` | — |
+| CR4-AC4 | Replace lead is atomic; an existing lead or a member salesperson | Complete | `sections.test.ts`, `administration.test.ts`, audit matrix | — |
+| CR4-AC5 | The only lead of an active section cannot be deactivated or demoted | Complete | `sections.test.ts` | — |
+| CR4-AC6 | Assignees, transfer task review, alerts, team, dashboard, search and lookups all use current sections | Complete | `sections.test.ts`, `dashboard.test.ts` (policy agreement), `notifications.test.ts` | — |
+| CR5-AC1 | A salesperson is assigned one or more sections; changes audited with history | Complete | `administration.test.ts`, `sections.test.ts`, audit matrix (`account.section_joined`/`left`) | — |
+| CR5-AC2 | Each opportunity has exactly one section, one the owner works in | Complete | `sections.test.ts`, `create.test.ts` | — |
+| CR5-AC3 | A salesperson sees only own records in current sections; former membership grants nothing | Complete | `sections.test.ts` (fail-closed) | — |
+| CR5-AC4 | Leaving a section is blocked while owning records there | Complete | `sections.test.ts`, `administration.test.ts` | — |
+| CR5-AC5 | Section chosen at creation when the owner has several | Complete | `sections.test.ts`, `e2e/cr45.spec.ts` | — |
+| CR5-AC6 | Existing users keep exactly their current scope | Complete | `sections.test.ts` (backfill scope equivalence); 0008 rehearsal | — |
+| CR6-AC1 | A separate Software Procurement area; cycles inherit the opportunity's owner, section, access and documents; nothing classified from titles | Complete | `procurement.test.ts` (access, transfers), `e2e/cr6.spec.ts`; 0011 rehearsal | Rebuilt to the step 5 instruction (ADR 0012) |
+| CR6-AC2 | Several cycles, one current; reissue only after the current one ends; explicit route | Complete | `procurement.test.ts` (cancellation and reissue), audit matrix | — |
+| CR6-AC3 | Milestones EOI → shortlisting → RFP → proposal → evaluation → Awarded / Unsuccessful / Cancelled, forward only | Complete | `procurement.test.ts`, database CHECKs | — |
+| CR6-AC4 | Milestones never move the pipeline; the offered stage, if accepted, follows the stage rules | Complete | `procurement.test.ts` (skip needs explanation, Awarded needs value, Lost reason), audit and atomicity matrices, `e2e/cr6.spec.ts` | — |
+| CR6-AC5 | EOI and RFP fields, clarification deadline, submission method, participation, separate technical/financial submissions, contacts and documents | Complete | `procurement.test.ts` | — |
+| CR6-AC6 | Late submissions recorded with a note; deadlines frozen under a recorded submission; Asia/Dhaka dates | Complete | `procurement.test.ts` (deadline boundaries at 72 h, Dhaka-date check) | — |
+| CR6-AC7 | Shortlisting before the RFP; direct RFP is management-only, documented, never with an EOI | Complete | `procurement.test.ts` (database refuses an invented EOI) | — |
+| CR6-AC8 | Version checks, retry protection, transactions, audit, protected documents | Complete | audit, retry, stale-version, atomicity and transfer-race matrices | — |
+| CR6-AC9 | Filters, deadline windows, stage history; scoped dashboard, report and CSV export, apart from goods tenders | Complete | `procurement.test.ts`, `e2e/cr6.spec.ts`; deadline alerts and reminders since step 6 (`notificationEmailEvents.test.ts`) | — |
+| CR2 step 6 events | EOI and RFP deadline reminders, team and management summaries, delivery-failure notices; security emails mandatory (service and database); no email for any other event | Complete | `notificationEmailEvents.test.ts`, `email.test.ts`, `e2e/cr2-step6.spec.ts`; migration 0012 rehearsal | Summaries are off until an administrator turns them on (proposed) |
+| CR2 step 6 recipients | Reminders to the person responsible; assignment to the new owner; one team summary per current lead however many sections; management summary to chosen accounts only; failures to administrators; salespeople never see colleagues' records by email | Partial | `notificationEmailEvents.test.ts`, `crAcceptance.test.ts` (6, 9) | D-EM-4 as extended, to be confirmed |
+| CR2 step 6 timing | Reminder hour (Asia/Dhaka), deadline reminder hours (1–72), daily or weekly summaries; versioned, audited; no late backlog | Complete | `notificationEmailEvents.test.ts`, audit matrix, `e2e/cr2-step6.spec.ts` | Earlier than 72 h would need FR-090 changed |
+| CR2 step 6 staleness | Completion, rescheduling, transfer, procurement changes, membership or lead changes and deactivation suppress queued reminders; every email re-checked at send; summaries scoped at send | Complete | `notificationEmailEvents.test.ts`, `crAcceptance.test.ts` (6) | — |
+| CR2 step 6 links | Email links carry no token, need sign-in, return to the linked page and are re-authorized | Complete | `notificationEmailEvents.test.ts`, `e2e/cr2-step6.spec.ts` | — |
+| CR integrated acceptance | The nine step 7 demonstrations, end to end: activation; expired/replaced/used links refused alike, nothing changed; a lead of two sections vs a third section on list, record, search, dashboard, export, documents and alerts; a salesperson in two sections; immediate access changes; no disclosure by queued email; EOI → proposal; goods tenders unchanged; email administration without secrets or commercial records | Complete | `crAcceptance.test.ts` (10 tests) | — |
+| CR upgrade rehearsal | Release-one data (seeded and processed by the release-one code) upgraded with the five production scripts; every account's scope identical before and after; counts unchanged; memberships backfilled; `db:migrate` then a no-op | Complete | step 7 rehearsal (`docs/progress.md`, `cr-release-handover.md` §2) | On a copy of real data only with Penta's authorization |
+| CR interface | Changed screens at 1440, 768 and 360 px without page-level horizontal scroll; their dialogs open from the keyboard, take focus and close with Escape; three browsers | Complete | `e2e/crInterface.spec.ts` (in `npm run test:browsers`) | Defect found and fixed: panel actions overflowed at 360 px (shared `Panel` header now wraps) |
+
 ## Unresolved, in one list
 
 1. **Production document storage and malware scanning** (SEC-010, AT-13, D-007) — release blocker.
@@ -182,3 +265,11 @@ Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR
 3. **AT-17** user acceptance and visual sign-off — needs Penta's people.
 4. Staging environment, and on it: capacity, restore drill, monitoring (NFR-001–003, NFR-010/011, AT-16).
 5. Product decisions: follow-up edit/reassign (FR-042); calendar view (FR-043); owner/section/organization selectors on the list (FR-022); who sees directory and export audit (FR-033); alert recipients and business-day start (FR-090); operational targets and retention (NFR-002/003).
+6. **Change requests:**
+   - Penta's mail server (D-EM-1); real email is off until it is configured.
+   - Confirming the email content (D-EM-2) and recipient (D-EM-4) defaults.
+7. **Test fixture:** the synthetic tender `DCR/PROC/2026/221` has a fixed
+   deadline of 8 October 2026. Since step 7 the `e2e/m5.spec.ts` browser
+   check answers the late-submission question the application correctly
+   asks after that date, so it passes again. The fixture itself is
+   unchanged; making seeded dates relative is still Penta's choice.

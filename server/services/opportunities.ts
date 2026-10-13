@@ -24,6 +24,10 @@ import {
   ACTIVITY_TYPE_LABELS,
   BID_STATUS_LABELS,
   DOCUMENT_CATEGORY_LABELS,
+  PARTICIPATION_DECISION_LABELS,
+  PROCUREMENT_MILESTONE_LABELS,
+  PROCUREMENT_ROUTE_LABELS,
+  PROPOSAL_FORMAT_LABELS,
   NOTICE_STATE_LABELS,
   BOARD_LANES,
   FOLLOW_UP_STATE_LABELS,
@@ -414,6 +418,29 @@ export interface CreateOpportunityCommand {
   initialFollowUpDueDate: string;
 }
 
+/**
+ * BR-001 as amended by CR4/CR5: the owner works in the chosen section, and the
+ * actor may assign records there. An owner the actor may not assign at all
+ * gets one answer for every reason, so a caller cannot learn whether an
+ * account exists; an assignable owner in the wrong section gets a field error.
+ */
+export async function assertEligibleOwner(db: Database, actor: Actor, ownerId: string, sectionId: string): Promise<void> {
+  const [here] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eligibleOwnerScope(actor, sectionId), eq(users.id, ownerId)))
+    .limit(1);
+  if (here) return;
+  const [elsewhere] = await db
+    .select({ id: users.id })
+    .from(users)
+    .innerJoin(sections, eligibleOwnerScope(actor, sections.id))
+    .where(eq(users.id, ownerId))
+    .limit(1);
+  if (!elsewhere) throw forbidden('You cannot assign an opportunity to that owner.');
+  throw validationFailed({ sectionId: 'Choose one of the sections the owner works in.' });
+}
+
 export async function createOpportunity(options: {
   db: Database;
   actor: Actor;
@@ -426,25 +453,9 @@ export async function createOpportunity(options: {
 
   // --- Validate proposed associations against the database, not the request ---
 
-  // BR-001: the owner must be an eligible active owner the actor may assign.
-  // One response for every rejection reason so an unauthorised caller cannot
-  // learn whether a given account exists.
-  const [owner] = await db
-    .select({ id: users.id, sectionId: users.sectionId })
-    .from(users)
-    .where(and(eligibleOwnerScope(actor), eq(users.id, command.ownerId)))
-    .limit(1);
-
-  if (!owner || !owner.sectionId) {
-    throw forbidden('You cannot assign an opportunity to that owner.');
-  }
-
-  // BR-001: the opportunity's section must equal its owner's section.
-  if (owner.sectionId !== command.sectionId) {
-    throw validationFailed({
-      sectionId: 'The section must match the selected owner’s section.',
-    });
-  }
+  // BR-001 (CR4/CR5): the owner must work in the chosen section, and the actor
+  // must be allowed to assign records there. Checked again under lock below.
+  await assertEligibleOwner(db, actor, command.ownerId, command.sectionId);
 
   const [organization] = await db
     .select({ id: organizations.id, archivedAt: organizations.archivedAt })
@@ -482,6 +493,13 @@ export async function createOpportunity(options: {
       .for('share')
       .limit(1);
     if (!current) throw validationFailed({ organizationId: 'Select a current procuring organization.' });
+
+    // Share-locks the owner so a concurrent membership removal or role change
+    // (which takes an update lock and then checks what the person owns) is
+    // serialised with this insert; eligibility is then re-read, in a fresh
+    // statement, after any such change has committed.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, command.ownerId)).for('share');
+    await assertEligibleOwner(tx, actor, command.ownerId, command.sectionId);
 
     const referenceResult = await tx.execute<{ reference: string }>(
       sql`SELECT 'OPP-' || lpad(nextval('opportunity_reference_seq')::text, 6, '0') AS reference`,
@@ -790,7 +808,7 @@ export async function listOpportunityHistory(options: {
 // ---------------------------------------------------------------------------
 
 /** Keys kept in audit data for context, not shown as field changes. */
-const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context', 'about', 'tenderId']);
+const HISTORY_CONTEXT_KEYS = new Set(['firstFollowUp', 'task', 'context', 'about', 'tenderId', 'template']);
 
 const ID_FIELDS = {
   user: ['ownerId', 'assignedUserId', 'managerId', 'leadUserId'],
@@ -870,6 +888,11 @@ const VALUE_LABELS: Record<string, Record<string, string>> = {
   bidStatus: BID_STATUS_LABELS,
   noticeState: NOTICE_STATE_LABELS,
   category: DOCUMENT_CATEGORY_LABELS,
+  milestone: PROCUREMENT_MILESTONE_LABELS,
+  route: PROCUREMENT_ROUTE_LABELS,
+  participation: PARTICIPATION_DECISION_LABELS,
+  proposalFormat: PROPOSAL_FORMAT_LABELS,
+  eoiOutcome: { shortlisted: 'Shortlisted', not_shortlisted: 'Not shortlisted' },
   scanState: { pending: 'Pending', clean: 'Clean', infected: 'Rejected (infected)', failed: 'Scan failed' },
 };
 

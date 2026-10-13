@@ -136,3 +136,35 @@ matrix, security review, capacity, interface quality, pilot handover) and
 never be presented as solved: production document storage and scanning,
 identity provider and MFA, and a staging environment. No production
 deployment or real data without explicit written authorization.
+
+Change requests CR1–CR6 (branch `cr-change-requests`, `docs/change-requests.md`,
+ADRs 0010–0012, migrations 0008–0012, each with a reviewed production script
+in `docs/operations/sql/`) supersede the single-section rules. The
+requirements and `Plan.md` §3 are amended in place. They were verified
+together in step 7: `server/tests/crAcceptance.test.ts`,
+`e2e/crInterface.spec.ts` and an upgrade rehearsal from release-one data.
+The release handover is in `docs/release/cr-release-handover.md`. The rules:
+
+- **Sections.** `sections.lead_user_id` is the only source of leadership. A
+  lead may lead several sections. Salespeople belong to sections through
+  `section_memberships`, and their scope also requires current membership.
+  `users.section_id` is legacy and unread.
+- **Email.** Account emails are queued inside the business transaction; all are sent by the
+  `email.send` job. Content is a link and dates (summaries: counts), never
+  commercial detail (D-EM-2). Alert emails go to the responsible person only
+  (D-EM-4); team summaries to current section leads, once each; management
+  summaries to chosen management accounts only; delivery failures to
+  administrators. Security emails cannot be turned off. Alert emails are
+  queued when due by `queueDueAlertEmails` (timing in
+  `email_notification_settings`), and every email is re-checked at send
+  (ADR 0011, step 6 addendum). Account link tokens are issued at send time.
+  `EMAIL_TRANSPORT=capture` is refused in production, and no mail server is
+  configured (D-EM-1). Never send real email from a test.
+- **Software Procurement (CR6).** `procurement_cycles` are children of an
+  opportunity (scope, lock order and documents follow it), with milestones
+  kept apart from the pipeline (`nextMilestones`,
+  `PROCUREMENT_PIPELINE_OFFERS` in `shared/enums.ts`). An accepted pipeline
+  offer goes through `changeStageInTransaction`, never a direct stage write.
+  The direct-RFP exception is `canApproveDirectRfp` (management). Deadline
+  metrics are `procurement*` in `metrics.ts`. 0010's workflow stages and
+  tender phases are retired: CHECKs refuse the leftover enum values.

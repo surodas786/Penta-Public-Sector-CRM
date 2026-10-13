@@ -1,6 +1,6 @@
 # Capacity and performance (NFR-010, NFR-011)
 
-**Date:** 06 October 2026. **Where:** a developer laptop, not staging.
+**Date:** 06 October 2026, re-run 12 October 2026 after the change requests. **Where:** a developer laptop, not staging.
 **Verdict:** within the proposed targets on this machine, after one measured
 optimization. **This does not replace a measurement on staging hardware**,
 which remains a release item.
@@ -102,6 +102,37 @@ the preview server started (4.7 s; the next four were 0.83–0.89 s) — a cold
 start of the local preview server, recorded rather than discarded.
 Bandwidth is emulated in the browser; real office networks, TLS and a real
 web server are not represented.
+
+## After change requests CR1–CR6 (12 October 2026)
+
+The same machine, dataset generator and workload were re-run on branch
+`cr-change-requests` (`load-after-change-requests.md`). The capacity dataset
+now also holds the section memberships that CR5 requires, so salespeople's
+scope includes the membership check and leads' scope goes through
+`sections.lead_user_id`. Every record is in the Standard workflow, because
+no Software Procurement cycles exist in it (the cycles are a separate table that adds no work to the measured screens). Email is not part of the
+workload: alert emails are queued inside existing transactions, and sending
+is a background job.
+
+| | M8, after optimization | After change requests |
+| --- | ---: | ---: |
+| Paced: requests, server errors | 2 575, 0 | 2 629, 0 |
+| Paced overall p50 / **p95** / p99 / max (ms) | 61 / **160** / 267 / 435 | 33 / **92** / 292 / 596 |
+| Paced dashboard p95 / max (ms) | 214 / 435 | 138 / 470 |
+| Saturation: requests (per second), server errors | 8 736 (97.1/s), 0 | 8 577 (95.3/s), 0 |
+| Saturation overall p50 / **p95** / p99 / max (ms) | 257 / **626** / 811 / 1 854 | 258 / **658** / 907 / 1 719 |
+| Saturation dashboard p95 / max (ms) | 872 / 1 854 | 1 029 / 1 719 |
+| Sign-in (argon2id), 30 sequential, p95 | 66–106 ms | 67 ms |
+| Notification scan of the whole dataset | 2.8–5.9 s | 4.4 s |
+
+**Verdict.** The target is still met in both phases, with no server errors
+and no request over 2 s.
+
+- **Paced phase.** It is faster than in M8. This is within the run-to-run
+  noise described above, not an improvement claimed for the change requests.
+- **Saturation phase.** The dashboard's p95 rose by about 160 ms. Every
+  request queues for the database pool in this phase, so the rise is within
+  the same noise. It is recorded here and should be watched on staging.
 
 ## Not measured, and why
 

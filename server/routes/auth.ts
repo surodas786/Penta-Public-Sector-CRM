@@ -9,11 +9,19 @@ import { Router, type Request, type RequestHandler, type Response } from 'expres
 import { eq } from 'drizzle-orm';
 
 import type { CurrentUserDto } from '../../shared/api.js';
-import { loginSchema, setPasswordSchema } from '../../shared/validation.js';
+import { changePasswordSchema, forgotPasswordSchema, linkStatusSchema, loginSchema, setPasswordSchema } from '../../shared/validation.js';
 import { GENERIC_LOGIN_FAILURE, type ConfiguredPassport } from '../auth/passport.js';
-import { destroySession, requireAuth, stampSessionLifetimes } from '../auth/sessionGuard.js';
+import {
+  SESSION_COOKIE_NAME,
+  destroySession,
+  requireAuth,
+  stampSessionLifetimes,
+} from '../auth/sessionGuard.js';
 import type { Database } from '../db/client.js';
 import { users } from '../db/schema.js';
+import type { EmailRuntime } from '../email/runtime.js';
+import { CSRF_COOKIE_NAME } from '../http/csrf.js';
+import { expireShadowingCookies } from '../http/duplicateCookies.js';
 import { ApiError, unauthenticated } from '../http/errors.js';
 import { parseOrThrow } from '../http/validate.js';
 import type { Actor } from '../policy/actor.js';
@@ -24,17 +32,25 @@ import {
   canTransferOpportunity,
   canViewTeam,
 } from '../policy/scope.js';
-import { redeemAccountLink } from '../services/accountTokens.js';
+import { inspectAccountLink, redeemAccountLink } from '../services/accountTokens.js';
+import { changeOwnPassword } from '../services/ownPassword.js';
+import { isSelfServiceResetAvailable, requestPasswordReset, RESET_REQUESTED_MESSAGE } from '../services/passwordRecovery.js';
+import { signalJobsEnqueued } from '../jobs/queue.js';
 
 export interface AuthRouterOptions {
   db: Database;
   passport: ConfiguredPassport;
   loginRateLimiter: RequestHandler;
   recoveryRateLimiter: RequestHandler;
+  passwordChangeRateLimiter: RequestHandler;
+  /** "Forgot your password?" requests, per address (CR3). */
+  forgotPasswordRateLimiter: RequestHandler;
+  email: EmailRuntime;
   csrfGuard: RequestHandler;
   generateCsrfToken: (req: Request, res: Response, options?: { overwrite?: boolean }) => string;
   idleMinutes: number;
   absoluteMinutes: number;
+  secureCookies: boolean;
 }
 
 export function toCurrentUserDto(actor: Actor): CurrentUserDto {
@@ -43,10 +59,7 @@ export function toCurrentUserDto(actor: Actor): CurrentUserDto {
     fullName: actor.fullName,
     email: actor.email,
     role: actor.role,
-    section:
-      actor.sectionId && actor.sectionName
-        ? { id: actor.sectionId, name: actor.sectionName, active: true }
-        : null,
+    sections: actor.sections.map((section) => ({ ...section, active: true })),
     capabilities: {
       salesRecords: canAccessSalesRecords(actor),
       createOpportunity: canCreateOpportunity(actor),
@@ -62,11 +75,42 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
   const { db, passport, loginRateLimiter, csrfGuard, generateCsrfToken } = options;
 
   /**
+   * Starts an authenticated session under a brand-new session id (session
+   * fixation defence). Used at sign-in and when a password change re-issues
+   * the caller's own session.
+   */
+  async function establishSession(
+    req: Request,
+    user: Express.User,
+    lifetimes: { userSessionVersion: number; absoluteExpiresAt?: number },
+  ): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      req.session.regenerate((regenerateError) => (regenerateError ? reject(regenerateError) : resolve()));
+    });
+    await new Promise<void>((resolve, reject) => {
+      req.login(user, (loginError) => (loginError ? reject(loginError) : resolve()));
+    });
+    stampSessionLifetimes(req, {
+      idleMinutes: options.idleMinutes,
+      absoluteMinutes: options.absoluteMinutes,
+      ...lifetimes,
+    });
+    req.session.insertOnSave = true;
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((saveError) => (saveError ? reject(saveError) : resolve()));
+    });
+  }
+
+  /**
    * Bootstraps a CSRF token before sign-in. Writing to the session here is what
    * gives an anonymous visitor a stable session id for the token to bind to.
    */
   router.get('/csrf', (req, res) => {
+    // Sign-in always starts here, so this is where stale copies of our
+    // cookies are removed; both are re-issued below in the same response.
+    expireShadowingCookies(req, res, [SESSION_COOKIE_NAME, CSRF_COOKIE_NAME], { secure: options.secureCookies });
     req.session.bootstrapped = true;
+    req.session.insertOnSave = true;
     res.json({ csrfToken: generateCsrfToken(req, res, { overwrite: true }) });
   });
 
@@ -102,27 +146,7 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
               return;
             }
 
-            // Session fixation defence: a brand-new session id for the
-            // authenticated session.
-            await new Promise<void>((resolve, reject) => {
-              req.session.regenerate((regenerateError) =>
-                regenerateError ? reject(regenerateError) : resolve(),
-              );
-            });
-
-            await new Promise<void>((resolve, reject) => {
-              req.login(user, (loginError) => (loginError ? reject(loginError) : resolve()));
-            });
-
-            stampSessionLifetimes(req, {
-              idleMinutes: options.idleMinutes,
-              absoluteMinutes: options.absoluteMinutes,
-              userSessionVersion: account.sessionVersion,
-            });
-
-            await new Promise<void>((resolve, reject) => {
-              req.session.save((saveError) => (saveError ? reject(saveError) : resolve()));
-            });
+            await establishSession(req, user, { userSessionVersion: account.sessionVersion });
 
             // The previous token was bound to the pre-login session id.
             const csrfToken = generateCsrfToken(req, res, { overwrite: true });
@@ -147,7 +171,7 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
           }
         });
         await destroySession(req);
-        res.clearCookie('penta.sid', { path: '/' });
+        res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
         res.status(204).end();
       } catch (error) {
         next(error);
@@ -166,6 +190,81 @@ export function createAuthRouter(options: AuthRouterOptions): Router {
         const { token, password } = parseOrThrow(setPasswordSchema, req.body);
         await redeemAccountLink({ db, token, password, requestId: req.requestId });
         res.status(204).end();
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * Says what an opened invitation or reset link can do, without spending it
+   * (CR1), so the page can explain an expired or used link before anyone
+   * types a password. The token travels in the body; rate limited with
+   * redemption.
+   */
+  router.post('/link-status', options.recoveryRateLimiter, csrfGuard, (req, res, next) => {
+    void (async () => {
+      try {
+        const { token } = parseOrThrow(linkStatusSchema, req.body);
+        res.json(await inspectAccountLink(db, token));
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /** Whether the sign-in page offers "Forgot your password?" (CR3). */
+  router.get('/recovery', (_req, res, next) => {
+    void (async () => {
+      try {
+        res.json({ selfServiceReset: await isSelfServiceResetAvailable(db, options.email) });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * "Forgot your password?" (CR3). The answer never depends on the address;
+   * the lookup runs in the background (services/passwordRecovery.ts).
+   */
+  router.post('/forgot-password', options.forgotPasswordRateLimiter, csrfGuard, (req, res, next) => {
+    void (async () => {
+      try {
+        const { email } = parseOrThrow(forgotPasswordSchema, req.body);
+        const { queued } = await requestPasswordReset(db, options.email, email);
+        if (queued) signalJobsEnqueued();
+        res.status(202).json({ message: RESET_REQUESTED_MESSAGE });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * Changes the signed-in account's own password (CR3). Every other session
+   * ends on its next request; this one continues under a new session id and
+   * its original absolute expiry, so the response carries a new CSRF token.
+   */
+  router.post('/password', requireAuth, options.passwordChangeRateLimiter, csrfGuard, (req, res, next) => {
+    void (async () => {
+      try {
+        const actor = req.actor;
+        if (!actor) throw unauthenticated();
+        const { currentPassword, newPassword } = parseOrThrow(changePasswordSchema, req.body);
+        const userSessionVersion = await changeOwnPassword({
+          db,
+          actor,
+          currentPassword,
+          newPassword,
+          requestId: req.requestId,
+        });
+        // The "password changed" email, if one was queued, can go now.
+        signalJobsEnqueued();
+        // Read before the session is regenerated, which discards it.
+        const { absoluteExpiresAt } = req.session;
+        await establishSession(req, req.user as Express.User, { userSessionVersion, absoluteExpiresAt });
+        res.status(200).json({ csrfToken: generateCsrfToken(req, res, { overwrite: true }) });
       } catch (error) {
         next(error);
       }

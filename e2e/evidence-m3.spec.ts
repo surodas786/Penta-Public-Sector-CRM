@@ -32,7 +32,9 @@ test('capture Milestone 3 screens', async ({ page }) => {
   const form = page.getByRole('dialog');
   await form.getByLabel('Full name').fill('Lamia Chowdhury');
   await form.getByLabel('Email').fill('lamia.chowdhury@example.com');
-  await form.getByLabel('Section').selectOption({ label: 'Government Applications' });
+  // Sections are a checklist since CR5; Government Applications only.
+  await form.getByLabel('Government Applications').check();
+  await form.getByLabel('Infrastructure & Security').uncheck();
   await shot('16-add-user-desktop-1440');
   await form.getByRole('button', { name: 'Add user' }).click();
   const link = page.getByRole('dialog');
@@ -50,7 +52,7 @@ test('capture Milestone 3 screens', async ({ page }) => {
 
   // --- The invited person's page (no sign-in needed) -----------------------
   await page.goto(url);
-  await expect(page.getByRole('heading', { name: 'Choose your password' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Activate your account' })).toBeVisible();
   await shot('19-set-password-desktop-1440');
 
   // --- Management --------------------------------------------------------------

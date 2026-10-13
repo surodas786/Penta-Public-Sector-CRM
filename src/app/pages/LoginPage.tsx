@@ -5,23 +5,37 @@
  * switcher. Built in the approved navy/teal palette with the same form
  * primitives as every other screen (FR-010, A.6 deviation 1).
  */
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { ApiRequestError } from '../../api/client.js';
+import { fetchRecoveryOptions } from '../../api/endpoints.js';
 import { Button } from '../../components/ui/Button';
 import { Field, inputCls } from '../../components/ui/FormFields';
 import { useAuth } from '../AuthContext.js';
+import { returnPath } from '../returnPath.js';
 
 export function LoginPage() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // CR3: offered only while this deployment sends email.
+  const [selfServiceReset, setSelfServiceReset] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchRecoveryOptions(controller.signal).then(
+      (options) => setSelfServiceReset(options.selfServiceReset),
+      () => setSelfServiceReset(false),
+    );
+    return () => controller.abort();
+  }, []);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -33,9 +47,9 @@ export function LoginPage() {
 
     try {
       await signIn(email, password);
-      // Send everyone to the role-aware landing route rather than assuming a
-      // sales destination: an administrator has no commercial screens at all.
-      navigate('/', { replace: true });
+      // Back to the page that asked for sign-in (an email link, say), else the
+      // role-aware landing route: an administrator has no commercial screens.
+      navigate(returnPath(location.state), { replace: true });
     } catch (error) {
       if (error instanceof ApiRequestError) {
         setFieldErrors(error.fieldErrors);
@@ -110,10 +124,15 @@ export function LoginPage() {
             {submitting ? 'Signing in…' : 'Sign in'}
           </Button>
 
-          <p className="text-[11.5px] leading-relaxed text-slate-500">
-            Forgotten your password? Contact your system administrator. Password recovery by email
-            is not enabled in this release.
-          </p>
+          {selfServiceReset ? (
+            <Link to="/forgot-password" className="text-[12.5px] font-semibold text-brand-dark hover:underline">
+              Forgot your password?
+            </Link>
+          ) : (
+            <p className="text-[11.5px] leading-relaxed text-slate-500">
+              Forgotten your password? Contact your system administrator.
+            </p>
+          )}
         </form>
       </div>
     </div>
