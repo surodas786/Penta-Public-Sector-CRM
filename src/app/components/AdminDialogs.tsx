@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { CheckIcon, CopyIcon, KeyRoundIcon } from 'lucide-react';
+import { CheckIcon, CopyIcon, KeyRoundIcon, MailIcon } from 'lucide-react';
 
 import type { AccountLinkDto, AdminSectionDto, AdminUserDto } from '../../../shared/api.js';
 import { ROLE_LABELS, USER_ROLES, type UserRole } from '../../../shared/enums.js';
@@ -241,10 +241,13 @@ export type ManualAccountLink = Extract<AccountLinkDto, { delivery: 'manual' }>;
 export function AccountLinkDialog({
   link,
   person,
+  notEmailed,
   onClose,
 }: {
   link: ManualAccountLink | null;
   person: string;
+  /** Why the link was not emailed, when the administrator did not choose to copy it. */
+  notEmailed?: string | undefined;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -274,6 +277,12 @@ export function AccountLinkDialog({
     >
       {link && (
         <div className="flex flex-col gap-3 text-[13px] text-slate-700">
+          {notEmailed && (
+            <p role="status" className="flex gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-700">
+              <MailIcon className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+              <span>{notEmailed}</span>
+            </p>
+          )}
           <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900">
             <KeyRoundIcon className="mt-0.5 h-4 w-4 shrink-0" />
             <p>

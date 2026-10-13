@@ -28,6 +28,8 @@ test('the administrator sets up the mail server under Settings → Mail Server',
   await expect(page).toHaveURL(/\/settings\/mail-server$/);
   await expect(page.getByRole('heading', { name: 'Mail Server', level: 1 })).toBeVisible();
   await expect(page.getByText('None stored')).toBeVisible();
+  // While delivery is off, the page says that a working test does not mean it is on.
+  await expect(page.getByText(/A test message is still sent, so a successful test does not mean this is on\./)).toBeVisible();
 
   // Turning delivery on without a server is refused, next to the field.
   await page.getByLabel('Send email from the CRM').check();
