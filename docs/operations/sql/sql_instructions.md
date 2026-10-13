@@ -183,3 +183,34 @@ then rerun the same script. A script that already ran refuses to run again
 
 More detail: `docs/operations/deployment-and-migrations.md` §3.1–§3.5 and
 ADRs 0010–0012.
+
+## 7. Maintenance script: removing an unused user account
+
+`remove_unused_user.sql` removes **one** account that was never used for any
+work, for example one created by mistake or an invitation never accepted.
+It is not a migration and records nothing in `drizzle.__drizzle_migrations`.
+
+| | |
+| --- | --- |
+| **Removes**, for that account only | The account; its invitation and reset links; its section memberships; its email delivery log rows; its in-app alerts; its retry-protection records; its sessions |
+| **Refuses**, changing nothing | An account that anything else in the database refers to (owned or created records, audited actions, administrative changes, and so on; found from the database's foreign keys, so future tables are covered); a section lead; the manager of a section lead; the last active System Administrator |
+| **Records** | `account.removed` in the administrative audit, with the name, email, role and your reason. Earlier audit events about the account are kept |
+
+For an account with history, use **Administration → Deactivate** instead:
+it ends access at once and keeps the history.
+
+Take a backup first (§3), then run as `penta_migrator`. The default is a
+**dry run**: it shows the account and what would be removed, and changes
+nothing.
+
+```bash
+# Dry run
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1   -v email=person@pentabd.com -v reason='Created by mistake'   -f remove_unused_user.sql
+
+# Remove: the same command plus -v apply=true
+psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1   -v email=person@pentabd.com -v reason='Created by mistake'   -v apply=true -f remove_unused_user.sql
+```
+
+The email address is matched without regard to case. The script is one
+transaction: a refusal or any error leaves the database exactly as it was.
+

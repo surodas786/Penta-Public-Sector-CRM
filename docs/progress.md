@@ -1151,7 +1151,67 @@ switch 2 is the one that is off.
 The earlier copied link stays valid until it expires or a new invitation
 replaces it. Deploying this commit adds only the explanations above.
 
-### 20. Next task
+### 20. Maintenance script: remove an unused user account (13 October 2026)
+
+**Request.** A script to remove a particular user from the database, kept
+with the other SQL scripts.
+
+**Added:** `docs/operations/sql/remove_unused_user.sql`, documented in
+`sql_instructions.md` §7. It is a psql script run by the database
+administrator as `penta_migrator`; it is not a migration, and no
+application code changed.
+
+**Why it removes only unused accounts.** The CRM keeps history on purpose:
+every foreign key to `users` refuses deletion, and the audit is
+append-only. An account that owns or created records, or performed any
+audited action, cannot be deleted without destroying that history. For such
+an account the script refuses, lists what refers to it, and points to
+**Administration → Deactivate**, which ends access at once.
+
+**What it does**
+
+- **Inputs:** `-v email=…` (matched without regard to case) and
+  `-v reason=…` are required.
+- **Dry run by default:** it shows the account and what would be removed,
+  then rolls back. `-v apply=true` commits.
+- **Refuses, changing nothing:**
+  - an unknown address;
+  - any account that something else refers to. This is found from the
+    database's own foreign-key catalog, so future tables are covered
+    automatically;
+  - a section lead;
+  - the manager of a section lead;
+  - the last active System Administrator.
+- **Removes**, for that account only:
+  - its invitation and reset links;
+  - its section memberships;
+  - its email delivery log rows;
+  - its in-app alerts;
+  - its retry-protection records;
+  - its sessions;
+  - the account itself.
+- **Audit:** it records `account.removed` (administrative, no actor, with
+  name, email, role and the reason) and keeps the earlier audit events.
+- **One transaction:** a refusal or any error leaves the database
+  unchanged.
+
+**Tested** on the seeded test database, with a never-activated invited
+account (membership, invitation link, delivery-log row and
+`account.created` audit) built as the application builds one:
+
+| Case | Result |
+| --- | --- |
+| No arguments | Usage message, nothing run |
+| Unknown address | Refused: "No account has the email address …" |
+| Salesperson with history (Rafiq; address given in mixed case) | Refused, listing 10 activities, 7 contacts, 4 + 4 follow-up references, 5 opportunities created, … |
+| Section lead (Nadia) | Refused: "leads 1 section(s): use Replace lead first" |
+| Dry run on the unused account | Listed 1 link, 1 membership, 1 delivery row, 0 alerts, 0 retry records, 0 sessions; ROLLBACK; the account still present |
+| `apply=true` | COMMIT. The account and its rows are gone, with no orphaned links. `account.created` is kept, and `account.removed` is added with reason "Created by mistake" and no actor |
+| Rerun | Refused: the address no longer exists |
+
+**Database.** No schema change.
+
+### 21. Next task
 
 **Staging UAT** (`docs/release/cr-release-handover.md`, `pilot-handover.md` §4):
 
