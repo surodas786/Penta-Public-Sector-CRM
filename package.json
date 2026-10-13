@@ -18,7 +18,7 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "test:smoke": "playwright test e2e/smoke.spec.ts e2e/m2.spec.ts && playwright test e2e/m3.spec.ts && playwright test e2e/m4.spec.ts && playwright test e2e/m5.spec.ts && playwright test e2e/m6.spec.ts && playwright test e2e/m7.spec.ts && playwright test e2e/cr3.spec.ts && playwright test e2e/cr45.spec.ts && playwright test e2e/cr2.spec.ts && playwright test e2e/cr2-step6.spec.ts && playwright test e2e/cr1.spec.ts && playwright test e2e/cr6.spec.ts && playwright test e2e/accountAccess.spec.ts",
+    "test:smoke": "playwright test e2e/smoke.spec.ts e2e/m2.spec.ts && playwright test e2e/m3.spec.ts && playwright test e2e/m4.spec.ts && playwright test e2e/m5.spec.ts && playwright test e2e/m6.spec.ts && playwright test e2e/m7.spec.ts && playwright test e2e/cr3.spec.ts && playwright test e2e/cr45.spec.ts && playwright test e2e/cr2.spec.ts && playwright test e2e/cr2-step6.spec.ts && playwright test e2e/mailServerSettings.spec.ts && playwright test e2e/cr1.spec.ts && playwright test e2e/cr6.spec.ts && playwright test e2e/accountAccess.spec.ts",
     "test:browsers": "tsx scripts/test-browsers.ts",
     "check:demo-exclusion": "tsx scripts/check-demo-exclusion.ts",
     "db:up": "docker compose up -d --wait",

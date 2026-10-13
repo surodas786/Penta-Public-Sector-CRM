@@ -506,7 +506,7 @@ function EmailSettingsDialog({
 
 // ---------------------------------------------------------------------------
 
-function TestEmailDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+export function TestEmailDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const submission = useSubmission();
   const [to, setTo] = useState('');
   const [result, setResult] = useState<EmailDeliveryDto | null>(null);

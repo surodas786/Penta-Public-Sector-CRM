@@ -20,6 +20,7 @@ import {
   LayoutDashboardIcon,
   LockIcon,
   LogOutIcon,
+  MailIcon,
   MenuIcon,
   ShieldCheckIcon,
   UsersIcon,
@@ -42,6 +43,8 @@ interface NavItem {
   show: boolean;
   /** Shown as a tooltip and in the unavailable screen. */
   reason?: string;
+  /** Listed under this heading, after the ungrouped items. */
+  group?: 'Settings';
 }
 
 export function ApiShell() {
@@ -95,7 +98,12 @@ export function ApiShell() {
       show: user.capabilities.teamView,
     },
     { to: '/administration', label: 'Administration', icon: ShieldCheckIcon, available: true, show: admin },
+    { to: '/settings/mail-server', label: 'Mail Server', icon: MailIcon, available: true, show: admin, group: 'Settings' as const },
   ].filter((item) => item.show);
+  const groups = [
+    { heading: null, items: items.filter((item) => !item.group) },
+    { heading: 'Settings', items: items.filter((item) => item.group === 'Settings') },
+  ].filter((group) => group.items.length > 0);
 
   const handleSignOut = async () => {
     await signOut();
@@ -134,37 +142,44 @@ export function ApiShell() {
 
         {/* The named landmark is the navigation itself, not the surrounding panel. */}
         <nav className="flex-1 overflow-y-auto px-2.5 py-3" aria-label="Main navigation">
-          <ul className="flex flex-col gap-0.5">
-            {items.map(({ to, label, icon: Icon, available, reason }) => (
-              <li key={to}>
-                {available ? (
-                  <NavLink
-                    to={to}
-                    onClick={() => setMobileOpen(false)}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
-                        isActive ? 'bg-brand text-white' : 'text-slate-300 hover:bg-white/5 hover:text-white'
-                      }`
-                    }
-                  >
-                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    {label}
-                  </NavLink>
-                ) : (
-                  <span
-                    className="flex cursor-not-allowed items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-slate-500"
-                    title={reason}
-                    aria-disabled="true"
-                  >
-                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span className="flex-1">{label}</span>
-                    <LockIcon className="h-3 w-3 shrink-0 text-slate-600" aria-hidden="true" />
-                    <span className="sr-only">Not available yet. {reason}</span>
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
+          {groups.map((group) => (
+            <div key={group.heading ?? 'main'} className={group.heading ? 'mt-4' : undefined}>
+              {group.heading && (
+                <p className="px-3 pb-1 text-[10.5px] font-bold uppercase tracking-wide text-navy-muted">{group.heading}</p>
+              )}
+              <ul className="flex flex-col gap-0.5">
+                {group.items.map(({ to, label, icon: Icon, available, reason }) => (
+                  <li key={to}>
+                    {available ? (
+                      <NavLink
+                        to={to}
+                        onClick={() => setMobileOpen(false)}
+                        className={({ isActive }) =>
+                          `flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
+                            isActive ? 'bg-brand text-white' : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                          }`
+                        }
+                      >
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        {label}
+                      </NavLink>
+                    ) : (
+                      <span
+                        className="flex cursor-not-allowed items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium text-slate-500"
+                        title={reason}
+                        aria-disabled="true"
+                      >
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className="flex-1">{label}</span>
+                        <LockIcon className="h-3 w-3 shrink-0 text-slate-600" aria-hidden="true" />
+                        <span className="sr-only">Not available yet. {reason}</span>
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         <div className="border-t border-white/10 px-5 py-3 text-[10.5px] leading-relaxed text-[#7489A8]">

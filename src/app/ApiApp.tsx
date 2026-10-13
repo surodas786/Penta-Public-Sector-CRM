@@ -17,6 +17,7 @@ import { OpportunitiesPage } from './pages/OpportunitiesPage.js';
 // Screens most accounts never open load on demand, keeping them out of the
 // bundle every salesperson downloads.
 const AdministrationPage = lazy(() => import('./pages/AdministrationPage.js').then((m) => ({ default: m.AdministrationPage })));
+const MailServerSettingsPage = lazy(() => import('./pages/MailServerSettingsPage.js').then((m) => ({ default: m.MailServerSettingsPage })));
 const SetPasswordPage = lazy(() => import('./pages/SetPasswordPage.js').then((m) => ({ default: m.SetPasswordPage })));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage.js').then((m) => ({ default: m.ForgotPasswordPage })));
 const OpportunityDetailPage = lazy(() =>
@@ -111,6 +112,15 @@ function AppRoutes() {
               element={
                 <Lazy>
                   <AdministrationPage />
+                </Lazy>
+              }
+            />
+            {/* Settings → Mail Server (CR2): the administrator's mail server page. */}
+            <Route
+              path="settings/mail-server"
+              element={
+                <Lazy>
+                  <MailServerSettingsPage />
                 </Lazy>
               }
             />

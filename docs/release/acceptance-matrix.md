@@ -20,7 +20,7 @@ before it can be. Nothing is marked complete because a file or table exists.
 
 Summary: **Complete 76 · Partial 18 · Unresolved 1** (95 identifiers; every FR, BR, SEC, NFR, AT and D identifier in the requirements, checked by script). Two of the partial items — SEC-010 and SEC-031 (MFA) — contain release blockers.
 
-Change requests: **47 rows. 43 complete, 4 partial.** That is 37 acceptance
+Change requests: **48 rows. 44 complete, 4 partial.** That is 37 acceptance
 criteria, two email rows (content and real sending), five step 6 rows
 (notification email events) and three step 7 rows (integrated acceptance,
 upgrade rehearsal, interface). The partial rows wait on Penta's mail server
@@ -206,6 +206,7 @@ checks named below.
 | CR1 purpose and concurrency | An invitation only activates a pending account, a reset only resets an activated one; a disabled account can do neither; two simultaneous uses give one success | Complete | `accountRecovery.test.ts` | — |
 | CR1 rate limits | Link checks share the redemption limit; resends limited per account | Complete | `accountRecovery.test.ts` | — |
 | CR2-AC1 | SMTP settings managed by the administrator; password encrypted at rest, never returned, logged or audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
+| CR2 settings screen | Settings → Mail Server: a dedicated administrator page for the mail server, saved in the database, password write-only, connection check and test message | Complete | `e2e/mailServerSettings.spec.ts`; server behaviour in `email.test.ts` | — |
 | CR2-AC2 | Test email, with its result reported and audited | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | Real mail server not yet configured (D-EM-1) |
 | CR2-AC3 | Template wording edited; placeholders allowlisted; synthetic preview | Complete | `email.test.ts`, `e2e/cr2.spec.ts` | — |
 | CR2-AC4 | Each new alert queues an email once | Partial | `notificationEmails.test.ts`, `notificationEmailEvents.test.ts` (once per alert, at its reminder time) | Recipients follow the proposed D-EM-4 (responsible person only, extended in step 6), not yet confirmed |

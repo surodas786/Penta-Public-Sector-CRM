@@ -1015,7 +1015,64 @@ order, checksums and instructions are in
   monitoring on staging, Safari and mobile browsers, screen readers, and
   AT-17 sign-off.
 
-### 18. Next task
+### 18. Settings → Mail Server screen (13 October 2026)
+
+**Instruction.** Rather than hard-coding the mail server, give the
+administrator a screen under **Settings → Mail Server**, in the application
+theme, saving the values in the database. Change no other feature.
+
+**Finding.** The mail server was already not hard-coded. Since CR2 step 3,
+its values have been saved in the `email_settings` table (migration 0009)
+through the Email delivery panel's dialog on the Administration page. This
+step therefore adds the dedicated screen and **no table**: the existing
+table, endpoint, validation, encryption, version check and audit are reused
+unchanged.
+
+**What was built**
+
+| Area | Change |
+| --- | --- |
+| Navigation | The administrator's sidebar gains a **Settings** heading with **Mail Server** (`/settings/mail-server`). Only the System Administrator sees it; the route sits inside the existing administrator-only guard, and other roles see the standard "No access to account administration" panel |
+| Screen (`src/app/pages/MailServerSettingsPage.tsx`) | Uses the existing page header, panels, fields, buttons and the navy/teal theme tokens. **Delivery** (on/off). **Server** (host, port, connection security). **Sign-in** (user name, write-only password, remove the stored password). **Sender** (name, address, reply-to). Save and Discard changes, with an unsaved-changes note. A side column shows delivery on/off, this server's `EMAIL_TRANSPORT` mode, whether a password is stored and readable, and who last changed it. It also has **Check connection** and **Send test email** (the existing test dialog, now exported from `EmailAdministration.tsx`). Stacks to one column on narrow screens |
+| Server | No change: `GET`/`PUT /api/admin/email/settings`, `POST /api/admin/email/verify` and `POST /api/admin/email/test` are reused, with their administrator checks, validation (delivery needs host, port and sender), stale-save conflict (409), AES-256-GCM password storage and audit (`email.settings_updated`, password recorded only as "replaced" or "removed") |
+| Unchanged | The Email delivery panel on the Administration page still works as before; both edit the same saved settings. `EMAIL_TRANSPORT` and `EMAIL_SECRET_KEY` stay in the server environment on purpose: the first is the deployment's permission to send at all, and the second is the key that protects the stored password, which must never sit in the database it protects |
+
+**Database.** No schema change and **no production SQL script** is needed:
+`email_settings` already exists in production once
+`0009_email_settings_templates_and_deliveries.production.sql` is applied
+(`docs/operations/sql/sql_instructions.md`).
+
+**Tests**
+
+- **`e2e/mailServerSettings.spec.ts` (new, added to `test:smoke`):**
+  - the administrator opens Settings → Mail Server from the sidebar;
+  - turning delivery on without a server is refused next to the field;
+  - the settings save, and a reload shows them, with the password field
+    empty, the page never containing the typed password, and "Stored,
+    encrypted" shown;
+  - the connection check reports capture mode;
+  - a test message is captured;
+  - at 360 px there is no horizontal scroll;
+  - management has no Mail Server link and sees the access-denied panel at
+    the address.
+
+  Evidence: `docs/evidence/cr/mail-server-settings-1440.png` and
+  `mail-server-settings-360.png`.
+- **First run:** 2 failures, both in the new test: a sign-in field label,
+  and an assertion spanning two elements. Both fixed; then 2 of 2.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `e2e/mailServerSettings.spec.ts` | 2 passed |
+| Regression browser checks | `cr2` 1, `cr2-step6` 2, `crInterface` 2 and `m3` 2 passed |
+| `npm run build` | Pass, with demo exclusion |
+| `npm test` | Not rerun: no server, shared or database code changed |
+
+### 19. Next task
 
 **Staging UAT** (`docs/release/cr-release-handover.md`, `pilot-handover.md` §4):
 
