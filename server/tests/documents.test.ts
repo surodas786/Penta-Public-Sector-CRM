@@ -16,7 +16,7 @@ import { CSRF_HEADER, FILE_NAME_HEADER } from '../../shared/api.js';
 import { createDocumentServices } from '../app.js';
 import { FixedClock, resetClock, setClock } from '../clock.js';
 import { auditEvents, documentRevisions, documents, documentUploads, opportunities } from '../db/schema.js';
-import type { DocumentScanner } from '../documents/scanner.js';
+import { ScannerUnreachableError, type DocumentScanner } from '../documents/scanner.js';
 import { LocalDocumentStorage } from '../documents/storage.js';
 import { cleanupAbandonedUploads, scanPendingRevisions } from '../services/documents.js';
 import {
@@ -356,6 +356,28 @@ describe('documents', () => {
       }
     });
 
+    it('keeps a file pending, not failed, while the scanner is down, and scans it once it is back', async () => {
+      const down: DocumentScanner = {
+        name: 'clamav',
+        available: true,
+        scan: () => Promise.reject(new ScannerUnreachableError('clamd is not running')),
+      };
+      const outage = createTestApp({ documentScanner: down });
+      try {
+        const rafiq = await signIn(outage.app, emails.salesGA1);
+        const document = await addDocument(outage, rafiq, ids.oppRafiq, 'Proposal.pdf', PDF);
+        expect(document.latest.scanState).toBe('pending');
+        expect((await download(rafiq, document.latest.id)).status).toBe(409);
+
+        const recovered = createDocumentServices(outage.database, outage.config);
+        expect(await scanPendingRevisions(recovered, 'test-maintenance')).toBe(1);
+        expect((await revision(document.latest.id)).scanState).toBe('clean');
+        expect((await download(rafiq, document.latest.id)).status).toBe(200);
+      } finally {
+        await outage.close();
+      }
+    });
+
     it('refuses the test scanner in production configuration', async () => {
       const { loadServerConfig } = await import('../env.js');
       const saved = { ...process.env };
@@ -370,6 +392,14 @@ describe('documents', () => {
         expect(() => loadServerConfig()).toThrow(/must not be used in production/);
         process.env.DOCUMENT_SCANNER = 'none';
         expect(loadServerConfig().documents.scanner).toBe('none');
+        expect(loadServerConfig().documents.clamav).toBeUndefined();
+        Object.assign(process.env, { DOCUMENT_SCANNER: 'clamav', CLAMAV_HOST: 'clamd.internal', CLAMAV_PORT: '3311' });
+        expect(loadServerConfig().documents).toMatchObject({
+          scanner: 'clamav',
+          clamav: { host: 'clamd.internal', port: 3311, timeoutMs: 60_000 },
+        });
+        process.env.DOCUMENT_SCANNER = 'clamscan';
+        expect(() => loadServerConfig()).toThrow(/none, test or clamav/);
       } finally {
         for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
         Object.assign(process.env, saved);

@@ -41,7 +41,8 @@
     "ops:backup": "tsx scripts/ops/backup.ts",
     "ops:restore": "tsx scripts/ops/restore.ts",
     "ops:restore-drill": "tsx scripts/ops/restore-drill.ts",
-    "ops:create-first-administrator": "tsx scripts/ops/create-first-administrator.ts"
+    "ops:create-first-administrator": "tsx scripts/ops/create-first-administrator.ts",
+    "ops:check-scanner": "tsx scripts/ops/check-scanner.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "2.2.1",

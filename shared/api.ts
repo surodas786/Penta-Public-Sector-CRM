@@ -620,7 +620,7 @@ export interface DocumentPolicyDto {
   maxUploadBytes: number;
   acceptedExtensions: string[];
   /** `none` means files are stored but stay unavailable (no scanner configured). */
-  scanner: 'none' | 'test';
+  scanner: 'none' | 'test' | 'clamav';
 }
 
 /** Header carrying the original filename of a raw upload, URI-encoded. */

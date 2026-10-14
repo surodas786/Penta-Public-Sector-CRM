@@ -171,3 +171,43 @@ implementation** behind adapters:
   the real scanner once chosen.
 - **Limits:** 25 MB per file is the configured default
   (`DOCUMENT_MAX_UPLOAD_MB`); a per-opportunity or per-user quota is not set.
+
+## Addendum (2026-10-14): ClamAV scanner and server-disk storage
+
+Penta asked for a working production upload path. Chosen for a single API
+server:
+
+- **Storage: server disk.** The existing `LocalDocumentStorage`, with
+  `DOCUMENT_STORAGE_DIR` an absolute private directory (`/var/lib/penta-crm/documents`,
+  owner the API user, mode 700), backed up with the database
+  (`backup-and-restore.md`). Object storage remains the route if the API ever
+  runs on more than one server.
+- **Scanning: ClamAV.** `DOCUMENT_SCANNER=clamav` sends each file to a clamd
+  daemon over TCP with the INSTREAM command (`ClamAvScanner` in
+  `server/documents/scanner.ts`; `CLAMAV_HOST`, `CLAMAV_PORT`,
+  `CLAMAV_TIMEOUT_SECONDS`). clamd runs on the same server, bound to
+  127.0.0.1, with `freshclam` keeping signatures current. Verdicts are
+  recorded as `clamav`.
+- **Outage versus failure.** A scanner that cannot be reached, or does not
+  answer within the timeout, throws `ScannerUnreachableError`: the file
+  stays `pending` and the 15-minute maintenance retries it. Anything else that
+  is not a verdict (a clamd `ERROR` reply, such as a file over its
+  `StreamMaxLength`, or a dropped connection) marks the file `failed`, never
+  clean. A failed file is not rescanned; the user uploads a new revision.
+- **No on-access scanning of the storage directory.** An antivirus that
+  deletes or locks files there would break uploads (observed with a
+  workstation antivirus during verification); the CRM scans every file
+  itself and quarantines infected ones.
+
+Verified: the adapter against the clamd wire protocol
+(`clamavScanner.test.ts`), an outage leaving files pending
+(`documents.test.ts`), and a real clamd 1.x daemon (`clamav/clamav` image):
+ordinary text, PDF, DOCX, XLSX, PNG and a 25 MB file clean, the EICAR test
+file infected, a file over clamd's stream limit `failed`, and a PDF uploaded
+through the app scanned `clean` by `clamav` and downloaded.
+
+Still open: the setup has not been carried out on the production server
+(`docs/operations/document-upload-setup.md` is the procedure); encryption at
+rest, retention and legal hold, and per-user quotas are not decided; PDF
+active content and embedded OLE objects are inspected only as far as
+ClamAV's own signatures and heuristics go.

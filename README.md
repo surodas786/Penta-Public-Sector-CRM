@@ -79,12 +79,14 @@ downloaded only after a clean scan:
 | --- | --- |
 | `none` (default if unset) | Files are stored but stay **pending** and cannot be downloaded |
 | `test` (as in `.env.example`) | Development **test** scanner: it flags the harmless EICAR test string and nothing else. It is not malware scanning, and the server refuses to start with it when `NODE_ENV=production` |
+| `clamav` | A ClamAV daemon at `CLAMAV_HOST`:`CLAMAV_PORT` (default `127.0.0.1:3310`). For production; `npm run ops:check-scanner` checks the daemon |
 
 `DOCUMENT_MAX_UPLOAD_MB` (default 25) and `DOCUMENT_UPLOAD_TTL_MINUTES`
 (default 60) are configurable. The API removes abandoned uploads every 15
 minutes; `npm run documents:maintain` does it once and retries pending scans.
-Production storage and scanning have **not** been chosen — see
-[`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
+Production setup (storage directory and ClamAV, step by step):
+[`docs/operations/document-upload-setup.md`](docs/operations/document-upload-setup.md);
+the decision is in [`docs/adr/0006-tenders-and-documents.md`](docs/adr/0006-tenders-and-documents.md).
 
 ### Background jobs: notifications and exports
 

@@ -13,6 +13,7 @@ was and was not.
 | [deployment-and-migrations.md](deployment-and-migrations.md) | Build, release, database migrations, rollback |
 | [monitoring.md](monitoring.md) | Health and readiness probes, request log, background-job checks, what to alert on |
 | [backup-and-restore.md](backup-and-restore.md) | Consistent encrypted backup of database and documents; restore; the drill |
+| [document-upload-setup.md](document-upload-setup.md) | Document storage directory and the ClamAV scanner, step by step |
 
 ## Proposed operational targets — for Penta to confirm
 

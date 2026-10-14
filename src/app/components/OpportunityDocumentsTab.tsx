@@ -74,7 +74,9 @@ function uploadPolicyText(policy: DocumentPolicyDto | null): string | undefined 
   const scanning =
     policy.scanner === 'none'
       ? 'No malware scanner is configured, so uploaded files are kept but cannot be downloaded yet.'
-      : 'Checked by the development test scanner before download — this is not real malware scanning.';
+      : policy.scanner === 'clamav'
+        ? 'Each file is scanned for malware and can be downloaded once the scan is clean.'
+        : 'Checked by the development test scanner before download — this is not real malware scanning.';
   return `Stored privately on the server. PDF, DOCX, XLSX, PPTX, TXT, CSV, PNG or JPEG, up to ${formatFileSize(policy.maxUploadBytes)}. ${scanning}`;
 }
 
