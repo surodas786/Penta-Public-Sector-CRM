@@ -92,6 +92,13 @@
       "when": 1791867164750,
       "tag": "0012_notification_email_events",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791973485721,
+      "tag": "0013_solution_category_amc_renewal",
+      "breakpoints": true
     }
   ]
 }

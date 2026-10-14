@@ -1,0 +1,11 @@
+-- Migration 0013: solution category "AMC / Renewal".
+--
+-- Additive. solution_category gains 'amc_renewal' (annual maintenance
+-- contracts and renewals), placed before 'other'. No existing row changes.
+-- The new value cannot be used until this transaction commits; nothing here
+-- uses it.
+--
+-- Rollback: PostgreSQL cannot drop an enum value. Only possible while no
+-- opportunity uses it (move any to another category first), by recreating
+-- the type without 'amc_renewal' and re-pointing opportunities.solution_category.
+ALTER TYPE "public"."solution_category" ADD VALUE 'amc_renewal' BEFORE 'other';

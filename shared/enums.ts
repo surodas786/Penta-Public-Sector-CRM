@@ -144,6 +144,7 @@ export const SOLUTION_CATEGORIES = [
   'cloud_infrastructure',
   'cybersecurity',
   'system_integration',
+  'amc_renewal',
   'other',
 ] as const;
 export type SolutionCategory = (typeof SOLUTION_CATEGORIES)[number];
@@ -155,6 +156,7 @@ export const SOLUTION_CATEGORY_LABELS: Record<SolutionCategory, string> = {
   cloud_infrastructure: 'Cloud & Infrastructure',
   cybersecurity: 'Cybersecurity',
   system_integration: 'System Integration',
+  amc_renewal: 'AMC / Renewal',
   other: 'Other',
 };
 
