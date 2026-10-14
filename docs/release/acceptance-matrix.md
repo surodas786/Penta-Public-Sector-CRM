@@ -100,7 +100,7 @@ upgrade rehearsal, interface). The partial rows wait on Penta's mail server
 | ID | Requirement | Status | Evidence | Gap |
 | --- | --- | --- | --- | --- |
 | FR-060 | Document fields; upload only with edit rights | Complete | `documents.test.ts` | — |
-| SEC-010 | Private storage; types; 25 MB; names; keys; no executables/macros; scan before available | **Partial** | `documents.test.ts` with the TEST scanner; `check:production-server` (test scanner refused) | **No production storage or malware scanner** (ADR 0006) — release blocker |
+| SEC-010 | Private storage; types; 25 MB; names; keys; no executables/macros; scan before available | **Partial** | `documents.test.ts` with the TEST scanner; `clamavScanner.test.ts`; `check:production-server` (test scanner refused) | Server disk and ClamAV implemented (ADR 0006 addendum, `clamavScanner.test.ts`); **not yet set up and checked on the production server** — release blocker |
 | SEC-011 | Authenticated, scoped downloads; safe headers; no public URLs | Complete | `documents.test.ts` | — |
 | FR-061 | Revisions, metadata, management archive with reason | Complete | `documents.test.ts` | — |
 | FR-062 | Audit of create/edit, transitions, tasks, transfers, links, revisions, accounts, exports | Complete | `m7MutationControls.test.ts` (matrix + completeness check) | — |
@@ -260,7 +260,7 @@ checks named below.
 
 ## Unresolved, in one list
 
-1. **Production document storage and malware scanning** (SEC-010, AT-13, D-007) — release blocker.
+1. **Production document storage and malware scanning** (SEC-010, AT-13, D-007) — release blocker. Server disk and ClamAV are implemented (ADR 0006 addendum); open until set up and checked on the production server (`docs/operations/document-upload-setup.md`).
 2. **Identity provider and MFA for privileged roles** (SEC-030, SEC-031) — release blocker.
 3. **AT-17** user acceptance and visual sign-off — needs Penta's people.
 4. Staging environment, and on it: capacity, restore drill, monitoring (NFR-001–003, NFR-010/011, AT-16).

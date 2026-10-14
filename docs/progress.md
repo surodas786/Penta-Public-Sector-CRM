@@ -16,6 +16,14 @@ unresolved release blockers (Milestone 8, §8). Sections, newest first:
 Change requests · Milestone 8 · 7 · 6 · 5 · 4 · 3 · 2 · Milestone 1 handover
 review · 1.
 
+**14 October 2026 — after step 7.** Solution category "AMC / Renewal"
+(migration 0013, production script in `docs/operations/sql/`). Document
+scanning: a ClamAV adapter (`DOCUMENT_SCANNER=clamav`, ADR 0006 addendum)
+with server-disk storage, verified against a real clamd locally; a scanner
+outage now leaves files pending for retry instead of failed. Setup procedure:
+`docs/operations/document-upload-setup.md`. The document blocker stays open
+until that procedure is carried out and checked on the production server.
+
 ---
 
 ## Change requests CR1–CR6 — assessment

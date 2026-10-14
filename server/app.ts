@@ -76,7 +76,7 @@ export function createDocumentServices(
   return {
     db: database.db,
     storage: overrides.storage ?? new LocalDocumentStorage(config.documents.storageDir),
-    scanner: overrides.scanner ?? createScanner(config.documents.scanner),
+    scanner: overrides.scanner ?? createScanner(config.documents),
     maxUploadBytes: config.documents.maxUploadBytes,
     uploadTtlMinutes: config.documents.uploadTtlMinutes,
   };

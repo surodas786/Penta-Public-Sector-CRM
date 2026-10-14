@@ -31,8 +31,10 @@ async function main(): Promise<void> {
     console.warn(
       'DOCUMENT_SCANNER=none: uploaded documents are stored but stay unavailable until a scanner is configured.',
     );
-  } else {
+  } else if (config.documents.scanner === 'test') {
     console.warn('DOCUMENT_SCANNER=test: development test scanner only. It does not detect malware.');
+  } else if (config.documents.clamav) {
+    console.log(`DOCUMENT_SCANNER=clamav: scanning documents with clamd at ${config.documents.clamav.host}:${config.documents.clamav.port}.`);
   }
   const documentServices = createDocumentServices(database, config);
   const maintainDocuments = () => {

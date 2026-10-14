@@ -37,8 +37,9 @@ is missing or unsafe. `.env.example` documents each one for development
 | `PORT`, `HOST` | e.g. `4800`, `127.0.0.1` | The API listens behind the reverse proxy; `HOST` defaults to `0.0.0.0` in production |
 | `SESSION_SECRET`, `CSRF_SECRET` | 64 random hex characters each, different | From the secret store. Placeholders and values under 32 characters are refused |
 | `SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_MINUTES` | `30`, `720` | SEC-031 defaults |
-| `DOCUMENT_STORAGE_DIR` | private directory outside the web root | Local storage only until ADR 0006 is resolved |
-| `DOCUMENT_SCANNER` | `none` until a real scanner exists | `test` is refused in production |
+| `DOCUMENT_STORAGE_DIR` | private directory outside the web root | Local disk, one API server (ADR 0006). Setup: document-upload-setup.md |
+| `DOCUMENT_SCANNER` | `clamav` once clamd is installed and checked; `none` until then | `test` is refused in production |
+| `CLAMAV_HOST`, `CLAMAV_PORT`, `CLAMAV_TIMEOUT_SECONDS` | `127.0.0.1`, `3310`, `60` | Read only with `DOCUMENT_SCANNER=clamav` |
 | `DOCUMENT_MAX_UPLOAD_MB`, `DOCUMENT_UPLOAD_TTL_MINUTES` | `25`, `60` | SEC-010 defaults |
 | `JOBS_ENABLED`, `JOBS_POLL_SECONDS` | `true`, `15` — or `false` with a scheduler running `npm run jobs:run` | See monitoring.md |
 | `REPORT_EXPORT_TTL_HOURS`, `REPORT_EXPORT_MAX_ROWS` | `24`, `50000` | |
@@ -65,7 +66,10 @@ CSRF_SECRET=<64 hex, from secret store>
 SESSION_IDLE_MINUTES=30
 SESSION_ABSOLUTE_MINUTES=720
 DOCUMENT_STORAGE_DIR=/var/lib/penta-crm/documents
-DOCUMENT_SCANNER=none
+DOCUMENT_SCANNER=clamav
+CLAMAV_HOST=127.0.0.1
+CLAMAV_PORT=3310
+CLAMAV_TIMEOUT_SECONDS=60
 DOCUMENT_MAX_UPLOAD_MB=25
 DOCUMENT_UPLOAD_TTL_MINUTES=60
 JOBS_ENABLED=true

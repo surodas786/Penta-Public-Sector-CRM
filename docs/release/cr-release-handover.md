@@ -200,8 +200,9 @@ Everything that sends email runs from the durable `background_jobs` table:
 set):
 
 1. Production document storage and malware scanning (SEC-010, AT-13,
-   D-007). The only scanner is the development TEST scanner, refused in
-   production.
+   D-007). Server disk and a ClamAV scanner are implemented (ADR 0006
+   addendum); open until set up and checked on the production server
+   (`docs/operations/document-upload-setup.md`).
 2. Identity provider and MFA for privileged roles (SEC-030, SEC-031).
 3. A staging environment, and on it: capacity, restore drill and monitoring
    (NFR-001–003, NFR-010/011, AT-16).

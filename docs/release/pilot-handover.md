@@ -196,7 +196,7 @@ local server, so emails are written as files to `EMAIL_CAPTURE_DIR`
 
 | # | Blocker | Owner | What unblocks it |
 | --- | --- | --- | --- |
-| 1 | **Production document storage and malware scanning** | Penta (IT / security) | Choose private object storage and a scanning service; then integration, tests and review (ADR 0006) |
+| 1 | **Production document storage and malware scanning** | Penta (IT / security) | Server disk and ClamAV are implemented (ADR 0006 addendum). Set them up and check them on the server: `docs/operations/document-upload-setup.md` |
 | 2 | **Identity provider and MFA for privileged roles** | Penta (IT) | Penta SSO with MFA, or approval to build and review local TOTP for administrators and management |
 | 3 | **Hosting and a staging environment** | Penta (IT) | Hosts, TLS, PostgreSQL 18, secret store, backups location; then the staging checklist in deployment-and-migrations.md §5 |
 | 4 | **Independent security review / penetration test** | Penta | security-review.md §6 |

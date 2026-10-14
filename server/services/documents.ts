@@ -33,9 +33,9 @@ import {
   sanitizeFileName,
   validateContent,
 } from '../documents/fileTypes.js';
-import type { DocumentScanner } from '../documents/scanner.js';
+import { ScannerUnreachableError, type DocumentScanner } from '../documents/scanner.js';
 import { UploadTooLargeError, type DocumentStorage } from '../documents/storage.js';
-import { ApiError, conflict, forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
+import { ApiError, conflict, describeForLog, forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
 import { canArchiveDocument, canUploadDocuments, opportunityScope, scopedWhere } from '../policy/scope.js';
 import { recordAuditEvent } from './audit.js';
@@ -531,7 +531,14 @@ export async function scanRevision(services: DocumentServices, revisionId: strin
     const result = await scanner.scan(await storage.read(revision.storageKey));
     scanState = result.verdict;
     if (result.verdict === 'infected') scanDetail = result.detail;
-  } catch {
+  } catch (error) {
+    // An outage says nothing about the file: it stays pending and
+    // scanPendingRevisions retries it once the scanner is back.
+    if (error instanceof ScannerUnreachableError) {
+      console.error(`[${requestId}] Document scanner unavailable; revision ${revision.id} stays pending. ${error.message}`);
+      return;
+    }
+    console.error(`[${requestId}] Document scan failed for revision ${revision.id}: ${describeForLog(error)}`);
     scanState = 'failed';
     scanDetail = 'The scanner could not check this file.';
   }

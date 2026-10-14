@@ -118,9 +118,13 @@ Never log request data: unexpected errors go through `describeForLog` in
 Contacts are visible only through links to accessible opportunities
 (`contactScope`); relationship notes live on the link, never the contact.
 
-Document storage is a private local directory and the only scanner is a
-development TEST scanner (refused in production); production storage and
-scanning are **unresolved** (ADR 0006). Never present them as ready.
+Document storage is a private local directory on the API server. Scanners:
+`none`, a development TEST scanner (refused in production) and `clamav` (a
+clamd daemon over TCP; ADR 0006 addendum). A scanner outage
+(`ScannerUnreachableError`) leaves files pending for retry; any other
+non-verdict marks them failed, never clean. ClamAV has not yet been set up
+on the production server (`docs/operations/document-upload-setup.md`), so
+never present production document handling as ready until it has.
 
 Metric definitions (active pipeline, overdue, seven-day tenders, awarded this
 quarter) live once in `server/services/metrics.ts`; dashboards, reports, list
@@ -133,7 +137,8 @@ every exported record.
 Milestone 8 added release evidence, not features: `docs/release/` (acceptance
 matrix, security review, capacity, interface quality, pilot handover) and
 `docs/operations/` (runbooks). Three release blockers remain open and must
-never be presented as solved: production document storage and scanning,
+never be presented as solved: production document storage and scanning
+(implemented, not yet set up and checked on the server),
 identity provider and MFA, and a staging environment. No production
 deployment or real data without explicit written authorization.
 

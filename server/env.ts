@@ -63,17 +63,26 @@ export interface EmailConfig {
 }
 
 /**
- * SEC-010 document storage and scanning. Production infrastructure has not
- * been chosen (see ADR 0006): the only storage is a private local directory,
- * and the only scanner is a deterministic test scanner that is refused in
- * production. With no scanner, files are stored but stay unavailable.
+ * SEC-010 document storage and scanning (ADR 0006). Storage is a private
+ * local directory. Scanners: none (files are stored but stay unavailable),
+ * test (a deterministic development scanner, refused in production) and
+ * clamav (a ClamAV daemon reached over TCP).
  */
-export type DocumentScannerKind = 'none' | 'test';
+export type DocumentScannerKind = 'none' | 'test' | 'clamav';
+
+export interface ClamAvConfig {
+  host: string;
+  port: number;
+  /** Upper bound for one scan, connection included. */
+  timeoutMs: number;
+}
 
 export interface DocumentConfig {
   /** Private directory outside anything the web server serves. */
   storageDir: string;
   scanner: DocumentScannerKind;
+  /** Present when, and only when, scanner is clamav. */
+  clamav?: ClamAvConfig;
   maxUploadBytes: number;
   /** An upload not finalized within this time is abandoned and removed. */
   uploadTtlMinutes: number;
@@ -109,14 +118,23 @@ function readBoolean(name: string, fallback: boolean): boolean {
 
 function readScanner(isProduction: boolean): DocumentScannerKind {
   const raw = (process.env.DOCUMENT_SCANNER ?? 'none').trim();
-  if (raw !== 'none' && raw !== 'test') {
-    throw new Error(`DOCUMENT_SCANNER must be none or test, received "${raw}".`);
+  if (raw !== 'none' && raw !== 'test' && raw !== 'clamav') {
+    throw new Error(`DOCUMENT_SCANNER must be none, test or clamav, received "${raw}".`);
   }
   // The test scanner recognises test fixtures only. It is not malware scanning.
   if (raw === 'test' && isProduction) {
     throw new Error('DOCUMENT_SCANNER=test is a development scanner and must not be used in production.');
   }
   return raw;
+}
+
+function readClamAv(scanner: DocumentScannerKind): ClamAvConfig | undefined {
+  if (scanner !== 'clamav') return undefined;
+  return {
+    host: (process.env.CLAMAV_HOST ?? '127.0.0.1').trim(),
+    port: positiveInt('CLAMAV_PORT', 3310),
+    timeoutMs: positiveInt('CLAMAV_TIMEOUT_SECONDS', 60) * 1000,
+  };
 }
 
 function readEmailTransport(isProduction: boolean): EmailTransportKind {
@@ -186,6 +204,7 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
     }
   }
 
+  const scanner = readScanner(isProduction);
   const config: ServerConfig = {
     nodeEnv,
     isProduction,
@@ -206,7 +225,8 @@ export function loadServerConfig(overrides: Partial<ServerConfig> = {}): ServerC
     secureCookies: isProduction || process.env.FORCE_SECURE_COOKIES === 'true',
     documents: {
       storageDir: (process.env.DOCUMENT_STORAGE_DIR ?? './var/documents').trim(),
-      scanner: readScanner(isProduction),
+      scanner,
+      clamav: readClamAv(scanner),
       maxUploadBytes: positiveInt('DOCUMENT_MAX_UPLOAD_MB', 25) * 1024 * 1024,
       uploadTtlMinutes: positiveInt('DOCUMENT_UPLOAD_TTL_MINUTES', 60),
     },

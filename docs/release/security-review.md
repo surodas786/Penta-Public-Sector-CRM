@@ -21,7 +21,7 @@ demo-exclusion check; `npm audit`; a scan of the Git history for credentials.
 | CSRF | Implemented and tested | SameSite=Strict + signed double-submit token bound to the session + trusted-origin check, missing Origin refused (`auth.test.ts`, every mutation test sends both) |
 | Server-side permissions | Implemented and tested | `server/policy/scope.ts`; role × channel isolation in `scope.test.ts`, `childScope.test.ts`, `search.test.ts`, `reports.test.ts`, `notifications.test.ts`, `m7MutationControls.test.ts` (transfer revocation on every channel) |
 | Uploads and downloads | Implemented and tested **with the development TEST scanner only** | `documents.test.ts`: type/extension/magic checks, macro-enabled and executable refusal, 25 MB limit, generated keys, scan-before-download, scoped re-check on every download, safe headers |
-| **Production document storage and malware scanning** | **Unresolved — release blocker** | Only a local private directory and a TEST scanner exist (ADR 0006). In production the TEST scanner is refused at start-up; with `DOCUMENT_SCANNER=none` files are stored but never downloadable (verified, §4) |
+| **Production document storage and malware scanning** | **Implemented; open until set up and checked on the production server** | Server-disk storage and a ClamAV scanner (`DOCUMENT_SCANNER=clamav`, ADR 0006 addendum), verified against a real clamd locally. Procedure: `docs/operations/document-upload-setup.md`. The TEST scanner is refused in production; with `DOCUMENT_SCANNER=none` files are stored but never downloadable (verified, §4) |
 | Exports | Implemented and tested | Queued, audited, requester-only, formula injection neutralized, delivery re-checks every exported record (`reports.test.ts`, `m7MutationControls.test.ts`) |
 | Secrets | No secret in the repository or its history | §3 |
 | Logging | Request data never logged | `describeForLog` for errors (SEC-032, `create.test.ts`); new request log records id, method, path **without query string**, status and duration only |
@@ -87,12 +87,14 @@ bundling (no demo flag, no demo routes, no seed accounts or synthetic emails in
 **Storage and scanning, as they actually behave:** files are written to a
 private local directory under generated UUID keys (never the user's file
 name), with a per-file SHA-256; a download is streamed only through the
-authorized endpoint, only when the revision's scan verdict is `clean`. The
-only scanner is a development TEST scanner that detects the EICAR test string
-and nothing else. **No production malware scanning exists.** A deployment
-with `DOCUMENT_SCANNER=none` keeps every upload unavailable. Penta must choose
-private object storage (with encryption at rest and backup) and a scanning
-service before documents are enabled anywhere beyond development.
+authorized endpoint, only when the revision's scan verdict is `clean`.
+Production scanning is a ClamAV daemon on the API server
+(`DOCUMENT_SCANNER=clamav`, ADR 0006 addendum); the development TEST scanner
+detects the EICAR test string only and is refused in production. A
+deployment with `DOCUMENT_SCANNER=none` keeps every upload unavailable.
+**Not yet done:** installing and checking ClamAV on the production server
+(`docs/operations/document-upload-setup.md`); encryption at rest and
+retention are not decided.
 
 ## 5. MFA and identity readiness (SEC-030, SEC-031)
 
@@ -117,7 +119,7 @@ service before documents are enabled anywhere beyond development.
 1. Penetration test of the deployed staging environment (authentication,
    session handling, CSRF, IDOR across roles, upload/download, export).
 2. The identity decision: SSO/MFA integration, or a reviewed local MFA design.
-3. The production storage and scanning integration (ADR 0006) once chosen.
+3. The production storage and ClamAV scanning (ADR 0006 addendum), once set up on the server.
 4. TLS termination, reverse-proxy `trust proxy` setting, HSTS preload policy,
    and the static-site Content-Security-Policy (the SPA is served by the web
    server, which must set it; the API sets JSON-only headers).
