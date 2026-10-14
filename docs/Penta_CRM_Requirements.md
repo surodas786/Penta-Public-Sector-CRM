@@ -102,7 +102,7 @@ FR-015: Desktop is the primary experience. On small screens tables may scroll ho
 | Project name | Yes | 3 to 200 characters; trimmed |
 | Procuring organization | Yes | Existing organization identifier |
 | Department or office | No | Up to 200 characters |
-| Solution category | Yes | ERP, Custom Software, Data Platform and Analytics, Cloud and Infrastructure, Cybersecurity, System Integration, Other |
+| Solution category | Yes | ERP, Custom Software, Data Platform and Analytics, Cloud and Infrastructure, Cybersecurity, System Integration, AMC / Renewal, Other |
 | Description | No | Plain text, up to 10000 characters |
 | Estimated value | Yes | Nonnegative BDT amount, up to two decimal places; zero means not yet estimated |
 | Funding source | No | Plain text, up to 200 characters |

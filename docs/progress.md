@@ -1072,7 +1072,146 @@ unchanged.
 | `npm run build` | Pass, with demo exclusion |
 | `npm test` | Not rerun: no server, shared or database code changed |
 
-### 19. Next task
+### 19. Invitation not emailed in production: investigated (13 October 2026)
+
+**Report.** On the production server the mail server was set and a test
+message reached `milton@pentabd.com`. Creating the user "Milton" sent no
+invitation email; the "Invitation link" copy dialog appeared instead.
+
+**Cause: configuration, not code.** An invitation (or reset link) is
+emailed only while **both** hold (`deliverAccountLink`,
+`server/services/admin.ts`):
+
+1. this server may send (`EMAIL_TRANSPORT=smtp`); and
+2. **"Send email from the CRM"** is on (Settings → Mail Server, Delivery;
+   `email_settings.enabled`).
+
+Otherwise the link is shown to copy (D-CR1-1). A **test message is sent
+even while delivery is off**, by design (ADR 0011), so a successful test
+does not show that switch 2 is on.
+
+**The screenshot confirms it.** Milton's row shows **"New invitation"** with
+a key icon. The page shows "Email invitation" with a mail icon only while
+both switches are on. So production had delivery off, and no invitation
+email was queued. Since the test message was sent, switch 1 (smtp) is set;
+switch 2 is the one that is off.
+
+**What changed (wording only; no server, rule or database change)**
+
+- **The copy-link dialog says why the link was not emailed** when the
+  administrator did not choose to copy it. With delivery off: "Not emailed:
+  email delivery is off. To email invitations and reset links, turn on
+  'Send email from the CRM' under Settings → Mail Server." With
+  `EMAIL_TRANSPORT=none` it names that instead. A link copied on purpose
+  ("Copy link") shows no such note. Files: `AdminDialogs.tsx`,
+  `AdministrationPage.tsx`.
+- **The Mail Server page, while delivery is off,** says that invitations,
+  password emails and notifications are not emailed, and that a test
+  message is still sent, so a successful test does not mean delivery is on
+  (`MailServerSettingsPage.tsx`).
+
+**Database.** No change and no SQL script.
+
+**Tests**
+
+- **`server/tests/invitationSmtp.test.ts` (new, 2):** runs the real SMTP
+  transport against a local SMTP sink on 127.0.0.1, so nothing leaves the
+  machine.
+  - **Delivery on:** creating a user returns no link; the job sends one
+    message over SMTP to the user's address, from the configured sender,
+    subject "Your Penta CRM account"; the delivery is `sent`; and the link
+    in the message activates the account.
+  - **Delivery off:** a test message is sent, but creating a user returns a
+    link to copy and queues no invitation. This reproduces the production
+    symptom.
+
+  Both passed on the first run, which confirms the code path.
+- **Browser checks:** `e2e/m3.spec.ts` now also checks the dialog's
+  explanation, and `e2e/mailServerSettings.spec.ts` the Mail Server note.
+
+**Results**
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run lint` | Pass (0 errors, the same 5 warnings) |
+| `npm test` | **786 passed, 0 failed**, 32 files |
+| Browser checks | `m3` 2, `mailServerSettings` 2, `cr1` 1 and `cr2` 1 passed |
+| `npm run build` | Pass, with demo exclusion |
+
+**To fix production (no deployment needed):**
+
+1. Sign in as the administrator and open Settings → Mail Server.
+2. Tick "Send email from the CRM" and save. The SMTP password must show
+   "Stored, encrypted".
+3. On Administration, Milton's row now shows "Email invitation". Click it,
+   or create the next user; the invitation is emailed when the worker
+   runs, within seconds.
+
+The earlier copied link stays valid until it expires or a new invitation
+replaces it. Deploying this commit adds only the explanations above.
+
+### 20. Maintenance script: remove an unused user account (13 October 2026)
+
+**Request.** A script to remove a particular user from the database, kept
+with the other SQL scripts.
+
+**Added:** `docs/operations/sql/remove_unused_user.sql`, documented in
+`sql_instructions.md` §7. It is a psql script run by the database
+administrator as `penta_migrator`; it is not a migration, and no
+application code changed.
+
+**Why it removes only unused accounts.** The CRM keeps history on purpose:
+every foreign key to `users` refuses deletion, and the audit is
+append-only. An account that owns or created records, or performed any
+audited action, cannot be deleted without destroying that history. For such
+an account the script refuses, lists what refers to it, and points to
+**Administration → Deactivate**, which ends access at once.
+
+**What it does**
+
+- **Inputs:** `-v email=…` (matched without regard to case) and
+  `-v reason=…` are required.
+- **Dry run by default:** it shows the account and what would be removed,
+  then rolls back. `-v apply=true` commits.
+- **Refuses, changing nothing:**
+  - an unknown address;
+  - any account that something else refers to. This is found from the
+    database's own foreign-key catalog, so future tables are covered
+    automatically;
+  - a section lead;
+  - the manager of a section lead;
+  - the last active System Administrator.
+- **Removes**, for that account only:
+  - its invitation and reset links;
+  - its section memberships;
+  - its email delivery log rows;
+  - its in-app alerts;
+  - its retry-protection records;
+  - its sessions;
+  - the account itself.
+- **Audit:** it records `account.removed` (administrative, no actor, with
+  name, email, role and the reason) and keeps the earlier audit events.
+- **One transaction:** a refusal or any error leaves the database
+  unchanged.
+
+**Tested** on the seeded test database, with a never-activated invited
+account (membership, invitation link, delivery-log row and
+`account.created` audit) built as the application builds one:
+
+| Case | Result |
+| --- | --- |
+| No arguments | Usage message, nothing run |
+| Unknown address | Refused: "No account has the email address …" |
+| Salesperson with history (Rafiq; address given in mixed case) | Refused, listing 10 activities, 7 contacts, 4 + 4 follow-up references, 5 opportunities created, … |
+| Section lead (Nadia) | Refused: "leads 1 section(s): use Replace lead first" |
+| Dry run on the unused account | Listed 1 link, 1 membership, 1 delivery row, 0 alerts, 0 retry records, 0 sessions; ROLLBACK; the account still present |
+| `apply=true` | COMMIT. The account and its rows are gone, with no orphaned links. `account.created` is kept, and `account.removed` is added with reason "Created by mistake" and no actor |
+| Rerun | Refused: the address no longer exists |
+
+**Database.** No schema change.
+
+### 21. Next task
 
 **Staging UAT** (`docs/release/cr-release-handover.md`, `pilot-handover.md` §4):
 

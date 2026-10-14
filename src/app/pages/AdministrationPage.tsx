@@ -105,10 +105,15 @@ export function AdministrationPage() {
   const [auditPage, setAuditPage] = useState(1);
   const [userDialog, setUserDialog] = useState<{ open: boolean; user: AdminUserDto | null }>({ open: false, user: null });
   const [stateTarget, setStateTarget] = useState<AdminUserDto | null>(null);
-  const [link, setLink] = useState<{ link: ManualAccountLink; person: string } | null>(null);
+  const [link, setLink] = useState<{ link: ManualAccountLink; person: string; notEmailed?: string } | null>(null);
   const emailSettings = useApiResource(useCallback((signal: AbortSignal) => fetchEmailSettings(signal), []), []);
   // CR1: links go by email while delivery is on and this server may send.
   const emailOn = Boolean(emailSettings.data?.enabled && emailSettings.data.transport !== 'none');
+  // Why a link the administrator did not ask to copy was shown instead of emailed.
+  const notEmailedReason =
+    emailSettings.data?.transport === 'none'
+      ? 'Not emailed: this server is set to send no email (EMAIL_TRANSPORT=none). Ask whoever runs the server to allow sending.'
+      : 'Not emailed: email delivery is off. To email invitations and reset links, turn on “Send email from the CRM” under Settings → Mail Server.';
   const [sectionAction, setSectionAction] = useState<SectionAction | null>(null);
 
   const users = useApiResource(
@@ -151,7 +156,7 @@ export function AdministrationPage() {
     try {
       const issued = await issueAccountLink(person.id, delivery);
       if (issued.delivery === 'manual') {
-        setLink({ link: issued, person: person.fullName });
+        setLink({ link: issued, person: person.fullName, ...(delivery === 'manual' ? {} : { notEmailed: notEmailedReason }) });
       } else {
         toast.success(issued.purpose === 'invitation' ? 'Invitation emailed' : 'Reset link emailed', {
           description: `${person.fullName} · ${person.email}. The link is created when the email is sent.`,
@@ -413,7 +418,7 @@ export function AdministrationPage() {
         onClose={() => setUserDialog({ open: false, user: null })}
         onSaved={(result) => {
           setUserDialog({ open: false, user: null });
-          if (result.link?.delivery === 'manual') setLink({ link: result.link, person: result.user.fullName });
+          if (result.link?.delivery === 'manual') setLink({ link: result.link, person: result.user.fullName, notEmailed: notEmailedReason });
           else if (result.delivery === 'email') {
             toast.success('Invitation emailed', {
               description: `${result.user.fullName} · ${result.user.email}. The link is created when the email is sent.`,
@@ -430,7 +435,7 @@ export function AdministrationPage() {
           refresh();
         }}
       />
-      <AccountLinkDialog link={link?.link ?? null} person={link?.person ?? ''} onClose={() => setLink(null)} />
+      <AccountLinkDialog link={link?.link ?? null} person={link?.person ?? ''} notEmailed={link?.notEmailed} onClose={() => setLink(null)} />
       <SectionDialog
         action={sectionAction}
         users={all}

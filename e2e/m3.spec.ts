@@ -49,6 +49,8 @@ test('an administrator invites a person, who sets a password and signs in', asyn
   // The single-use link is shown once.
   const linkDialog = page.getByRole('dialog');
   await expect(linkDialog.getByRole('heading', { name: 'Invitation link' })).toBeVisible();
+  // Email delivery is off in the fixtures, and the dialog says why the link was not emailed.
+  await expect(linkDialog.getByText(/Not emailed: email delivery is off\. .*Settings → Mail Server/)).toBeVisible();
   const url = await linkDialog.getByLabel('Link').inputValue();
   expect(url).toMatch(/\/set-password#token=/);
   await linkDialog.getByRole('button', { name: 'Done' }).click();

@@ -162,6 +162,12 @@ function MailServerForm({ settings, onSaved }: { settings: EmailSettingsDto; onS
             <input type="checkbox" checked={form.enabled} onChange={(event) => set('enabled', event.target.checked)} />
             Send email from the CRM
           </label>
+          {!form.enabled && (
+            <p className="mt-2 text-[12.5px] text-slate-600">
+              While this is off, invitations, password emails and notifications are not emailed: invitation and reset links
+              are shown to you to copy instead. A test message is still sent, so a successful test does not mean this is on.
+            </p>
+          )}
         </Panel>
 
         <Panel title="Server" subtitle="Ask whoever runs your organization’s email for these details.">
