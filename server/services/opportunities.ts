@@ -51,10 +51,24 @@ import type { z } from 'zod';
 
 import { now } from '../clock.js';
 import type { Database } from '../db/client.js';
-import { auditEvents, contacts, followUps, opportunities, organizations, sections, users } from '../db/schema.js';
-import { forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
+import {
+  auditEvents,
+  contacts,
+  followUps,
+  opportunities,
+  opportunityContacts,
+  organizations,
+  sections,
+  users,
+} from '../db/schema.js';
+import { conflict, forbidden, notFound, validationFailed, versionConflict } from '../http/errors.js';
 import type { Actor } from '../policy/actor.js';
-import { eligibleOwnerScope, opportunityScope, scopedWhere } from '../policy/scope.js';
+import {
+  canChangeOpportunityOrganization,
+  eligibleOwnerScope,
+  opportunityScope,
+  scopedWhere,
+} from '../policy/scope.js';
 import { OPPORTUNITY_FIELD_LABELS, diffRecords, recordAuditEvent } from './audit.js';
 import { getFirstFollowUp, listFollowUpsForOpportunity } from './followUps.js';
 import { activePipeline } from './metrics.js';
@@ -617,6 +631,7 @@ export async function getCreationResult(
 
 export type PatchOpportunityCommand = {
   version: number;
+  confirmLinkedContacts?: boolean;
 } & Partial<Record<(typeof PATCHABLE_OPPORTUNITY_FIELDS)[number], unknown>>;
 
 export async function patchOpportunity(options: {
@@ -640,7 +655,9 @@ export async function patchOpportunity(options: {
         version: opportunities.version,
         stage: opportunities.stage,
         status: opportunities.status,
+        ownerId: opportunities.ownerId,
         name: opportunities.name,
+        organizationId: opportunities.organizationId,
         department: opportunities.department,
         solutionCategory: opportunities.solutionCategory,
         description: opportunities.description,
@@ -677,6 +694,9 @@ export async function patchOpportunity(options: {
     if ('estimatedValue' in changes && typeof changes.estimatedValue === 'string') {
       changes.estimatedValue = canonicalMoney(changes.estimatedValue);
     }
+    if (typeof changes.organizationId === 'string') {
+      changes.organizationId = changes.organizationId.toLowerCase();
+    }
 
     if (Object.keys(changes).length === 0) {
       throw validationFailed({ _: 'Provide at least one field to update.' });
@@ -687,6 +707,36 @@ export async function patchOpportunity(options: {
     if (diff.changed.length === 0) return;
 
     if (current.version !== command.version) throw versionConflict();
+
+    if (diff.changed.includes('organizationId')) {
+      if (!canChangeOpportunityOrganization(actor, current.ownerId)) {
+        throw forbidden("Only the opportunity's owner can change its procuring organization.");
+      }
+
+      // As at creation: share-lock the organization so a concurrent archive
+      // cannot slip between this check and the update.
+      const [organization] = await tx
+        .select({ id: organizations.id })
+        .from(organizations)
+        .where(and(eq(organizations.id, changes.organizationId as string), isNull(organizations.archivedAt)))
+        .for('share')
+        .limit(1);
+      if (!organization) throw validationFailed({ organizationId: 'Select a current procuring organization.' });
+
+      // Linked contacts keep their own organization and stay linked. The user
+      // must have been told so; link writers lock this opportunity first, so
+      // the count cannot change before the update commits.
+      const [links] = await tx
+        .select({ value: count() })
+        .from(opportunityContacts)
+        .where(and(eq(opportunityContacts.opportunityId, opportunityId), isNull(opportunityContacts.removedAt)));
+      if ((links?.value ?? 0) > 0 && command.confirmLinkedContacts !== true) {
+        throw conflict(
+          'This opportunity has linked contacts. They stay linked and keep their own organization. Confirm to change the procuring organization.',
+          'linked_contacts',
+        );
+      }
+    }
 
     // The version check also lives in the UPDATE predicate (BR-090).
     const rows = await tx

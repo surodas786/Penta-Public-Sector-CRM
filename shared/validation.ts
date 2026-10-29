@@ -332,6 +332,7 @@ export const patchOpportunitySchema = z
   .object({
     version: z.number().int().positive('Reload the record and try again.'),
     name: z.string().trim().min(3, 'Use at least 3 characters.').max(200).optional(),
+    organizationId: uuidField.optional(),
     department: optionalText(200),
     solutionCategory: z.enum(SOLUTION_CATEGORIES).optional(),
     description: optionalText(10_000),
@@ -340,6 +341,13 @@ export const patchOpportunitySchema = z
     priority: z.enum(PRIORITIES).optional(),
     expectedPublicationDate: optionalDate(),
     expectedAwardDate: optionalDate(),
+    /**
+     * The user has seen that the opportunity has linked contacts, which belong
+     * to their own organizations and stay linked when the procuring
+     * organization changes. Required only for that change, and only while
+     * active links exist.
+     */
+    confirmLinkedContacts: z.boolean().optional(),
   })
   .strict();
 
@@ -348,6 +356,7 @@ export type PatchOpportunityInput = z.input<typeof patchOpportunitySchema>;
 /** Fields a PATCH may carry besides `version`. Used for error messages and audit diffs. */
 export const PATCHABLE_OPPORTUNITY_FIELDS = [
   'name',
+  'organizationId',
   'department',
   'solutionCategory',
   'description',
