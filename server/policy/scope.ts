@@ -119,6 +119,16 @@ export function canEditOpportunityBasics(actor: Actor): boolean {
 }
 
 /**
+ * Changing an opportunity's procuring organization is the owner's decision
+ * alone (product decision, 27 October 2026): a Section Lead or management can
+ * see and edit the record's other basic fields, but not this one. The record
+ * is still located through `opportunityScope` first.
+ */
+export function canChangeOpportunityOrganization(actor: Actor, ownerId: string): boolean {
+  return canAccessSalesRecords(actor) && actor.id === ownerId;
+}
+
+/**
  * Stage and status changes, and the follow-up lifecycle, follow the permission
  * matrix's "Edit sales records" row: every role that can see a sales record may
  * edit it (management all, lead own section, salesperson owned). The record

@@ -16,6 +16,9 @@ unresolved release blockers (Milestone 8, §8). Sections, newest first:
 Change requests · Milestone 8 · 7 · 6 · 5 · 4 · 3 · 2 · Milestone 1 handover
 review · 1.
 
+**27 October 2026.** The owner can change an opportunity's procuring
+organization from **Edit** (§21). No database change.
+
 **14 October 2026 — after step 7.** Solution category "AMC / Renewal"
 (migration 0013, production script in `docs/operations/sql/`). Document
 scanning: a ClamAV adapter (`DOCUMENT_SCANNER=clamav`, ADR 0006 addendum)
@@ -1219,7 +1222,81 @@ account (membership, invitation link, delivery-log row and
 
 **Database.** No schema change.
 
-### 21. Next task
+### 21. Edit the procuring organization of an opportunity (27 October 2026)
+
+**Request.** The edit dialog changed every basic field except the
+procuring organization. The requirements do not cover changing it, so Penta
+decided:
+
+| Question | Decision |
+| --- | --- |
+| Who may change it | The opportunity's **owner** only. A Section Lead and management still edit the other fields |
+| Closed opportunities | **Cannot** be changed (Awarded, Lost, Cancelled), like every other basic field |
+| Linked contacts | A **popup** lists them before saving. They stay linked and keep their own organization |
+| Validation | A **current** organization: it must exist and not be archived |
+
+**Changed**
+
+- `shared/validation.ts`: `organizationId` added to the PATCH schema and
+  `PATCHABLE_OPPORTUNITY_FIELDS`, with an optional `confirmLinkedContacts`
+  flag.
+- `server/policy/scope.ts`: `canChangeOpportunityOrganization` (owner only).
+- `server/services/opportunities.ts` (`patchOpportunity`), when the
+  organization actually differs, inside the existing transaction, after the
+  opportunity row lock:
+  - 403 for anyone but the owner;
+  - 422 `organizationId` for an unknown or archived organization (the row is
+    share-locked, as at creation, so a concurrent archive cannot slip in);
+  - 409 `linked_contacts` while the opportunity has active contact links and
+    `confirmLinkedContacts` is not true. Nothing changes and no version is
+    used.
+
+  The existing rules come first, unchanged: 404 out of scope, 403 closed,
+  then the version check. Sending the unchanged organization changes nothing,
+  so a lead or management saving other fields is not refused.
+- `shared/api.ts`: error code `linked_contacts`.
+- Audit: the existing `opportunity.updated` event, with `organizationId`
+  before and after. History shows it as "Procuring organization" with names.
+  No new audit action.
+- `src/app/components/OpportunityEditDialog.tsx`: a **Procuring
+  organization** select, listing current organizations (the current one is
+  always listed). Disabled for anyone but the owner, with "Only the owner,
+  <name>, can change the organization." The organization is sent only when
+  changed. If contacts are linked, a confirmation lists each one (name,
+  designation, organization) and says they stay linked. **Cancel** returns
+  to the form with the values kept. A 409 `linked_contacts` (a contact linked
+  meanwhile) opens the same popup.
+
+**Unchanged.** Contacts, links and relationship notes are not touched.
+Tenders and procurement cycles keep their own procuring organization.
+Creation, transfers and stage changes are unchanged.
+
+**Tests**
+
+- `server/tests/edit.test.ts`, 7 new tests:
+  - confirmation required while contacts are linked;
+  - change once confirmed, with links and contact organizations unchanged,
+    the audit diff, and the history label;
+  - no confirmation needed without links;
+  - lead and management refused, but still able to edit other fields;
+  - archived and unknown organizations refused;
+  - closed record refused;
+  - 404 out of scope.
+- `e2e/opportunityOrganization.spec.ts` (Chromium, added to `npm run test:smoke`):
+  - the owner sees the popup listing Golam Mostafa and Laila Arjumand;
+    Cancel keeps the form; confirm saves; the change survives a reload and
+    the contacts stay on the Contacts tab;
+  - a Section Lead sees the field disabled with the explanation.
+- Results: `npm test` 802 of 802 passed (33 files); the new browser spec 2 of
+  2; `npm run typecheck` and `npm run lint` clean.
+
+**Database.** No schema change, no migration and no production script:
+`opportunities.organization_id` already exists with its foreign key.
+
+**Requirements.** `docs/Penta_CRM_Requirements.md` does not yet record this
+decision; amend it if Penta wants it there.
+
+### 22. Next task
 
 **Staging UAT** (`docs/release/cr-release-handover.md`, `pilot-handover.md` §4):
 

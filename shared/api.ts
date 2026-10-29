@@ -59,6 +59,7 @@ export type ApiErrorCode =
   | 'idempotency_in_progress'
   | 'invalid_transition'
   | 'possible_duplicate'
+  | 'linked_contacts'
   | 'document_unavailable'
   | 'payload_too_large'
   | 'export_unavailable'

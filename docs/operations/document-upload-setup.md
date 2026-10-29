@@ -172,7 +172,60 @@ DOCUMENT_UPLOAD_TTL_MINUTES=60
 
 ---
 
-## Step 10. Deploy and restart the API
+## Step 10. Allow uploads through the web server
+
+The web server in front of the CRM (nginx or Apache) has its own upload
+limit. nginx's default is **1 MB**: a larger file is cut off mid-upload and
+the CRM shows *"The server could not be reached"* (Firefox:
+`NS_ERROR_NET_INTERRUPT`). Raise it above `DOCUMENT_MAX_UPLOAD_MB`.
+
+Find which web server is running:
+
+```bash
+systemctl is-active nginx apache2
+```
+
+**nginx.** Find the CRM's site file:
+
+```bash
+sudo grep -rl "crm.pentabd.com" /etc/nginx/
+```
+
+Edit that file and add this line inside its `server { ... }` block for
+`crm.pentabd.com` (the `listen 443` one):
+
+```nginx
+    client_max_body_size 30m;
+```
+
+Then check and reload:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+`nginx -t` must say `syntax is ok` and `test is successful`.
+
+**Apache.** In the CRM's `<VirtualHost *:443>` block, add:
+
+```apache
+    LimitRequestBody 31457280
+```
+
+Then:
+
+```bash
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+If a proxy or firewall sits in front of this server as well (a load
+balancer, Cloudflare, a WAF), allow at least 30 MB request bodies there too.
+
+---
+
+## Step 11. Deploy and restart the API
 
 Deploy a build that contains the ClamAV scanner (this guide's commit or
 later), then restart the API:
@@ -193,7 +246,7 @@ loaded.
 
 ---
 
-## Step 11. Test in the CRM
+## Step 12. Test in the CRM
 
 1. Sign in as a Salesperson or Section Lead.
 2. Open an opportunity you own → **Documents** → upload a small PDF.
@@ -212,7 +265,7 @@ automatically within 15 minutes of the restart.
 
 ---
 
-## Step 12. Include the documents in backups
+## Step 13. Include the documents in backups
 
 Back up `/var/lib/penta-crm/documents` together with the database, every
 time, as described in `backup-and-restore.md`. A database restored without
@@ -220,7 +273,7 @@ its files leaves documents that cannot be downloaded.
 
 ---
 
-## Step 13. Monitor
+## Step 14. Monitor
 
 | Check | Command | Healthy |
 | --- | --- | --- |
@@ -235,7 +288,7 @@ its files leaves documents that cannot be downloaded.
 
 | Badge | Meaning | What to do |
 | --- | --- | --- |
-| **Awaiting scan** | Not scanned yet. Also shown while clamd is down | Nothing. Retried every 15 minutes. If it lasts longer, check clamd (Step 13) |
+| **Awaiting scan** | Not scanned yet. Also shown while clamd is down | Nothing. Retried every 15 minutes. If it lasts longer, check clamd (Step 14) |
 | **Scanned** | Clean. Can be downloaded | — |
 | **Rejected by scan** | ClamAV found malware. Moved to `quarantine/` and never downloadable | Tell the uploader. Do not restore the file |
 | **Scan failed** | ClamAV could not check the file (e.g. larger than `StreamMaxLength`) | The user uploads it again as a new revision after the cause is fixed. A failed file is not rescanned |
@@ -263,6 +316,16 @@ sudo journalctl -u clamav-daemon -n 50 --no-pager
 - *"No supported database files found"*: rerun Step 3.
 - Killed / out of memory: add memory (Step 1), or add
   `ConcurrentDatabaseReload no` to `clamd.conf` and restart.
+
+**Upload fails with *"The server could not be reached"*; the browser's
+Network tab shows `NS_ERROR_NET_INTERRUPT` or status 413.**
+The web server's upload limit is too small. Confirm:
+
+```bash
+sudo grep -i "too large body" /var/log/nginx/error.log | tail -5
+```
+
+A line *"client intended to send too large body"* confirms it. Do Step 10.
 
 **Files stay on *Awaiting scan*.**
 The API log shows `Document scanner unavailable`. Check clamd (Steps 5–6) and
